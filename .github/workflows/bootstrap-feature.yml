@@ -1,0 +1,38 @@
+name: Bootstrap feature source
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/bootstrap-feature.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-feature:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature bootstrap branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/stock-ticker-v1
+          fetch-depth: 0
+
+      - name: Verify and extract source archive
+        run: python3 .bootstrap/bootstrap_source.py
+
+      - name: Commit normalized source tree to feature branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --stat
+          if git diff --cached --quiet; then
+            echo "Bootstrap produced no changes" >&2
+            exit 1
+          fi
+          git commit -m "chore: publish stock ticker source"
+          git push origin HEAD:feature/stock-ticker-v1
