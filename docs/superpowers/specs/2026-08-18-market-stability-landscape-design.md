@@ -33,9 +33,17 @@ Priority order:
 4. Current-stock intraday.
 5. Intraday retry.
 
-The worker must never accumulate multiple waiting intraday requests for stocks the user has already left. Waiting intraday uses **latest-wins** semantics: at most one pending intraday request is retained, and a newer current-stock intraday request replaces an older not-yet-started one.
+Waiting intraday uses **latest-wins** semantics: at most one pending intraday request is retained, and a newer current-stock intraday request replaces an older not-yet-started one.
 
-Each request carries creation time, attempt count and a bounded deadline/TTL. Expired low-value work is dropped before HTTP execution rather than consuming network time.
+Request TTLs:
+
+- current-stock quote: 8 s;
+- background quote: 12 s;
+- primary probe: 30 s;
+- normal intraday: 75 s;
+- intraday retry: must remain inside the same refresh cycle and is discarded after 15 s from the first attempt.
+
+Expired low-value work is cancelled before HTTP execution and must release Controller outstanding state.
 
 An already-running synchronous HTTP request is not force-cancelled. Its damage is bounded by transport timeouts; once it completes/fails, quote traffic is serviced before any deferred intraday retry.
 
@@ -63,7 +71,7 @@ Retries are deferred work, not loops inside `EastMoneyProvider::fetchIntraday()`
 
 ## 3. HTTP diagnostics
 
-Extend the transport result so each completed request can report:
+Extend the transport/result diagnostics so each completed request can report:
 
 - request ID;
 - request type;
@@ -95,7 +103,7 @@ Each channel records at minimum:
 - last error;
 - last attempt time;
 - last success time;
-- consecutive failure count.
+- consecutive failed refresh cycles.
 
 Quote success clears only quote error state. Intraday success clears only intraday error state.
 
@@ -111,29 +119,35 @@ Policy:
 
 - Wi-Fi disconnected: `离线`.
 - Quote has no valid data yet: `等待报价`.
-- Quote cache exists but quote health is degraded/stale: `报价延迟`.
-- One isolated intraday failure with an existing chart: no prominent error badge; retry silently.
-- Intraday remains stale after repeated failure / exceeds the chosen stale threshold: `分时延迟`.
+- Existing quote shows `报价延迟` only when quote has at least 2 consecutive failed refresh cycles **or** quote age exceeds 15 s.
+- One failed intraday refresh cycle with an existing chart: no prominent error badge; retry/recovery remains silent.
+- Existing intraday shows `分时延迟` when intraday has at least 2 consecutive failed refresh cycles **or** intraday age exceeds 180 s during trading.
 
 A successful quote must not clear an intraday-delay state, and a successful intraday must not clear quote-delay state.
+
+When both quote and intraday are degraded, quote status has UI priority because live price is the primary function.
 
 ## 6. Result delivery reliability
 
 The worker must not silently lose a result in a way that leaves `StockController::outstanding_` permanently occupied.
 
-Design requirement: every accepted request must eventually produce either a normal result/failure result or an explicit cancellation/expiry result that lets the Controller release outstanding state.
+Every accepted request must eventually produce one of:
 
-Queue-full behavior must be bounded and testable.
+- success result;
+- failure result;
+- explicit cancellation/expiry result.
+
+All three release Controller outstanding state. Queue-full behavior must be bounded and testable.
 
 ## 7. Landscape UI
 
 Physical panel remains ST7789 170×320, but application rotation changes from portrait `setRotation(0)` to a landscape rotation producing **320×170** logical coordinates.
 
-Layout:
+Layout target:
 
-- Left information panel: approximately 116 px wide.
-- Right chart panel: remaining approximately 204 px.
-- Bottom/footer is compact and must not materially reduce chart height.
+- left information panel: 116 px;
+- right chart panel: 204 px;
+- compact footer/status integrated into the left panel/bottom edge so chart height remains large.
 
 Left panel contains:
 
@@ -146,7 +160,7 @@ Left panel contains:
 
 Right panel contains the intraday chart and keeps the lunch-break discontinuity.
 
-The landscape redesign should prioritize readable price + larger chart rather than preserving the old portrait spacing.
+The landscape redesign prioritizes readable price + larger chart rather than preserving the old portrait spacing.
 
 ## 8. Intraday reference lines
 
@@ -155,13 +169,13 @@ The landscape chart shows two distinct reference levels when valid:
 1. **Previous close** — existing reference line.
 2. **Today open** — new opening-price reference line based on `QuoteSnapshot::open`.
 
-Both lines use the same chart Y-axis scaling as the price series and must not alter the price data.
+Both lines use the same chart Y-axis scaling as the price series and must not alter price data.
 
-The two references must be visually distinguishable by line pattern/label without relying only on color. Small labels such as `昨收` and `今开` may be used when space permits.
+The two references must be distinguishable by line pattern and, where legible, small labels `昨收` / `今开`; they must not rely only on color.
 
-Chart-range calculation must include price series, previous close and open price so neither reference line is clipped when it lies outside the current intraday point range.
+Chart-range calculation includes the price series, previous close and opening price so neither reference is clipped when outside the current intraday point range.
 
-If opening price is zero/invalid, the opening reference is omitted rather than guessed.
+If opening price is <= 0 or otherwise invalid, the opening reference is omitted rather than guessed.
 
 ## 9. Test strategy
 
@@ -171,9 +185,10 @@ Test-first coverage must include:
 - quote success does not clear intraday error;
 - intraday success does not clear quote error;
 - cached quote/chart survive failure;
+- exact error-badge thresholds above;
 - quote priority over waiting intraday;
 - latest-wins intraday pending behavior;
-- stale low-priority request expiry;
+- exact request TTL behavior;
 - retry classification and maximum attempts;
 - retry backoff/jitter bounds;
 - result queue/cancellation releases outstanding state;
