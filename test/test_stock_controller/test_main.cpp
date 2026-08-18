@@ -5,6 +5,9 @@
 
 #include "StockController.h"
 
+void setUp() {}
+void tearDown() {}
+
 class FakeQueue : public IMarketDataQueue {
  public:
   std::vector<MarketRequest> requests;
