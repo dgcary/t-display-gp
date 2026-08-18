@@ -34,6 +34,7 @@ AppConfig acceptanceConfig() {
 
 LocalDateTime am() { return {2026, 8, 11, 10, 0, 0, 2}; }
 LocalDateTime lunch() { return {2026, 8, 11, 12, 0, 0, 2}; }
+LocalDateTime nextDayAm() { return {2026, 8, 12, 10, 0, 0, 3}; }
 
 const MarketRequest* latest(const AcceptanceQueue& queue, const char* code, MarketRequestType type) {
   for (auto it = queue.requests.rbegin(); it != queue.requests.rend(); ++it) {
@@ -74,6 +75,21 @@ void succeedIntraday(AcceptanceQueue& queue, const MarketRequest& request) {
   result.error = ProviderError::NONE;
   result.intraday = {{570, 99.5f, 99.5f, 10}, {600, 100.0f, 99.8f, 20}};
   queue.results.push_back(std::move(result));
+}
+
+MarketStatus statusAfterQuoteDate(uint64_t epoch, const LocalDateTime& local) {
+  AcceptanceQueue queue;
+  StockController controller(queue);
+  controller.begin(acceptanceConfig());
+  controller.setWifiOnline(true);
+  controller.tick(1000, local);
+  const MarketRequest* request = latest(queue, "600519", MarketRequestType::QUOTE);
+  TEST_ASSERT_TRUE(request != nullptr);
+  const MarketRequest copy = *request;
+  succeedQuote(queue, copy, epoch);
+  controller.consumeMarketResults();
+  controller.tick(2000, local);
+  return controller.viewModel().marketStatus;
 }
 
 void test_trading_quote_refresh_obeys_five_second_interval() {
@@ -167,6 +183,20 @@ void test_stale_tencent_date_marks_weekday_as_non_trading() {
   TEST_ASSERT_EQUAL(MarketStatus::NON_TRADING_DAY, controller.viewModel().marketStatus);
 }
 
+void test_zero_epoch_is_treated_as_unknown_not_stale() {
+  TEST_ASSERT_EQUAL(MarketStatus::TRADING_AM, statusAfterQuoteDate(0, nextDayAm()));
+}
+
+void test_beijing_midnight_accepts_previous_utc_calendar_date() {
+  // 2026-08-11 16:00:00 UTC == 2026-08-12 00:00:00 China time.
+  TEST_ASSERT_EQUAL(MarketStatus::TRADING_AM, statusAfterQuoteDate(1786464000ULL, nextDayAm()));
+}
+
+void test_one_second_before_beijing_midnight_is_previous_local_date() {
+  // 2026-08-11 15:59:59 UTC == 2026-08-11 23:59:59 China time.
+  TEST_ASSERT_EQUAL(MarketStatus::NON_TRADING_DAY, statusAfterQuoteDate(1786463999ULL, nextDayAm()));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_trading_quote_refresh_obeys_five_second_interval);
@@ -174,5 +204,8 @@ int main() {
   RUN_TEST(test_lunch_stops_high_frequency_quote_polling);
   RUN_TEST(test_close_retains_cache_and_next_session_resumes);
   RUN_TEST(test_stale_tencent_date_marks_weekday_as_non_trading);
+  RUN_TEST(test_zero_epoch_is_treated_as_unknown_not_stale);
+  RUN_TEST(test_beijing_midnight_accepts_previous_utc_calendar_date);
+  RUN_TEST(test_one_second_before_beijing_midnight_is_previous_local_date);
   return UNITY_END();
 }
