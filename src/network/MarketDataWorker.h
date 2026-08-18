@@ -76,7 +76,7 @@ inline uint32_t ttlMs(const MarketRequest& request) {
 }
 
 inline uint32_t expiryAnchorMs(const MarketRequest& request) {
-  if (isIntradayRetry(request) && request.cycleStartedMs != 0) return request.cycleStartedMs;
+  if (isIntradayRetry(request)) return request.cycleStartedMs;
   return request.createdMs;
 }
 
