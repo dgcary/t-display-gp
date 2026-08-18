@@ -147,7 +147,6 @@ struct MarketDataWorker::Impl {
         MarketRequestPolicy::retryable(result->error, result->diagnostics)) {
       MarketRequest retry = request;
       retry.attempt = static_cast<uint8_t>(request.attempt + 1U);
-      if (retry.cycleStartedMs == 0) retry.cycleStartedMs = request.createdMs;
       retry.createdMs = millis();
       retry.notBeforeMs = retry.createdMs + MarketRequestPolicy::retryDelayMs(retry.attempt, retry.requestId);
       retry.priority = MarketRequestPriority::INTRADAY_RETRY;
