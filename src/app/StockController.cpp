@@ -15,6 +15,9 @@ bool isTrading(MarketStatus status) {
 uint32_t elapsed(uint32_t nowMs, uint32_t thenMs) {
   return static_cast<uint32_t>(nowMs - thenMs);
 }
+
+constexpr uint32_t QUOTE_DELAY_SECONDS = 15;
+constexpr uint32_t INTRADAY_DELAY_SECONDS = 180;
 }  // namespace
 
 void StockController::begin(const AppConfig& config) {
@@ -58,8 +61,6 @@ int StockController::dateKey(const LocalDateTime& local) {
 bool StockController::canConfirmNonTradingDay(const LocalDateTime& local) {
   if (local.dayOfWeek == 0 || local.dayOfWeek == 6) return true;
   const int minute = local.hour * 60 + local.minute;
-  // Give the opening feed one minute to roll from the previous session before
-  // treating a successful stale quote as evidence of a weekday market holiday.
   return minute >= 9 * 60 + 31 && minute <= 15 * 60;
 }
 
@@ -81,9 +82,6 @@ void StockController::tick(uint32_t nowMs, const LocalDateTime& local) {
   const auto& cache = caches_[currentIndex_];
   const bool quoteIsToday = !cache.hasQuote || quoteIsForLocalDate(cache.quote, local);
   const bool todayConfirmedNonTrading = todayKey != 0 && confirmedNonTradingDateKey_ == todayKey;
-  // A stale quote from yesterday is not itself proof that today is a holiday.
-  // Until one stale response is observed after the opening grace minute, let
-  // the normal trading scheduler probe at the configured interval.
   const bool providerHasTodayData = quoteIsToday || !todayConfirmedNonTrading;
   const MarketStatus nextStatus = marketClock_.status(local, providerHasTodayData);
   if (nextStatus != marketStatus_) {
@@ -99,18 +97,19 @@ void StockController::tick(uint32_t nowMs, const LocalDateTime& local) {
   if (isTrading(marketStatus_)) {
     const uint32_t interval = config_.quoteRefreshSec * 1000U;
     const auto& current = caches_[currentIndex_];
-    const bool due = !current.hasQuote || current.lastQuoteAttemptMs == 0 ||
-                     elapsed(nowMs, current.lastQuoteAttemptMs) >= interval;
+    const bool due = !current.hasQuote || current.quoteHealth.lastAttemptMs == 0 ||
+                     elapsed(nowMs, current.quoteHealth.lastAttemptMs) >= interval;
     if (due) scheduleTradingCycle(nowMs);
     if (failover_.activeProvider(nowMs) == ProviderId::EAST_MONEY &&
-        (!current.hasIntraday || current.lastIntradayAttemptMs == 0 ||
-         elapsed(nowMs, current.lastIntradayAttemptMs) >= BuildConfig::INTRADAY_REFRESH_MS)) {
+        (!current.hasIntraday || current.intradayHealth.lastAttemptMs == 0 ||
+         elapsed(nowMs, current.intradayHealth.lastAttemptMs) >= BuildConfig::INTRADAY_REFRESH_MS)) {
       enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::EAST_MONEY, nowMs);
     }
   } else {
     const uint32_t interval = marketClock_.recommendedQuoteIntervalMs(marketStatus_);
     auto& current = caches_[currentIndex_];
-    if (!current.hasQuote || current.lastQuoteAttemptMs == 0 || elapsed(nowMs, current.lastQuoteAttemptMs) >= interval) {
+    if (!current.hasQuote || current.quoteHealth.lastAttemptMs == 0 ||
+        elapsed(nowMs, current.quoteHealth.lastAttemptMs) >= interval) {
       enqueueRequest(currentIndex_, MarketRequestType::QUOTE, failover_.activeProvider(nowMs), nowMs);
     }
   }
@@ -128,7 +127,7 @@ void StockController::scheduleTradingCycle(uint32_t nowMs) {
     roundRobinIndex_ = (roundRobinIndex_ + 1) % config_.stocks.size();
     if (candidate == currentIndex_) continue;
     enqueueRequest(candidate, MarketRequestType::QUOTE, failover_.activeProvider(nowMs), nowMs);
-    break;  // exactly one non-current attempt per cycle; never burst all symbols.
+    break;
   }
 }
 
@@ -157,7 +156,7 @@ void StockController::onButton(ButtonEvent event) {
   if (currentIndex_ == oldIndex) return;
   fullRedraw_ = true;
   dirty_ = true;
-  publishView();  // cached values appear before any network work.
+  publishView();
   if (wifiOnline_) scheduleForCurrent(lastNowMs_, true);
 }
 
@@ -182,8 +181,8 @@ bool StockController::enqueueRequest(size_t stockIndex, MarketRequestType type, 
 
   outstanding_.push_back({request.requestId, type, symbol, provider});
   auto& cache = caches_[stockIndex];
-  if (type == MarketRequestType::INTRADAY) cache.lastIntradayAttemptMs = nowMs;
-  else cache.lastQuoteAttemptMs = nowMs;
+  if (type == MarketRequestType::INTRADAY) cache.intradayHealth.lastAttemptMs = nowMs;
+  else if (type == MarketRequestType::QUOTE) cache.quoteHealth.lastAttemptMs = nowMs;
   return true;
 }
 
@@ -207,8 +206,14 @@ void StockController::consumeMarketResults() {
     auto& cache = caches_[index];
 
     if (result.error != ProviderError::NONE) {
-      cache.lastError = result.error;
-      if (context.type == MarketRequestType::QUOTE || context.type == MarketRequestType::PRIMARY_PROBE) {
+      if (context.type == MarketRequestType::INTRADAY) {
+        cache.intradayHealth.lastError = result.error;
+        ++cache.intradayHealth.consecutiveFailures;
+      } else if (context.type == MarketRequestType::QUOTE) {
+        cache.quoteHealth.lastError = result.error;
+        ++cache.quoteHealth.consecutiveFailures;
+        failover_.recordFailure(context.provider, lastNowMs_);
+      } else {
         failover_.recordFailure(context.provider, lastNowMs_);
       }
       if (index == currentIndex_) dirty_ = true;
@@ -218,7 +223,6 @@ void StockController::consumeMarketResults() {
     if (context.type == MarketRequestType::PRIMARY_PROBE) {
       failover_.recordSuccess(ProviderId::EAST_MONEY, lastNowMs_);
       if (failover_.activeProvider(lastNowMs_) != ProviderId::EAST_MONEY) continue;
-      // Second successful probe returned the primary provider to service; use that fresh quote.
     } else if (context.type == MarketRequestType::QUOTE) {
       failover_.recordSuccess(context.provider, lastNowMs_);
     }
@@ -227,7 +231,9 @@ void StockController::consumeMarketResults() {
       cache.intraday = std::move(result.intraday);
       cache.hasIntraday = true;
       cache.intradayUpdatedMs = lastNowMs_;
-      cache.lastError = ProviderError::NONE;
+      cache.intradayHealth.lastSuccessMs = lastNowMs_;
+      cache.intradayHealth.lastError = ProviderError::NONE;
+      cache.intradayHealth.consecutiveFailures = 0;
     } else {
       const bool quoteToday = quoteIsForLocalDate(result.quote, lastLocal_);
       const int resultDateKey = dateKey(lastLocal_);
@@ -240,7 +246,9 @@ void StockController::consumeMarketResults() {
       cache.quote.marketStatus = marketStatus_;
       cache.hasQuote = true;
       cache.quoteUpdatedMs = lastNowMs_;
-      cache.lastError = ProviderError::NONE;
+      cache.quoteHealth.lastSuccessMs = lastNowMs_;
+      cache.quoteHealth.lastError = ProviderError::NONE;
+      cache.quoteHealth.consecutiveFailures = 0;
     }
     if (index == currentIndex_) dirty_ = true;
   }
@@ -275,12 +283,29 @@ void StockController::publishView() {
     next.displayName = !config_.stocks[currentIndex_].displayName.empty()
                            ? config_.stocks[currentIndex_].displayName
                            : cache.hasQuote ? cache.quote.name : next.symbol.canonical();
-    next.dataAgeSeconds = cache.hasQuote ? elapsed(lastNowMs_, cache.quoteUpdatedMs) / 1000U
-                                         : std::numeric_limits<uint32_t>::max();
+    next.quoteAgeSeconds = cache.hasQuote ? elapsed(lastNowMs_, cache.quoteUpdatedMs) / 1000U
+                                          : std::numeric_limits<uint32_t>::max();
+    next.intradayAgeSeconds = cache.hasIntraday ? elapsed(lastNowMs_, cache.intradayUpdatedMs) / 1000U
+                                                : std::numeric_limits<uint32_t>::max();
+    next.dataAgeSeconds = next.quoteAgeSeconds;
+    next.quoteError = cache.quoteHealth.lastError;
+    next.intradayError = cache.intradayHealth.lastError;
+    next.quoteDelayed = cache.hasQuote && next.quoteAgeSeconds >= QUOTE_DELAY_SECONDS;
+    next.intradayDelayed = (cache.hasIntraday && next.intradayAgeSeconds >= INTRADAY_DELAY_SECONDS) ||
+                           (!cache.hasIntraday && cache.intradayHealth.consecutiveFailures >= 3);
+
     if (!wifiOnline_) next.errorBadge = "离线";
-    else if (cache.lastError != ProviderError::NONE) next.errorBadge = "数据异常";
-    else if (!cache.hasQuote) next.errorBadge = "等待数据";
+    else if (!cache.hasQuote) next.errorBadge = "等待报价";
+    else if (next.quoteDelayed) next.errorBadge = "报价延迟";
+    else if (next.intradayDelayed) next.errorBadge = "分时延迟";
   }
+
+  const bool healthChanged = next.errorBadge != view_.errorBadge ||
+                             next.quoteDelayed != view_.quoteDelayed ||
+                             next.intradayDelayed != view_.intradayDelayed ||
+                             next.quoteError != view_.quoteError ||
+                             next.intradayError != view_.intradayError;
+  if (healthChanged) dirty_ = true;
   view_ = std::move(next);
 }
 
