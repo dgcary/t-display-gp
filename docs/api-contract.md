@@ -79,8 +79,9 @@ Tencent remains quote-only fallback. No intraday fallback is added in this chang
 ## HTTP transport contract
 
 - HTTP 200 is required for successful Provider parsing.
-- Connect timeout: 1500 ms.
-- Read timeout: 2500 ms.
+- TCP/connect timeout: 1500 ms.
+- TLS handshake timeout: **5 seconds**. Arduino-ESP32 2.0.14 otherwise defaults the secure-client handshake loop to 120 seconds.
+- HTTP/read timeout setting: 2500 ms. `HTTPClient` applies the corresponding rounded Stream/socket timeout after connection; transport code must not pass this millisecond value directly to `WiFiClientSecure::setTimeout()`, whose 2.0.14 API is seconds-based.
 - Maximum retained response body: 32 KiB.
 - Declared/streamed oversize responses are rejected.
 - Content-Length mismatch after an otherwise successful read is classified as truncated transport failure.
@@ -96,6 +97,8 @@ Transport diagnostics preserve:
 - expected Content-Length
 - received byte count
 - elapsed time
+
+The timeout/source contract is guarded by `tools/validate_http_transport_contract.py` in CI.
 
 ## Worker scheduling contract
 
@@ -163,11 +166,12 @@ Quote and intraday have independent health state:
 
 A quote success clears only quote health. An intraday success clears only intraday health. Failure never erases the corresponding last valid payload.
 
-UI thresholds:
+UI thresholds are evaluated only during active trading:
 
 - quote age >=15 s: `报价延迟`
 - intraday age >=180 s: `分时延迟`
 - one isolated intraday failure with a fresh cached chart: no generic page-wide error
+- lunch/closed/non-trading states do not become false delay alarms merely because cached data ages normally
 
 ## Request log contract
 
