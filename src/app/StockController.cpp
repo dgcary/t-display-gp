@@ -176,6 +176,7 @@ bool StockController::enqueueRequest(size_t stockIndex, MarketRequestType type, 
   request.provider = provider;
   request.createdMs = nowMs;
   request.notBeforeMs = nowMs;
+  request.cycleStartedMs = nowMs;
   request.attempt = 1;
   if (type == MarketRequestType::INTRADAY) {
     request.priority = MarketRequestPriority::INTRADAY;
@@ -305,10 +306,14 @@ void StockController::publishView() {
     next.intradayError = cache.intradayHealth.lastError;
     const bool tradingNow = isTrading(marketStatus_);
     next.quoteDelayed = tradingNow && cache.hasQuote &&
-                        elapsed(lastNowMs_, cache.quoteUpdatedMs) >= BuildConfig::QUOTE_DELAY_MS;
+        (cache.quoteHealth.consecutiveFailures >= BuildConfig::CHANNEL_DELAY_FAILURE_CYCLES ||
+         elapsed(lastNowMs_, cache.quoteUpdatedMs) >= BuildConfig::QUOTE_DELAY_MS);
     next.intradayDelayed = tradingNow &&
-        ((cache.hasIntraday && elapsed(lastNowMs_, cache.intradayUpdatedMs) >= BuildConfig::INTRADAY_DELAY_MS) ||
-         (!cache.hasIntraday && cache.intradayHealth.consecutiveFailures >= BuildConfig::INTRADAY_MAX_ATTEMPTS));
+        ((cache.hasIntraday &&
+          (cache.intradayHealth.consecutiveFailures >= BuildConfig::CHANNEL_DELAY_FAILURE_CYCLES ||
+           elapsed(lastNowMs_, cache.intradayUpdatedMs) >= BuildConfig::INTRADAY_DELAY_MS)) ||
+         (!cache.hasIntraday &&
+          cache.intradayHealth.consecutiveFailures >= BuildConfig::CHANNEL_DELAY_FAILURE_CYCLES));
 
     if (!wifiOnline_) next.errorBadge = "离线";
     else if (!cache.hasQuote) next.errorBadge = "等待报价";
