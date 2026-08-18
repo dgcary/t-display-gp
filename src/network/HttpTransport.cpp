@@ -1,5 +1,6 @@
 #include "HttpTransport.h"
 
+#include <Arduino.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
@@ -28,18 +29,40 @@ class BoundedMemoryStream final : public Stream {
   void flush() override {}
 
   bool overflowed() const { return buffer_.overflowed(); }
+  size_t size() const { return buffer_.body().size(); }
   std::string takeBody() { return buffer_.takeBody(); }
 
  private:
   HttpBodyBuffer buffer_;
 };
 
+int lastTlsError(WiFiClientSecure& client) {
+  char buffer[96] = {};
+  return client.lastError(buffer, sizeof(buffer));
+}
+
+HttpResponse makeResponse(HttpTransportError error, int statusCode, std::string body,
+                          int nativeError, int tlsError, int32_t expectedBytes,
+                          size_t receivedBytes, uint32_t startedMs) {
+  HttpResponse response;
+  response.error = error;
+  response.statusCode = statusCode;
+  response.body = std::move(body);
+  response.nativeError = nativeError;
+  response.tlsError = tlsError;
+  response.expectedBytes = expectedBytes;
+  response.receivedBytes = receivedBytes;
+  response.elapsedMs = static_cast<uint32_t>(millis() - startedMs);
+  return response;
+}
+
 }  // namespace
 
 HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& headers) {
+  const uint32_t startedMs = millis();
   WiFiClientSecure client;
-  // V1 uses public quote endpoints without certificate pinning. Encryption remains enabled,
-  // but certificate identity is not verified; README documents this trade-off explicitly.
+  // V1 keeps the existing TLS behavior in this stability change. Certificate
+  // verification hardening is intentionally a separate security task.
   client.setInsecure();
   client.setTimeout(BuildConfig::HTTP_READ_TIMEOUT_MS);
 
@@ -50,7 +73,8 @@ HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& heade
   http.setReuse(false);
 
   if (!http.begin(client, url.c_str())) {
-    return {HttpTransportError::NETWORK, 0, {}};
+    return makeResponse(HttpTransportError::NETWORK, 0, {}, 0, lastTlsError(client),
+                        -1, 0, startedMs);
   }
   for (const auto& header : headers) {
     http.addHeader(header.name.c_str(), header.value.c_str());
@@ -58,32 +82,43 @@ HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& heade
 
   const int status = http.GET();
   if (status <= 0) {
+    const int tlsError = lastTlsError(client);
     http.end();
-    return {HttpTransportError::NETWORK, status, {}};
-  }
-  if (status != HTTP_CODE_OK) {
-    http.end();
-    return {HttpTransportError::HTTP_STATUS, status, {}};
+    return makeResponse(HttpTransportError::NETWORK, 0, {}, status, tlsError,
+                        -1, 0, startedMs);
   }
 
   const int contentLength = http.getSize();
+  if (status != HTTP_CODE_OK) {
+    http.end();
+    return makeResponse(HttpTransportError::HTTP_STATUS, status, {}, 0, 0,
+                        contentLength, 0, startedMs);
+  }
+
   if (contentLength > static_cast<int>(BuildConfig::HTTP_MAX_BODY_BYTES)) {
     http.end();
-    return {HttpTransportError::BODY_TOO_LARGE, status, {}};
+    return makeResponse(HttpTransportError::BODY_TOO_LARGE, status, {}, 0, 0,
+                        contentLength, 0, startedMs);
   }
 
   BoundedMemoryStream sink(BuildConfig::HTTP_MAX_BODY_BYTES);
   const int written = http.writeToStream(&sink);
+  const size_t receivedBytes = sink.size();
+  const int tlsError = written < 0 ? lastTlsError(client) : 0;
   http.end();
 
   if (sink.overflowed()) {
-    return {HttpTransportError::BODY_TOO_LARGE, status, {}};
+    return makeResponse(HttpTransportError::BODY_TOO_LARGE, status, {}, written < 0 ? written : 0,
+                        tlsError, contentLength, receivedBytes, startedMs);
   }
   if (written < 0) {
-    return {HttpTransportError::NETWORK, status, {}};
+    return makeResponse(HttpTransportError::NETWORK, status, {}, written, tlsError,
+                        contentLength, receivedBytes, startedMs);
   }
   if (contentLength >= 0 && written != contentLength) {
-    return {HttpTransportError::NETWORK, status, {}};
+    return makeResponse(HttpTransportError::TRUNCATED_BODY, status, {}, 0, tlsError,
+                        contentLength, receivedBytes, startedMs);
   }
-  return {HttpTransportError::NONE, status, sink.takeBody()};
+  return makeResponse(HttpTransportError::NONE, status, sink.takeBody(), 0, 0,
+                      contentLength, receivedBytes, startedMs);
 }
