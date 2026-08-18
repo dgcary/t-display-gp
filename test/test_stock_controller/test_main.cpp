@@ -23,11 +23,7 @@ AppConfig config3() {
   return c;
 }
 
-AppConfig config1() {
-  AppConfig c; c.quoteRefreshSec=5;
-  c.stocks={{StockSymbol::parse("600519"),"茅台"}};
-  return c;
-}
+AppConfig config1() { return config3(); }
 
 LocalDateTime trading(){ return {2026,8,11,10,0,0,2}; }
 
@@ -98,12 +94,15 @@ void test_offline_keeps_cached_quote_and_sets_badge() {
 
 void test_intraday_failure_does_not_poison_quote_health_or_clear_cache() {
   FakeQueue q; StockController c(q); c.begin(config1()); c.setWifiOnline(true); c.tick(1000,trading());
-  const MarketRequest quote0=*lastRequest(q,"600519",MarketRequestType::QUOTE);
-  const MarketRequest trend0=*lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  const MarketRequest* quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  const MarketRequest* trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  const MarketRequest quote0=*quotePtr; const MarketRequest trend0=*trendPtr;
   pushQuoteSuccess(q,quote0); pushIntradaySuccess(q,trend0); c.consumeMarketResults();
 
   q.requests.clear(); c.tick(61000,trading());
-  const MarketRequest trend1=*lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY); TEST_ASSERT_NOT_NULL(trendPtr);
+  const MarketRequest trend1=*trendPtr;
   pushFailure(q,trend1,ProviderError::NETWORK); c.consumeMarketResults();
 
   TEST_ASSERT_TRUE(c.viewModel().hasQuote);
@@ -116,13 +115,17 @@ void test_intraday_failure_does_not_poison_quote_health_or_clear_cache() {
 
 void test_quote_success_does_not_clear_intraday_error() {
   FakeQueue q; StockController c(q); c.begin(config1()); c.setWifiOnline(true); c.tick(1000,trading());
-  const MarketRequest quote0=*lastRequest(q,"600519",MarketRequestType::QUOTE);
-  const MarketRequest trend0=*lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  const MarketRequest* quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  const MarketRequest* trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  const MarketRequest quote0=*quotePtr; const MarketRequest trend0=*trendPtr;
   pushQuoteSuccess(q,quote0); pushIntradaySuccess(q,trend0); c.consumeMarketResults();
 
   q.requests.clear(); c.tick(61000,trading());
-  const MarketRequest quote1=*lastRequest(q,"600519",MarketRequestType::QUOTE);
-  const MarketRequest trend1=*lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  const MarketRequest quote1=*quotePtr; const MarketRequest trend1=*trendPtr;
   pushFailure(q,trend1,ProviderError::NETWORK); pushQuoteSuccess(q,quote1,1411.0); c.consumeMarketResults();
 
   TEST_ASSERT_EQUAL(ProviderError::NONE,c.viewModel().quoteError);
@@ -131,13 +134,17 @@ void test_quote_success_does_not_clear_intraday_error() {
 
 void test_intraday_success_does_not_clear_quote_error() {
   FakeQueue q; StockController c(q); c.begin(config1()); c.setWifiOnline(true); c.tick(1000,trading());
-  const MarketRequest quote0=*lastRequest(q,"600519",MarketRequestType::QUOTE);
-  const MarketRequest trend0=*lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  const MarketRequest* quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  const MarketRequest* trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  const MarketRequest quote0=*quotePtr; const MarketRequest trend0=*trendPtr;
   pushQuoteSuccess(q,quote0); pushIntradaySuccess(q,trend0); c.consumeMarketResults();
 
   q.requests.clear(); c.tick(61000,trading());
-  const MarketRequest quote1=*lastRequest(q,"600519",MarketRequestType::QUOTE);
-  const MarketRequest trend1=*lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  const MarketRequest quote1=*quotePtr; const MarketRequest trend1=*trendPtr;
   pushFailure(q,quote1,ProviderError::NETWORK); pushIntradaySuccess(q,trend1); c.consumeMarketResults();
 
   TEST_ASSERT_EQUAL(ProviderError::NETWORK,c.viewModel().quoteError);
@@ -146,8 +153,10 @@ void test_intraday_success_does_not_clear_quote_error() {
 
 void test_channel_ages_drive_independent_delay_flags() {
   FakeQueue q; StockController c(q); c.begin(config1()); c.setWifiOnline(true); c.tick(1000,trading());
-  const MarketRequest quote0=*lastRequest(q,"600519",MarketRequestType::QUOTE);
-  const MarketRequest trend0=*lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  const MarketRequest* quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  const MarketRequest* trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  const MarketRequest quote0=*quotePtr; const MarketRequest trend0=*trendPtr;
   pushQuoteSuccess(q,quote0); pushIntradaySuccess(q,trend0); c.consumeMarketResults();
 
   c.tick(16000,trading());
