@@ -171,6 +171,50 @@ void test_channel_ages_drive_independent_delay_flags() {
   TEST_ASSERT_TRUE(c.viewModel().intradayDelayed);
 }
 
+void test_two_failed_quote_cycles_trigger_delay_before_age_threshold() {
+  FakeQueue q; StockController c(q); c.begin(config3()); c.setWifiOnline(true); c.tick(1000,trading());
+  const MarketRequest* quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  const MarketRequest* trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  pushQuoteSuccess(q,*quotePtr); pushIntradaySuccess(q,*trendPtr); c.consumeMarketResults();
+
+  q.requests.clear(); c.tick(6000,trading());
+  quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE); TEST_ASSERT_NOT_NULL(quotePtr);
+  pushFailure(q,*quotePtr,ProviderError::NETWORK); c.consumeMarketResults();
+  TEST_ASSERT_FALSE(c.viewModel().quoteDelayed);
+
+  q.requests.clear(); c.tick(11000,trading());
+  quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE); TEST_ASSERT_NOT_NULL(quotePtr);
+  pushFailure(q,*quotePtr,ProviderError::NETWORK); c.consumeMarketResults();
+  TEST_ASSERT_TRUE(c.viewModel().quoteAgeSeconds < 15);
+  TEST_ASSERT_TRUE(c.viewModel().quoteDelayed);
+  TEST_ASSERT_EQUAL_STRING("报价延迟",c.viewModel().errorBadge.c_str());
+}
+
+void test_two_failed_intraday_cycles_trigger_delay_before_age_threshold() {
+  FakeQueue q; StockController c(q); c.begin(config3()); c.setWifiOnline(true); c.tick(1000,trading());
+  const MarketRequest* quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  const MarketRequest* trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  pushQuoteSuccess(q,*quotePtr); pushIntradaySuccess(q,*trendPtr); c.consumeMarketResults();
+
+  q.requests.clear(); c.tick(61000,trading());
+  quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  pushQuoteSuccess(q,*quotePtr,1411.0); pushFailure(q,*trendPtr,ProviderError::NETWORK); c.consumeMarketResults();
+  TEST_ASSERT_FALSE(c.viewModel().intradayDelayed);
+
+  q.requests.clear(); c.tick(121000,trading());
+  quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  pushQuoteSuccess(q,*quotePtr,1412.0); pushFailure(q,*trendPtr,ProviderError::NETWORK); c.consumeMarketResults();
+  TEST_ASSERT_TRUE(c.viewModel().intradayAgeSeconds < 180);
+  TEST_ASSERT_TRUE(c.viewModel().intradayDelayed);
+  TEST_ASSERT_EQUAL_STRING("分时延迟",c.viewModel().errorBadge.c_str());
+}
+
 void test_idle_tick_does_not_mark_view_dirty() {
   FakeQueue q; StockController c(q); c.begin(config3()); c.setWifiOnline(false);
   LocalDateTime t{2026,8,11,10,0,0,2};
@@ -190,6 +234,8 @@ int main(){
   RUN_TEST(test_quote_success_does_not_clear_intraday_error);
   RUN_TEST(test_intraday_success_does_not_clear_quote_error);
   RUN_TEST(test_channel_ages_drive_independent_delay_flags);
+  RUN_TEST(test_two_failed_quote_cycles_trigger_delay_before_age_threshold);
+  RUN_TEST(test_two_failed_intraday_cycles_trigger_delay_before_age_threshold);
   RUN_TEST(test_idle_tick_does_not_mark_view_dirty);
   return UNITY_END();
 }
