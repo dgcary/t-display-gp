@@ -41,7 +41,6 @@ const char* kTencentQuote =
 void setUp() {}
 void tearDown() {}
 
-
 void test_body_buffer_never_exceeds_limit() {
   HttpBodyBuffer body(5);
   TEST_ASSERT_TRUE(body.append("abc", 3));
@@ -52,18 +51,37 @@ void test_body_buffer_never_exceeds_limit() {
   TEST_ASSERT_EQUAL_STRING("abcde", body.body().c_str());
 }
 
+void test_http_response_carries_transport_diagnostics() {
+  HttpResponse response;
+  response.error = HttpTransportError::NETWORK;
+  response.statusCode = 0;
+  response.nativeError = -5;
+  response.tlsError = -0x7280;
+  response.expectedBytes = 13824;
+  response.receivedBytes = 8192;
+  response.elapsedMs = 2700;
+
+  TEST_ASSERT_EQUAL(-5, response.nativeError);
+  TEST_ASSERT_EQUAL(-0x7280, response.tlsError);
+  TEST_ASSERT_EQUAL_INT32(13824, response.expectedBytes);
+  TEST_ASSERT_EQUAL_UINT32(8192, response.receivedBytes);
+  TEST_ASSERT_EQUAL_UINT32(2700, response.elapsedMs);
+}
+
 void test_eastmoney_quote_uses_exact_url_and_referer() {
   FakeTransport transport;
   transport.response = {HttpTransportError::NONE, 200, kEastMoneyQuote};
   EastMoneyProvider provider(transport);
   QuoteSnapshot quote;
+  ProviderDiagnostics diagnostics;
 
-  TEST_ASSERT_EQUAL(ProviderError::NONE, provider.fetchQuote(StockSymbol::parse("600519"), quote));
+  TEST_ASSERT_EQUAL(ProviderError::NONE, provider.fetchQuote(StockSymbol::parse("600519"), quote, &diagnostics));
   TEST_ASSERT_EQUAL_STRING(
       "https://push2.eastmoney.com/api/qt/stock/get?secid=1.600519&fields=f57,f58,f43,f44,f45,f46,f47,f48,f60,f86,f169,f170",
       transport.lastUrl.c_str());
   TEST_ASSERT_TRUE(hasHeader(transport.lastHeaders, "Referer", "https://quote.eastmoney.com/"));
   TEST_ASSERT_DOUBLE_WITHIN(0.001, 1410.25, quote.last);
+  TEST_ASSERT_EQUAL(200, diagnostics.httpStatus);
 }
 
 void test_eastmoney_intraday_uses_exact_url() {
@@ -112,6 +130,7 @@ void test_tencent_uses_exact_url_and_intraday_is_unsupported() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_body_buffer_never_exceeds_limit);
+  RUN_TEST(test_http_response_carries_transport_diagnostics);
   RUN_TEST(test_eastmoney_quote_uses_exact_url_and_referer);
   RUN_TEST(test_eastmoney_intraday_uses_exact_url);
   RUN_TEST(test_provider_maps_transport_failures_without_parsing);
