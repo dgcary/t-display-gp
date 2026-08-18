@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,13 +17,19 @@ enum class HttpTransportError {
   NONE,
   NETWORK,
   HTTP_STATUS,
-  BODY_TOO_LARGE
+  BODY_TOO_LARGE,
+  TRUNCATED_BODY
 };
 
 struct HttpResponse {
   HttpTransportError error = HttpTransportError::NONE;
   int statusCode = 0;
   std::string body;
+  int nativeError = 0;
+  int tlsError = 0;
+  int32_t expectedBytes = -1;
+  size_t receivedBytes = 0;
+  uint32_t elapsedMs = 0;
 };
 
 class HttpBodyBuffer {
