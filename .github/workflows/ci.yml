@@ -13,6 +13,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python tools/validate_tdisplay_setup.py
+      - run: python tools/validate_provisioning_contract.py
       - run: pip install platformio
       - run: pio test -e native
       - run: pio run -e lilygo-t-display-s3

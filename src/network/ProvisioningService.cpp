@@ -12,6 +12,7 @@
 
 #include "device/ConfigStore.h"
 #include "ProvisioningForm.h"
+#include "ProvisioningFlow.h"
 #include "build_config.h"
 
 namespace {
@@ -98,10 +99,18 @@ bool ProvisioningService::ensureConnected(AppConfig& config) {
   bool forcePortal = readForcePortal() || !haveValidConfig;
   std::string portalError;
 
+  Serial.printf("[prov] start: config=%s force_portal=%s wifi_status=%d\n",
+                haveValidConfig ? "valid" : "missing/invalid",
+                forcePortal ? "yes" : "no", static_cast<int>(WiFi.status()));
+
   while (true) {
     WiFiManager wm;
-    wm.setDebugOutput(false);
-    wm.setBreakAfterConfig(false);
+    wm.setDebugOutput(true, WM_DEBUG_NOTIFY);
+    // Return control to our state machine after every save attempt, including
+    // a failed Wi-Fi connection. We decide whether to retry, accept, or fail
+    // based on the real WiFi.status() instead of letting the blocking portal
+    // remain open indefinitely.
+    wm.setBreakAfterConfig(true);
 
     std::array<std::array<char, 16>, 5> symbolBuffers{};
     std::array<std::array<char, 31>, 5> nameBuffers{};
@@ -125,16 +134,49 @@ bool ProvisioningService::ensureConnected(AppConfig& config) {
     WiFiManagerParameter refreshParam("refresh", "刷新间隔(3/4/5秒)", refreshBuffer, 3);
     wm.addParameter(&refreshParam);
 
+    // WiFiManager stores the custom-head pointer; keep this string alive until
+    // startConfigPortal()/autoConnect() returns.
+    std::string customHead;
     if (!portalError.empty()) {
-      const std::string custom = "<div style='margin:8px;color:#b00020;font-weight:bold'>" + htmlEscape(portalError) + "</div>";
-      wm.setCustomHeadElement(custom.c_str());
+      customHead = "<div style='margin:8px;color:#b00020;font-weight:bold'>" + htmlEscape(portalError) + "</div>";
+      wm.setCustomHeadElement(customHead.c_str());
     }
 
     bool paramsSubmitted = false;
-    wm.setSaveParamsCallback([&paramsSubmitted]() { paramsSubmitted = true; });
-    const bool connected = forcePortal ? wm.startConfigPortal(AP_NAME) : wm.autoConnect(AP_NAME);
+    bool saveAttempted = false;
+    wm.setAPCallback([](WiFiManager* manager) {
+      Serial.printf("[prov] portal started: ssid=%s ap_ip=%s\n",
+                    manager->getConfigPortalSSID().c_str(), WiFi.softAPIP().toString().c_str());
+    });
+    wm.setSaveParamsCallback([&paramsSubmitted, &saveAttempted]() {
+      paramsSubmitted = true;
+      saveAttempted = true;
+      Serial.println("[prov] custom parameters submitted");
+    });
+    wm.setSaveConfigCallback([&saveAttempted]() {
+      saveAttempted = true;
+      Serial.println("[prov] WiFiManager save callback fired; checking actual station state");
+    });
 
-    if (paramsSubmitted) {
+    Serial.printf("[prov] entering %s\n", forcePortal ? "startConfigPortal" : "autoConnect");
+    const bool portalReturnedConnected = forcePortal ? wm.startConfigPortal(AP_NAME) : wm.autoConnect(AP_NAME);
+
+    bool wifiConnected = WiFi.status() == WL_CONNECTED;
+    if (!wifiConnected && (portalReturnedConnected || saveAttempted)) {
+      // ESP32 can report the got-IP event slightly before WiFi.status() settles.
+      // Give the station state a short bounded window before deciding to retry.
+      for (uint8_t i = 0; i < 20 && !wifiConnected; ++i) {
+        delay(100);
+        wifiConnected = WiFi.status() == WL_CONNECTED;
+      }
+    }
+
+    Serial.printf("[prov] portal returned: result=%s save_attempted=%s params=%s wifi_status=%d ip=%s\n",
+                  portalReturnedConnected ? "connected" : "not-connected",
+                  saveAttempted ? "yes" : "no", paramsSubmitted ? "yes" : "no",
+                  static_cast<int>(WiFi.status()), WiFi.localIP().toString().c_str());
+
+    if (paramsSubmitted || saveAttempted) {
       for (size_t i = 0; i < 5; ++i) {
         fields.symbols[i] = params[i * 2]->getValue();
         fields.names[i] = params[i * 2 + 1]->getValue();
@@ -149,18 +191,51 @@ bool ProvisioningService::ensureConnected(AppConfig& config) {
     if (paramsSubmitted && configOk) {
       if (!impl_->store.save(submitted)) {
         portalError = "配置写入失败，请重试";
+        Serial.println("[prov] config persistence failed; reopening portal");
         forcePortal = true;
         continue;
       }
       config = std::move(submitted);
+      Serial.println("[prov] application config saved");
     } else if (!configOk) {
       portalError = validationError;
+      Serial.printf("[prov] config validation failed: %s\n", validationError.c_str());
       forcePortal = true;
       continue;
     }
 
-    if (!connected || WiFi.status() != WL_CONNECTED) return false;
+    const ProvisioningNextAction action = decideProvisioningNextAction(
+        {portalReturnedConnected, wifiConnected, saveAttempted, configOk, forcePortal});
+
+    if (action == ProvisioningNextAction::RETRY_PORTAL) {
+      portalError = wifiConnected
+                        ? "配网门户未确认保存，请重新保存配置"
+                        : "Wi-Fi 连接失败，请检查密码后重试";
+      Serial.printf("[prov] retrying portal: %s\n", portalError.c_str());
+      forcePortal = true;
+      continue;
+    }
+
+    if (action == ProvisioningNextAction::FAIL) {
+      Serial.println("[prov] portal exited without a usable Wi-Fi connection");
+      return false;
+    }
+
     writeForcePortal(false);
+    wm.stopConfigPortal();
+
+    if (saveAttempted) {
+      // A clean reboot after interactive provisioning guarantees the AP/DNS/
+      // WiFiManager web server are gone before our normal LAN WebServer starts.
+      Serial.printf("[prov] provisioning saved successfully; rebooting with STA ip=%s\n",
+                    WiFi.localIP().toString().c_str());
+      delay(250);
+      ESP.restart();
+      while (true) delay(1000);
+    }
+
+    Serial.printf("[prov] connected using saved credentials: ip=%s\n",
+                  WiFi.localIP().toString().c_str());
     return true;
   }
 }

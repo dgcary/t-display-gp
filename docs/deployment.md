@@ -155,7 +155,8 @@ pio device monitor -b 115200
 4. 选择 Wi-Fi
 5. 输入 3–5 只股票
 6. 保存
-7. 等待设备连接 Wi-Fi 并进入主行情页面
+7. 设备成功保存 Wi-Fi 和股票配置后会执行一次受控重启
+8. 重启后使用已保存 Wi-Fi 自动连接，并进入主行情页面
 
 推荐首轮：
 
@@ -166,6 +167,35 @@ pio device monitor -b 115200
 ```
 
 其中北交所腾讯备用源仍需要在实际设备网络验证；如果 Tencent+BSE 不符合既有 schema，不得擅自猜测新字段/前缀，应按 `docs/hardware-acceptance.md` 记录为限制。
+
+### 首次配网串口日志
+
+配网阶段建议保持串口监视器开启：
+
+```bash
+pio device monitor -b 115200
+```
+
+正常首次配网应能看到类似阶段日志：
+
+```text
+[boot] provisioning start
+[prov] entering startConfigPortal
+[prov] portal started: ssid=TDisplay-GP-Setup ...
+[prov] custom parameters submitted
+[prov] portal returned: ... wifi_status=3 ip=...
+[prov] application config saved
+[prov] provisioning saved successfully; rebooting ...
+
+# 自动重启后
+[boot] provisioning start
+[prov] entering autoConnect
+[prov] connected using saved credentials: ip=...
+[boot] provisioning complete; starting application services
+[boot] market loop ready
+```
+
+如果已经拿到 IP 但没有看到 `portal returned`，说明仍卡在 WiFiManager 配网门户内部；保存本段串口日志，不要继续盲目烧录或修改行情逻辑。
 
 ## 9. 最低 Smoke Test
 

@@ -26,6 +26,8 @@ void startChinaTimeSync() {
 
 void setup() {
   Serial.begin(115200);
+  delay(50);
+  Serial.println("[boot] T-Display GP starting");
 
   // Bring up the panel first so provisioning has visible feedback even on a
   // factory-erased device. DeviceLayer intentionally does not wait for NTP.
@@ -35,6 +37,7 @@ void setup() {
   // validates persistent app configuration and forces the captive portal when
   // it is missing/invalid, even if Wi-Fi credentials already exist.
   configStore.load(appConfig);
+  Serial.println("[boot] provisioning start");
   if (!provisioning.ensureConnected(appConfig)) {
     Serial.println("Provisioning failed; restarting");
     delay(1000);
@@ -42,6 +45,7 @@ void setup() {
     return;
   }
 
+  Serial.println("[boot] provisioning complete; starting application services");
   startChinaTimeSync();
   provisioning.beginWebPortal(appConfig);
 
@@ -54,6 +58,7 @@ void setup() {
   controller.setWifiOnline(device.wifiConnected());
   screen.begin(device.display(), device.unicodeFont());
   appReady = true;
+  Serial.println("[boot] market loop ready");
 }
 
 void loop() {
