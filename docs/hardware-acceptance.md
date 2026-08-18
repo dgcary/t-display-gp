@@ -16,6 +16,7 @@
 pio test -e native
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
+python tools/validate_http_transport_contract.py
 pio run -e lilygo-t-display-s3
 pio run -e lilygo-t-display-s3 -t upload --upload-port <PORT>
 pio device monitor --port <PORT> -b 115200
@@ -86,6 +87,13 @@ BSE 腾讯备用若真机不符合现有 schema，记录为限制，不猜字段
 
 发生失败时记录实际设备错误，不把 Windows Schannel/curl 错误直接等同为 ESP32 错误。
 
+Transport 真机预期：
+
+- TCP/connect 上限约 1.5 秒
+- TLS handshake 显式上限 5 秒
+- HTTP/read timeout setting 2.5 秒
+- 单个异常请求不应因 Arduino-ESP32 默认 120 秒 TLS handshake timeout 长时间占住唯一 Worker
+
 ## 6. 分时失败恢复
 
 在 EastMoney trends2 波动时重点验证：
@@ -106,8 +114,9 @@ BSE 腾讯备用若真机不符合现有 schema，记录为限制，不猜字段
 - intraday 成功不会清除 quote 错误
 - intraday 失败不会污染 quote health
 - quote 成功不会错误清掉 intraday health
-- quote age >=15 秒时可显示 `报价延迟`
-- intraday age >=180 秒时可显示 `分时延迟`
+- 活跃交易时 quote age >=15 秒时可显示 `报价延迟`
+- 活跃交易时 intraday age >=180 秒时可显示 `分时延迟`
+- 午休、收盘、休市时缓存自然变旧不会误报延迟
 
 ## 8. Wi-Fi 中断
 
