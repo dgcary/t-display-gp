@@ -90,7 +90,7 @@ struct MarketDataWorker::Impl {
     result->type = request.type;
     result->provider = request.provider;
     result->attempt = request.attempt;
-    result->queueWaitMs = request.createdMs == 0 ? 0 : MarketRequestPolicy::elapsed(nowMs, request.createdMs);
+    result->queueWaitMs = MarketRequestPolicy::elapsed(nowMs, request.createdMs);
     result->error = error;
     Serial.printf("[md] id=%lu type=%s symbol=%s provider=%s attempt=%u/%u queue=%lums dur=0ms http=0 native=0 tls=0 bytes=0/-1 result=%s\n",
                   static_cast<unsigned long>(request.requestId), requestTypeName(request.type),
@@ -120,7 +120,7 @@ struct MarketDataWorker::Impl {
     result->type = request.type;
     result->provider = request.provider;
     result->attempt = request.attempt;
-    result->queueWaitMs = request.createdMs == 0 ? 0 : MarketRequestPolicy::elapsed(startedMs, request.createdMs);
+    result->queueWaitMs = MarketRequestPolicy::elapsed(startedMs, request.createdMs);
 
     IQuoteProvider& provider = providerFor(request.provider);
     if (request.type == MarketRequestType::INTRADAY) {
