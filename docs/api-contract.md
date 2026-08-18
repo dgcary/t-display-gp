@@ -112,12 +112,15 @@ Request priority:
 
 Waiting intraday uses latest-wins semantics: only one not-yet-started intraday item is retained. A newer current-stock trend request replaces an older pending trend request; the replaced request produces an explicit cancellation result so Controller outstanding state is released.
 
-TTL:
+TTL values follow the approved design spec exactly:
 
-- quote / primary probe: 15 s
-- intraday / intraday retry: 10 s
+- current-page quote: **8 s** from request creation
+- background quote: **12 s** from request creation
+- EastMoney primary probe: **30 s** from request creation
+- normal intraday: **75 s** from request creation
+- intraday retry cycle: **15 s from the first attempt of that refresh cycle**, not 15 s per retry attempt
 
-Expired accepted requests produce an explicit expiry result rather than silently disappearing.
+Expired accepted requests produce an explicit expiry result rather than silently disappearing. Retry attempts retain the first attempt's cycle timestamp while their per-attempt `createdMs` is refreshed for queue-wait diagnostics.
 
 ## Intraday retry contract
 
@@ -144,7 +147,7 @@ attempt 2: ~1500 ms ±20%
 attempt 3: ~4000 ms ±20%
 ```
 
-Retry never loops inside the Provider; quote work can run between attempts.
+Retry never loops inside the Provider; quote work can run between attempts. A retry that would fall outside the 15-second cycle deadline is not allowed to extend the cycle indefinitely.
 
 ## Quote failover contract
 
@@ -162,15 +165,16 @@ Quote and intraday have independent health state:
 - last error
 - last attempt
 - last success
-- consecutive failures
+- consecutive failed refresh cycles
 
 A quote success clears only quote health. An intraday success clears only intraday health. Failure never erases the corresponding last valid payload.
 
 UI thresholds are evaluated only during active trading:
 
-- quote age >=15 s: `报价延迟`
-- intraday age >=180 s: `分时延迟`
+- existing quote: `报价延迟` when **2 consecutive quote refresh cycles fail OR age >=15 s**
+- existing intraday: `分时延迟` when **2 consecutive intraday refresh cycles fail OR age >=180 s**
 - one isolated intraday failure with a fresh cached chart: no generic page-wide error
+- quote status has priority if quote and intraday are both degraded
 - lunch/closed/non-trading states do not become false delay alarms merely because cached data ages normally
 
 ## Request log contract
