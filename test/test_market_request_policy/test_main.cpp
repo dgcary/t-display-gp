@@ -10,7 +10,8 @@ void tearDown() {}
 
 MarketRequest makeRequest(uint32_t id, const char* code, MarketRequestType type,
                           MarketRequestPriority priority, uint32_t created=1000,
-                          uint32_t notBefore=1000, uint8_t attempt=1) {
+                          uint32_t notBefore=1000, uint8_t attempt=1,
+                          uint32_t cycleStarted=1000) {
   MarketRequest request;
   request.requestId=id;
   request.type=type;
@@ -18,6 +19,7 @@ MarketRequest makeRequest(uint32_t id, const char* code, MarketRequestType type,
   request.provider=ProviderId::EAST_MONEY;
   request.createdMs=created;
   request.notBeforeMs=notBefore;
+  request.cycleStartedMs=cycleStarted;
   request.attempt=attempt;
   request.priority=priority;
   return request;
@@ -60,15 +62,44 @@ void test_intraday_pending_is_latest_wins() {
   TEST_ASSERT_EQUAL_UINT32(2,next.requestId);
 }
 
+void test_request_ttls_match_approved_spec() {
+  auto current=makeRequest(1,"600519",MarketRequestType::QUOTE,MarketRequestPriority::CURRENT_QUOTE,1000,1000);
+  auto background=makeRequest(2,"000001",MarketRequestType::QUOTE,MarketRequestPriority::BACKGROUND_QUOTE,1000,1000);
+  auto probe=makeRequest(3,"300750",MarketRequestType::PRIMARY_PROBE,MarketRequestPriority::PRIMARY_PROBE,1000,1000);
+  auto intraday=makeRequest(4,"600519",MarketRequestType::INTRADAY,MarketRequestPriority::INTRADAY,1000,1000,1,1000);
+  auto retry=makeRequest(5,"600519",MarketRequestType::INTRADAY,MarketRequestPriority::INTRADAY_RETRY,12000,14000,2,1000);
+
+  TEST_ASSERT_EQUAL_UINT32(8000, MarketRequestPolicy::ttlMs(current));
+  TEST_ASSERT_EQUAL_UINT32(12000, MarketRequestPolicy::ttlMs(background));
+  TEST_ASSERT_EQUAL_UINT32(30000, MarketRequestPolicy::ttlMs(probe));
+  TEST_ASSERT_EQUAL_UINT32(75000, MarketRequestPolicy::ttlMs(intraday));
+  TEST_ASSERT_EQUAL_UINT32(15000, MarketRequestPolicy::ttlMs(retry));
+
+  TEST_ASSERT_FALSE(MarketRequestPolicy::expired(current,9000));
+  TEST_ASSERT_TRUE(MarketRequestPolicy::expired(current,9001));
+  TEST_ASSERT_FALSE(MarketRequestPolicy::expired(background,13000));
+  TEST_ASSERT_TRUE(MarketRequestPolicy::expired(background,13001));
+  TEST_ASSERT_FALSE(MarketRequestPolicy::expired(probe,31000));
+  TEST_ASSERT_TRUE(MarketRequestPolicy::expired(probe,31001));
+  TEST_ASSERT_FALSE(MarketRequestPolicy::expired(intraday,76000));
+  TEST_ASSERT_TRUE(MarketRequestPolicy::expired(intraday,76001));
+  TEST_ASSERT_FALSE(MarketRequestPolicy::expired(retry,16000));
+  TEST_ASSERT_TRUE(MarketRequestPolicy::expired(retry,16001));
+}
+
 void test_expired_requests_are_returned_without_execution() {
   PendingMarketWork pending(8);
   auto quote=makeRequest(1,"600519",MarketRequestType::QUOTE,MarketRequestPriority::CURRENT_QUOTE,1000,1000);
-  auto trend=makeRequest(2,"000001",MarketRequestType::INTRADAY,MarketRequestPriority::INTRADAY,1000,1000);
+  auto trend=makeRequest(2,"000001",MarketRequestType::INTRADAY,MarketRequestPriority::INTRADAY,1000,1000,1,1000);
   TEST_ASSERT_TRUE(pending.add(quote).accepted);
   TEST_ASSERT_TRUE(pending.add(trend).accepted);
   MarketRequest next; std::vector<MarketRequest> expired;
-  TEST_ASSERT_FALSE(pending.popNextReady(1000 + BuildConfig::QUOTE_REQUEST_TTL_MS + 1,next,expired));
-  TEST_ASSERT_EQUAL_UINT32(2,expired.size());
+
+  // Current quote expires first; normal intraday remains eligible up to 75 s.
+  TEST_ASSERT_TRUE(pending.popNextReady(9001,next,expired));
+  TEST_ASSERT_EQUAL_UINT32(2,next.requestId);
+  TEST_ASSERT_EQUAL_UINT32(1,expired.size());
+  TEST_ASSERT_EQUAL_UINT32(1,expired.front().requestId);
 }
 
 void test_retry_classification_and_limits() {
@@ -98,7 +129,7 @@ void test_retry_delay_is_bounded_and_only_attempts_two_and_three_exist() {
 
 void test_not_before_defers_retry_but_allows_quote() {
   PendingMarketWork pending(8);
-  auto retry=makeRequest(1,"600519",MarketRequestType::INTRADAY,MarketRequestPriority::INTRADAY_RETRY,2000,6000,2);
+  auto retry=makeRequest(1,"600519",MarketRequestType::INTRADAY,MarketRequestPriority::INTRADAY_RETRY,2000,6000,2,1000);
   auto quote=makeRequest(2,"600519",MarketRequestType::QUOTE,MarketRequestPriority::CURRENT_QUOTE,3000,3000);
   TEST_ASSERT_TRUE(pending.add(retry).accepted);
   TEST_ASSERT_TRUE(pending.add(quote).accepted);
@@ -115,6 +146,7 @@ int main(){
   RUN_TEST(test_quote_priority_beats_waiting_intraday);
   RUN_TEST(test_latest_current_page_quote_wins_same_priority);
   RUN_TEST(test_intraday_pending_is_latest_wins);
+  RUN_TEST(test_request_ttls_match_approved_spec);
   RUN_TEST(test_expired_requests_are_returned_without_execution);
   RUN_TEST(test_retry_classification_and_limits);
   RUN_TEST(test_retry_delay_is_bounded_and_only_attempts_two_and_three_exist);
