@@ -62,12 +62,13 @@ struct MarketDataWorker::Impl {
       if (result) {
         result->requestId = request->requestId;
         result->type = request->type;
+        result->provider = request->provider;
         IQuoteProvider& provider = providerFor(request->provider);
         if (request->type == MarketRequestType::INTRADAY) {
-          result->error = provider.fetchIntraday(request->symbol, result->intraday);
+          result->error = provider.fetchIntraday(request->symbol, result->intraday, &result->diagnostics);
           if (result->intraday.size() > 242) result->intraday.resize(242);
         } else {
-          result->error = provider.fetchQuote(request->symbol, result->quote);
+          result->error = provider.fetchQuote(request->symbol, result->quote, &result->diagnostics);
         }
       }
 
