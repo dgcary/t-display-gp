@@ -27,6 +27,7 @@ struct MarketRequest {
   ProviderId provider = ProviderId::EAST_MONEY;
   uint32_t createdMs = 0;
   uint32_t notBeforeMs = 0;
+  uint32_t cycleStartedMs = 0;
   uint8_t attempt = 1;
   MarketRequestPriority priority = MarketRequestPriority::CURRENT_QUOTE;
 };
@@ -56,13 +57,31 @@ inline bool isIntraday(const MarketRequest& request) {
   return request.type == MarketRequestType::INTRADAY;
 }
 
+inline bool isIntradayRetry(const MarketRequest& request) {
+  return isIntraday(request) &&
+         (request.priority == MarketRequestPriority::INTRADAY_RETRY || request.attempt > 1);
+}
+
 inline uint32_t ttlMs(const MarketRequest& request) {
-  return isIntraday(request) ? BuildConfig::INTRADAY_REQUEST_TTL_MS
-                             : BuildConfig::QUOTE_REQUEST_TTL_MS;
+  if (request.type == MarketRequestType::PRIMARY_PROBE) {
+    return BuildConfig::PRIMARY_PROBE_REQUEST_TTL_MS;
+  }
+  if (request.type == MarketRequestType::QUOTE) {
+    return request.priority == MarketRequestPriority::BACKGROUND_QUOTE
+               ? BuildConfig::BACKGROUND_QUOTE_REQUEST_TTL_MS
+               : BuildConfig::CURRENT_QUOTE_REQUEST_TTL_MS;
+  }
+  if (isIntradayRetry(request)) return BuildConfig::INTRADAY_RETRY_CYCLE_TTL_MS;
+  return BuildConfig::INTRADAY_REQUEST_TTL_MS;
+}
+
+inline uint32_t expiryAnchorMs(const MarketRequest& request) {
+  if (isIntradayRetry(request) && request.cycleStartedMs != 0) return request.cycleStartedMs;
+  return request.createdMs;
 }
 
 inline bool expired(const MarketRequest& request, uint32_t nowMs) {
-  return request.createdMs != 0 && elapsed(nowMs, request.createdMs) > ttlMs(request);
+  return elapsed(nowMs, expiryAnchorMs(request)) > ttlMs(request);
 }
 
 inline bool ready(const MarketRequest& request, uint32_t nowMs) {
