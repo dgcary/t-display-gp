@@ -71,10 +71,12 @@ class StockController {
     MarketRequestType type = MarketRequestType::QUOTE;
     StockSymbol symbol;
     ProviderId provider = ProviderId::EAST_MONEY;
+    MarketRequestPriority priority = MarketRequestPriority::CURRENT_QUOTE;
   };
 
   bool enqueueRequest(size_t stockIndex, MarketRequestType type, ProviderId provider, uint32_t nowMs);
-  bool hasOutstanding(const StockSymbol& symbol, MarketRequestType type) const;
+  bool hasOutstandingAtOrAbove(const StockSymbol& symbol, MarketRequestType type,
+                               MarketRequestPriority priority) const;
   size_t cacheIndexFor(const StockSymbol& symbol) const;
   bool quoteIsForLocalDate(const QuoteSnapshot& quote, const LocalDateTime& local) const;
   static int dateKey(const LocalDateTime& local);
