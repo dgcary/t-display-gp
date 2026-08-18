@@ -27,6 +27,7 @@ For normal deployment use the latest approved `main`. If the user requests a fea
 pio test -e native
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
+python tools/validate_http_transport_contract.py
 pio run -e lilygo-t-display-s3
 pio run -e lilygo-t-display-s3 -t upload
 pio device monitor -b 115200
@@ -63,9 +64,13 @@ Rules:
 - Quote traffic has priority over intraday traffic.
 - Waiting intraday work is latest-wins; do not allow old trend requests to build an unbounded queue.
 - Intraday transient retry is bounded and deferred: maximum 3 total attempts; retry must yield to quote traffic.
+- Market TCP connect timeout is 1500 ms, HTTP/read timeout setting is 2500 ms, and TLS handshake timeout is explicitly capped at 5 seconds.
+- Do not pass millisecond timeout constants directly to `WiFiClientSecure::setTimeout()` on Arduino-ESP32 2.0.14; that API is seconds-based.
 - Do not weaken parser validation.
 - Do not add infinite retry, unbounded timeouts, or TLS-security weakening as a stability workaround.
 - Keep `HTTPClient::setReuse(false)` unless a separately approved measurement-driven change says otherwise.
+
+Run `tools/validate_http_transport_contract.py` whenever transport timeout/reuse logic changes.
 
 ## Request diagnostics
 
@@ -92,6 +97,7 @@ Do not log full market response bodies by default.
 - Chart includes distinct previous-close (`昨收`) and valid today-open (`今开`) reference lines.
 - A single intraday failure with a fresh cached chart must not become a generic page-wide error.
 - Stale quote and stale intraday are reported independently (`报价延迟` / `分时延迟`).
+- Delay badges are active-trading health signals; lunch/closed/non-trading cached data aging must not produce false delay alarms.
 
 ## Provider caution
 
