@@ -287,51 +287,59 @@ void StockController::maybeProbePrimary(uint32_t nowMs) {
       !failover_.shouldProbePrimary(nowMs)) {
     return;
   }
-  enqueueRequest(currentIndex_, MarketRequestType::PRIMARY_PROBE, ProviderId::EAST_MONEY, nowMs);
-  failover_.markProbeAttempt(nowMs);
+  if (enqueueRequest(currentIndex_, MarketRequestType::PRIMARY_PROBE, ProviderId::EAST_MONEY, nowMs)) {
+    failover_.recordPrimaryProbeAttempt(nowMs);
+  }
 }
 
 void StockController::publishView() {
-  if (config_.stocks.empty()) {
-    view_ = {};
-    view_.marketStatus = MarketStatus::UNKNOWN;
-    return;
-  }
-  const auto& entry = config_.stocks[currentIndex_];
-  const auto& cache = caches_[currentIndex_];
   StockViewModel next;
   next.index = currentIndex_;
   next.count = config_.stocks.size();
-  next.symbol = entry.symbol;
-  next.displayName = entry.displayName.empty() ? cache.quote.name : entry.displayName;
-  next.quote = cache.hasQuote ? &cache.quote : nullptr;
-  next.intraday = cache.hasIntraday ? &cache.intraday : nullptr;
-  next.hasQuote = cache.hasQuote;
-  next.hasIntraday = cache.hasIntraday;
-  next.marketStatus = marketStatus_;
-  next.quoteError = cache.quoteHealth.lastError;
-  next.intradayError = cache.intradayHealth.lastError;
   next.wifiOnline = wifiOnline_;
+  next.marketStatus = marketStatus_;
   next.provider = failover_.activeProvider(lastNowMs_);
-  const bool activeTrading = isTrading(marketStatus_);
-  if (cache.hasQuote) {
-    next.dataAgeSeconds = elapsed(lastNowMs_, cache.quoteUpdatedMs) / 1000U;
-    next.quoteAgeSeconds = next.dataAgeSeconds;
-  } else {
-    next.dataAgeSeconds = std::numeric_limits<uint32_t>::max();
-    next.quoteAgeSeconds = next.dataAgeSeconds;
+
+  if (!config_.stocks.empty() && currentIndex_ < config_.stocks.size()) {
+    next.symbol = config_.stocks[currentIndex_].symbol;
+    const auto& cache = caches_[currentIndex_];
+    next.hasQuote = cache.hasQuote;
+    next.hasIntraday = cache.hasIntraday;
+    next.quote = cache.hasQuote ? &cache.quote : nullptr;
+    next.intraday = cache.hasIntraday ? &cache.intraday : nullptr;
+    next.displayName = !config_.stocks[currentIndex_].displayName.empty()
+                           ? config_.stocks[currentIndex_].displayName
+                           : cache.hasQuote ? cache.quote.name : next.symbol.canonical();
+    next.quoteAgeSeconds = cache.hasQuote ? elapsed(lastNowMs_, cache.quoteUpdatedMs) / 1000U
+                                          : std::numeric_limits<uint32_t>::max();
+    next.intradayAgeSeconds = cache.hasIntraday ? elapsed(lastNowMs_, cache.intradayUpdatedMs) / 1000U
+                                                : std::numeric_limits<uint32_t>::max();
+    next.dataAgeSeconds = next.quoteAgeSeconds;
+    next.quoteError = cache.quoteHealth.lastError;
+    next.intradayError = cache.intradayHealth.lastError;
+    const bool tradingNow = isTrading(marketStatus_);
+    next.quoteDelayed = tradingNow && cache.hasQuote &&
+        (cache.quoteHealth.consecutiveFailures >= BuildConfig::CHANNEL_DELAY_FAILURE_CYCLES ||
+         elapsed(lastNowMs_, cache.quoteUpdatedMs) >= BuildConfig::QUOTE_DELAY_MS);
+    next.intradayDelayed = tradingNow &&
+        ((cache.hasIntraday &&
+          (cache.intradayHealth.consecutiveFailures >= BuildConfig::CHANNEL_DELAY_FAILURE_CYCLES ||
+           elapsed(lastNowMs_, cache.intradayUpdatedMs) >= BuildConfig::INTRADAY_DELAY_MS)) ||
+         (!cache.hasIntraday &&
+          cache.intradayHealth.consecutiveFailures >= BuildConfig::CHANNEL_DELAY_FAILURE_CYCLES));
+
+    if (!wifiOnline_) next.errorBadge = "离线";
+    else if (!cache.hasQuote) next.errorBadge = "等待报价";
+    else if (next.quoteDelayed) next.errorBadge = "报价延迟";
+    else if (next.intradayDelayed) next.errorBadge = "分时延迟";
   }
-  next.intradayAgeSeconds = cache.hasIntraday ? elapsed(lastNowMs_, cache.intradayUpdatedMs) / 1000U
-                                              : std::numeric_limits<uint32_t>::max();
-  next.quoteDelayed = activeTrading && cache.hasQuote &&
-                      (cache.quoteHealth.consecutiveFailures >= 2U || next.quoteAgeSeconds >= 15U);
-  next.intradayDelayed = activeTrading && cache.hasIntraday &&
-                         (cache.intradayHealth.consecutiveFailures >= 2U || next.intradayAgeSeconds >= 180U);
-  if (!wifiOnline_) next.errorBadge = "离线";
-  else if (next.quoteDelayed) next.errorBadge = "报价延迟";
-  else if (next.intradayDelayed) next.errorBadge = "分时延迟";
-  else if (!next.hasQuote && cache.quoteHealth.lastError != ProviderError::NONE) next.errorBadge = "报价异常";
-  else if (!next.hasIntraday && cache.intradayHealth.lastError != ProviderError::NONE) next.errorBadge = "分时异常";
+
+  const bool healthChanged = next.errorBadge != view_.errorBadge ||
+                             next.quoteDelayed != view_.quoteDelayed ||
+                             next.intradayDelayed != view_.intradayDelayed ||
+                             next.quoteError != view_.quoteError ||
+                             next.intradayError != view_.intradayError;
+  if (healthChanged) dirty_ = true;
   view_ = std::move(next);
 }
 
