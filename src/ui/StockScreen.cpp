@@ -13,8 +13,10 @@ constexpr int MORNING_OPEN = 9 * 60 + 30;
 constexpr int MORNING_CLOSE = 11 * 60 + 30;
 constexpr int AFTERNOON_OPEN = 13 * 60;
 constexpr int AFTERNOON_CLOSE = 15 * 60;
-constexpr int SESSION_PIXELS = 74;
-constexpr int AFTERNOON_X0 = StockScreenLayout::CHART_X0 + SESSION_PIXELS + 6;
+constexpr int LUNCH_GAP_PIXELS = 6;
+constexpr int SESSION_PIXELS =
+    (StockScreenLayout::CHART_X1 - StockScreenLayout::CHART_X0 - LUNCH_GAP_PIXELS) / 2;
+constexpr int AFTERNOON_X0 = StockScreenLayout::CHART_X0 + SESSION_PIXELS + LUNCH_GAP_PIXELS;
 
 size_t utf8CharBytes(unsigned char lead) {
   if ((lead & 0x80U) == 0) return 1;
@@ -42,28 +44,36 @@ size_t codepointCount(const std::string& text) {
   }
   return count;
 }
+
+bool validReference(double value) {
+  return std::isfinite(value) && value > 0;
+}
 }  // namespace
 
-ChartRange StockScreenMath::chartRange(const IntradaySeries& series, double prevClose) {
+ChartRange StockScreenMath::chartRange(const IntradaySeries& series, double prevClose, double openPrice) {
   double minPrice = std::numeric_limits<double>::infinity();
   double maxPrice = -std::numeric_limits<double>::infinity();
-  if (std::isfinite(prevClose) && prevClose > 0) {
+
+  if (validReference(prevClose)) {
     minPrice = prevClose;
     maxPrice = prevClose;
   }
+  if (validReference(openPrice)) {
+    minPrice = std::min(minPrice, openPrice);
+    maxPrice = std::max(maxPrice, openPrice);
+  }
   for (const auto& point : series) {
-    if (!std::isfinite(point.price) || point.price <= 0) continue;
+    if (!validReference(point.price)) continue;
     minPrice = std::min(minPrice, static_cast<double>(point.price));
     maxPrice = std::max(maxPrice, static_cast<double>(point.price));
   }
   if (!std::isfinite(minPrice) || !std::isfinite(maxPrice)) return {0, 1};
 
-  if (prevClose > 0 && std::isfinite(prevClose)) {
-    const double halfMinimum = prevClose * 0.001;
-    if (maxPrice - minPrice < prevClose * 0.002) {
-      minPrice = std::min(minPrice, prevClose - halfMinimum);
-      maxPrice = std::max(maxPrice, prevClose + halfMinimum);
-    }
+  const double anchor = validReference(prevClose) ? prevClose : validReference(openPrice) ? openPrice : minPrice;
+  if (validReference(anchor) && maxPrice - minPrice < anchor * 0.002) {
+    const double halfMinimum = anchor * 0.001;
+    minPrice = std::min(minPrice, anchor - halfMinimum);
+    maxPrice = std::max(maxPrice, anchor + halfMinimum);
   }
   if (maxPrice <= minPrice) {
     const double padding = minPrice == 0 ? 1.0 : std::fabs(minPrice) * 0.001;
@@ -80,7 +90,7 @@ int StockScreenMath::chartX(uint16_t minuteOfDay) {
     const double fraction = static_cast<double>(minute - MORNING_OPEN) / (MORNING_CLOSE - MORNING_OPEN);
     return StockScreenLayout::CHART_X0 + static_cast<int>(std::lround(fraction * SESSION_PIXELS));
   }
-  if (minute < AFTERNOON_OPEN) return AFTERNOON_X0 - 3;
+  if (minute < AFTERNOON_OPEN) return AFTERNOON_X0 - LUNCH_GAP_PIXELS / 2;
   if (minute >= AFTERNOON_CLOSE) return StockScreenLayout::CHART_X1;
   const double fraction = static_cast<double>(minute - AFTERNOON_OPEN) / (AFTERNOON_CLOSE - AFTERNOON_OPEN);
   return AFTERNOON_X0 + static_cast<int>(std::lround(fraction * SESSION_PIXELS));
@@ -141,6 +151,13 @@ void drawAscii(TFT_eSPI& tft, const std::string& text, int x, int y, uint8_t fon
   tft.setTextDatum(TL_DATUM);
   tft.drawString(text.c_str(), x, y, font);
 }
+
+void drawDashedLine(TFT_eSPI& tft, int y, int dash, int gap, uint16_t color) {
+  for (int x = StockScreenLayout::CHART_X0 + 1; x < StockScreenLayout::CHART_X1; x += dash + gap) {
+    const int remaining = StockScreenLayout::CHART_X1 - x;
+    tft.drawFastHLine(x, y, remaining < dash ? remaining : dash, color);
+  }
+}
 }  // namespace
 
 void StockScreen::begin(TFT_eSPI& display, U8g2_for_TFT_eSPI& unicodeFont) {
@@ -161,7 +178,7 @@ bool StockScreen::sameQuote(const RenderSignature& a, const RenderSignature& b) 
 bool StockScreen::sameIntraday(const RenderSignature& a, const RenderSignature& b) {
   return a.hasIntraday == b.hasIntraday && a.intradaySize == b.intradaySize &&
          a.intradayLastMinute == b.intradayLastMinute && a.intradayLastPrice == b.intradayLastPrice &&
-         a.prevClose == b.prevClose;
+         a.prevClose == b.prevClose && a.open == b.open;
 }
 
 StockScreen::RenderSignature StockScreen::signatureFor(const StockViewModel& model) const {
@@ -229,60 +246,66 @@ void StockScreen::render(const StockViewModel& model, bool fullRedraw) {
 }
 
 void StockScreen::drawHeader(const StockViewModel& model) {
-  display_->fillRect(0, StockScreenLayout::HEADER_Y0, 170, StockScreenLayout::HEADER_Y1 + 1, UiTheme::BACKGROUND);
+  const int width = StockScreenLayout::LEFT_X1 - StockScreenLayout::LEFT_X0 + 1;
+  display_->fillRect(StockScreenLayout::LEFT_X0, StockScreenLayout::HEADER_Y0, width,
+                     StockScreenLayout::HEADER_Y1 - StockScreenLayout::HEADER_Y0 + 1,
+                     UiTheme::BACKGROUND);
   unicodeFont_->setFont(u8g2_font_wqy12_t_gb2312);
   unicodeFont_->setForegroundColor(UiTheme::TEXT);
-  const std::string name = StockScreenMath::truncateUtf8(model.displayName, 6);
-  unicodeFont_->drawUTF8(6, 16, name.c_str());
-  drawAscii(*display_, model.symbol.code(), 111, 4, 1, UiTheme::MUTED);
+  const std::string name = StockScreenMath::truncateUtf8(model.displayName, 5);
+  unicodeFont_->drawUTF8(4, 14, name.c_str());
+  drawAscii(*display_, model.symbol.code(), 68, 3, 1, UiTheme::MUTED);
   unicodeFont_->setForegroundColor(UiTheme::MUTED);
-  unicodeFont_->drawUTF8(6, 27, marketText(model.marketStatus));
+  unicodeFont_->drawUTF8(4, 24, marketText(model.marketStatus));
 }
 
 void StockScreen::drawQuote(const StockViewModel& model) {
+  const int width = StockScreenLayout::LEFT_X1 - StockScreenLayout::LEFT_X0 + 1;
   const int height = StockScreenLayout::PRICE_Y1 - StockScreenLayout::PRICE_Y0 + 1;
-  display_->fillRect(0, StockScreenLayout::PRICE_Y0, 170, height, UiTheme::BACKGROUND);
+  display_->fillRect(StockScreenLayout::LEFT_X0, StockScreenLayout::PRICE_Y0, width, height, UiTheme::BACKGROUND);
   if (!model.hasQuote || !model.quote) {
-    drawAscii(*display_, "--", 8, 38, 4, UiTheme::NEUTRAL);
+    drawAscii(*display_, "--", 4, 29, 4, UiTheme::NEUTRAL);
     return;
   }
   const uint16_t color = priceColor(model);
-  drawAscii(*display_, formatPrice(model.quote->last), 6, 34, 4, color);
+  drawAscii(*display_, formatPrice(model.quote->last), 3, 28, 4, color);
   std::string change = formatPrice(model.quote->change);
   if (model.quote->change > 0) change = "+" + change;
-  drawAscii(*display_, change + "  " + formatPercent(model.quote->changePercent), 8, 70, 1, color);
+  drawAscii(*display_, change + " " + formatPercent(model.quote->changePercent), 4, 58, 1, color);
 }
 
 void StockScreen::drawMetrics(const StockViewModel& model) {
+  const int width = StockScreenLayout::LEFT_X1 - StockScreenLayout::LEFT_X0 + 1;
   const int height = StockScreenLayout::METRICS_Y1 - StockScreenLayout::METRICS_Y0 + 1;
-  display_->fillRect(0, StockScreenLayout::METRICS_Y0, 170, height, UiTheme::BACKGROUND);
+  display_->fillRect(StockScreenLayout::LEFT_X0, StockScreenLayout::METRICS_Y0, width, height, UiTheme::BACKGROUND);
   unicodeFont_->setFont(u8g2_font_wqy12_t_gb2312);
   unicodeFont_->setForegroundColor(UiTheme::MUTED);
-  const char* labels[4] = {"今开", "最高", "最低", "昨收"};
+  const char* labels[4] = {"开", "高", "低", "昨"};
   const double values[4] = {
       model.hasQuote && model.quote ? model.quote->open : 0,
       model.hasQuote && model.quote ? model.quote->high : 0,
       model.hasQuote && model.quote ? model.quote->low : 0,
       model.hasQuote && model.quote ? model.quote->prevClose : 0};
   for (int i = 0; i < 4; ++i) {
-    const int col = i % 2;
-    const int row = i / 2;
-    const int x = col == 0 ? 6 : 88;
-    const int y = 101 + row * 27;
-    unicodeFont_->drawUTF8(x, y, labels[i]);
-    drawAscii(*display_, model.hasQuote ? formatPrice(values[i]) : "--", x + 31, y - 11, 1, UiTheme::TEXT);
+    const int baseline = 83 + i * 13;
+    unicodeFont_->drawUTF8(4, baseline, labels[i]);
+    drawAscii(*display_, model.hasQuote ? formatPrice(values[i]) : "--", 24, baseline - 11, 1, UiTheme::TEXT);
   }
 }
 
 void StockScreen::drawTurnover(const StockViewModel& model) {
+  const int width = StockScreenLayout::LEFT_X1 - StockScreenLayout::LEFT_X0 + 1;
   const int height = StockScreenLayout::TURNOVER_Y1 - StockScreenLayout::TURNOVER_Y0 + 1;
-  display_->fillRect(0, StockScreenLayout::TURNOVER_Y0, 170, height, UiTheme::BACKGROUND);
+  display_->fillRect(StockScreenLayout::LEFT_X0, StockScreenLayout::TURNOVER_Y0, width, height, UiTheme::BACKGROUND);
   unicodeFont_->setFont(u8g2_font_wqy12_t_gb2312);
   unicodeFont_->setForegroundColor(UiTheme::MUTED);
-  unicodeFont_->drawUTF8(6, 159, "量");
-  unicodeFont_->drawUTF8(87, 159, "额");
-  drawAscii(*display_, model.hasQuote && model.quote ? formatVolume(model.quote->volume) : "--", 24, 148, 1, UiTheme::TEXT);
-  drawAscii(*display_, model.hasQuote && model.quote ? formatAmount(model.quote->amount) : "--", 105, 148, 1, UiTheme::TEXT);
+  unicodeFont_->drawUTF8(4, 136, "量");
+  unicodeFont_->drawUTF8(4, 149, "额");
+  unicodeFont_->setForegroundColor(UiTheme::TEXT);
+  const std::string volume = model.hasQuote && model.quote ? formatVolume(model.quote->volume) : "--";
+  const std::string amount = model.hasQuote && model.quote ? formatAmount(model.quote->amount) : "--";
+  unicodeFont_->drawUTF8(24, 136, StockScreenMath::truncateUtf8(volume, 10).c_str());
+  unicodeFont_->drawUTF8(24, 149, StockScreenMath::truncateUtf8(amount, 10).c_str());
 }
 
 void StockScreen::drawChart(const StockViewModel& model) {
@@ -292,10 +315,35 @@ void StockScreen::drawChart(const StockViewModel& model) {
   display_->drawRect(StockScreenLayout::CHART_X0, StockScreenLayout::CHART_Y0, width, height, UiTheme::GRID);
   if (!model.hasQuote || !model.quote || !model.hasIntraday || !model.intraday || model.intraday->empty()) return;
 
-  const ChartRange range = StockScreenMath::chartRange(*model.intraday, model.quote->prevClose);
-  const int guideY = StockScreenMath::chartY(model.quote->prevClose, range);
-  for (int x = StockScreenLayout::CHART_X0 + 1; x < StockScreenLayout::CHART_X1; x += 5) {
-    display_->drawFastHLine(x, guideY, 3, UiTheme::GRID);
+  const double openPrice = model.quote->open;
+  const ChartRange range = StockScreenMath::chartRange(*model.intraday, model.quote->prevClose, openPrice);
+
+  const bool havePrevClose = validReference(model.quote->prevClose);
+  const bool haveOpen = validReference(openPrice);
+  int prevY = -1;
+  int openY = -1;
+  if (havePrevClose) {
+    prevY = StockScreenMath::chartY(model.quote->prevClose, range);
+    drawDashedLine(*display_, prevY, 4, 3, UiTheme::GRID);
+  }
+  if (haveOpen) {
+    openY = StockScreenMath::chartY(openPrice, range);
+    drawDashedLine(*display_, openY, 1, 3, UiTheme::MUTED);
+  }
+
+  unicodeFont_->setFont(u8g2_font_wqy12_t_gb2312);
+  if (havePrevClose) {
+    unicodeFont_->setForegroundColor(UiTheme::MUTED);
+    const int labelY = std::max(StockScreenLayout::CHART_Y0 + 11, std::min(prevY - 2, StockScreenLayout::CHART_Y1 - 2));
+    unicodeFont_->drawUTF8(StockScreenLayout::CHART_X0 + 3, labelY, "昨收");
+  }
+  if (haveOpen) {
+    const int separation = prevY >= 0 ? (openY > prevY ? openY - prevY : prevY - openY) : 99;
+    if (separation >= 12) {
+      unicodeFont_->setForegroundColor(UiTheme::TEXT);
+      const int labelY = std::max(StockScreenLayout::CHART_Y0 + 11, std::min(openY - 2, StockScreenLayout::CHART_Y1 - 2));
+      unicodeFont_->drawUTF8(StockScreenLayout::CHART_X0 + 30, labelY, "今开");
+    }
   }
 
   bool havePrevious = false;
@@ -318,17 +366,17 @@ void StockScreen::drawChart(const StockViewModel& model) {
 
 void StockScreen::drawFooter(const StockViewModel& model) {
   const int height = StockScreenLayout::FOOTER_Y1 - StockScreenLayout::FOOTER_Y0 + 1;
-  display_->fillRect(0, StockScreenLayout::FOOTER_Y0, 170, height, UiTheme::BACKGROUND);
+  display_->fillRect(0, StockScreenLayout::FOOTER_Y0, StockScreenLayout::SCREEN_WIDTH, height, UiTheme::BACKGROUND);
   char position[16];
   std::snprintf(position, sizeof(position), "%u/%u", static_cast<unsigned>(model.index + 1), static_cast<unsigned>(model.count));
-  drawAscii(*display_, position, 6, 302, 1, UiTheme::TEXT);
-  drawAscii(*display_, model.wifiOnline ? "WiFi" : "OFF", 43, 302, 1,
+  drawAscii(*display_, position, 4, 156, 1, UiTheme::TEXT);
+  drawAscii(*display_, model.wifiOnline ? "WiFi" : "OFF", 37, 156, 1,
             model.wifiOnline ? UiTheme::MUTED : UiTheme::WARNING);
-  drawAscii(*display_, model.provider == ProviderId::EAST_MONEY ? "EM" : "TX", 81, 302, 1, UiTheme::MUTED);
+  drawAscii(*display_, model.provider == ProviderId::EAST_MONEY ? "EM" : "TX", 73, 156, 1, UiTheme::MUTED);
   if (!model.errorBadge.empty()) {
     unicodeFont_->setFont(u8g2_font_wqy12_t_gb2312);
     unicodeFont_->setForegroundColor(UiTheme::WARNING);
-    unicodeFont_->drawUTF8(108, 314, StockScreenMath::truncateUtf8(model.errorBadge, 5).c_str());
+    unicodeFont_->drawUTF8(106, 168, StockScreenMath::truncateUtf8(model.errorBadge, 6).c_str());
   }
 }
 #endif  // ARDUINO
