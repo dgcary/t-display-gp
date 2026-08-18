@@ -8,25 +8,25 @@ These instructions apply to Codex and other automated coding/deployment agents.
 - Repository: `dgcary/t-display-gp`
 - Hardware: **LILYGO T-Display-S3 only**
 - MCU: ESP32-S3
-- Display: ST7789 170x320 portrait
-- Framework: Arduino/C++ via PlatformIO
-- Primary PlatformIO environment: `lilygo-t-display-s3`
+- Physical TFT: ST7789 170×320, 8-bit parallel
+- Application orientation: **320×170 landscape**
+- Framework: Arduino/C++17 via PlatformIO
+- Primary environment: `lilygo-t-display-s3`
 
-Do not silently retarget the firmware to another T-Display revision, ESP32 board, display controller, or pinout.
+Do not silently retarget to another board, display revision, controller, pinout, or orientation.
 
 ## Source-of-truth rule
 
-Before development or deployment, start from the requested GitHub branch/commit.
-Do not treat an old local checkout, generated binary, or previous conversation artifact as authoritative.
+Before development or deployment, fetch the requested GitHub branch/commit. Do not treat an old local checkout, binary, or previous chat artifact as authoritative.
 
-For ordinary production-style deployment, prefer the latest approved `main` commit. If the user explicitly asks to test a feature branch or commit SHA, deploy exactly that ref and record it.
+For normal deployment use the latest approved `main`. If the user requests a feature branch or exact SHA, deploy exactly that ref and record it.
 
 ## Required pre-deployment sequence
 
-Run in this order:
-
 ```bash
 pio test -e native
+python tools/validate_tdisplay_setup.py
+python tools/validate_provisioning_contract.py
 pio run -e lilygo-t-display-s3
 pio run -e lilygo-t-display-s3 -t upload
 pio device monitor -b 115200
@@ -34,92 +34,105 @@ pio device monitor -b 115200
 
 Rules:
 
-1. Do not upload if native tests fail.
-2. Do not upload if the ESP32-S3 firmware build fails.
-3. Do not convert warnings/errors into ignored status merely to make the build green.
-4. Do not claim hardware PASS without a physical board check.
-5. Record the exact Git commit SHA used for every hardware acceptance run.
-
-## First physical acceptance
-
-After flashing a new or erased board, verify at minimum:
-
-- LCD powers on and orientation is correct.
-- A-share positive change is visually red, not blue because of RGB/BGR mismatch.
-- Chinese stock names render legibly.
-- GPIO0 moves to previous stock exactly once per press.
-- GPIO14 moves to next stock exactly once per press.
-- Holding a key does not auto-repeat.
-- `TDisplay-GP-Setup` appears when configuration is absent/forced.
-- A phone can complete Wi-Fi + 3–5 stock provisioning.
-- Device reaches live market data without blocking the UI.
-
-For complete acceptance use `docs/hardware-acceptance.md`.
+1. Do not upload if native tests or firmware build fail.
+2. Do not ignore warnings/errors merely to make CI green.
+3. Do not claim hardware PASS without physical-board evidence.
+4. Record the exact Git SHA for every hardware acceptance run.
 
 ## Hardware invariants
 
-Do not change these unless the user explicitly changes the target hardware and the design is updated:
-
 - GPIO15: display power, HIGH before TFT initialization
-- GPIO38: TFT backlight
-- GPIO0: previous stock button, pull-up, active low
-- GPIO14: next stock button, pull-up, active low
-- TFT: ST7789, 170x320, 8-bit parallel
+- GPIO38: backlight
+- GPIO0: previous stock, pull-up, active low
+- GPIO14: next stock, pull-up, active low
 - TFT color order: `TFT_RGB`
 - TFT init: `INIT_SEQUENCE_3`
+- Application rotation: 320×170 landscape
 
-`platformio.ini` is expected to stay aligned with TFT_eSPI's official `Setup206_LilyGo_T_Display_S3.h`.
-Run `tools/validate_tdisplay_setup.py` when modifying TFT build flags.
+`platformio.ini` must remain aligned with TFT_eSPI `Setup206_LilyGo_T_Display_S3.h`. Run `tools/validate_tdisplay_setup.py` for TFT/build changes.
 
-## Architecture invariants
+## Market-data architecture invariants
 
-- `main loop` must not perform blocking market HTTP calls.
+- Main loop must never perform blocking market HTTP.
 - HTTP work belongs in `MarketDataWorker`.
-- UI/controller must depend on Provider abstractions, not raw provider response formats.
-- EastMoney remains primary for V1 quote + intraday.
-- Tencent remains V1 quote fallback.
-- Network/provider failure must preserve the last valid cached screen.
-- Configuration changes are persisted then applied by controlled restart; do not partially hot-mutate runtime state in V1.
+- UI/Controller depend on Provider abstractions, not raw payload formats.
+- EastMoney remains V1 quote + intraday primary.
+- Tencent remains V1 **quote-only** fallback.
+- Network/provider failure preserves the last valid quote and intraday cache.
+- Quote health and intraday health are independent.
+- Quote traffic has priority over intraday traffic.
+- Waiting intraday work is latest-wins; do not allow old trend requests to build an unbounded queue.
+- Intraday transient retry is bounded and deferred: maximum 3 total attempts; retry must yield to quote traffic.
+- Do not weaken parser validation.
+- Do not add infinite retry, unbounded timeouts, or TLS-security weakening as a stability workaround.
+- Keep `HTTPClient::setReuse(false)` unless a separately approved measurement-driven change says otherwise.
 
-## Market-data caution
+## Request diagnostics
 
-The public EastMoney/Tencent endpoints are unofficial/unsupported contracts and may change.
-When a provider fails:
+Market requests emit concise `[md]` serial completion lines. When diagnosing live failures, preserve at least:
 
-1. Capture the actual response/status.
-2. Add or update a regression fixture/test first.
-3. Change only the provider/parser boundary where possible.
-4. Do not weaken parser validation just to accept unknown malformed data.
-5. Preserve the provider abstraction so another source can replace it.
+- request type and stock
+- provider
+- attempt
+- queue wait and request duration
+- HTTP status
+- native HTTPClient error
+- TLS error when available
+- received/expected bytes
+- final provider result
+
+Do not log full market response bodies by default.
+
+## UI invariants
+
+- Logical layout is 320×170 landscape.
+- Left side contains price and compact metrics; right side contains the intraday chart.
+- A-share positive change is red and negative change is green.
+- Intraday chart preserves the lunch discontinuity.
+- Chart includes distinct previous-close (`昨收`) and valid today-open (`今开`) reference lines.
+- A single intraday failure with a fresh cached chart must not become a generic page-wide error.
+- Stale quote and stale intraday are reported independently (`报价延迟` / `分时延迟`).
+
+## Provider caution
+
+EastMoney/Tencent endpoints are public, unofficial contracts and can change. When a provider fails:
+
+1. Capture actual device diagnostics/status first.
+2. Add/update a regression fixture or behavior test before changing Provider/Parser behavior.
+3. Change the Provider/transport boundary where possible.
+4. Never relax parsing simply to accept unknown malformed data.
+5. Do not add an intraday fallback Provider without a separate approved design review.
 
 See `docs/api-contract.md`.
 
-## Test discipline
+## First physical acceptance
 
-For behavior changes, use test-first development where practical.
-At minimum, run the directly affected test and then the complete native suite before deployment.
+At minimum verify:
 
-Do not mark a physical acceptance item PASS from:
+- LCD is landscape and fully visible.
+- Chinese stock names are legible.
+- red/green color direction is correct.
+- GPIO0/GPIO14 each trigger once per press; holds do not auto-repeat.
+- `TDisplay-GP-Setup` provisioning still works.
+- device reaches `[boot] market loop ready`.
+- quotes continue to refresh when an intraday request fails/retries.
+- cached quote/chart remain visible during failures.
+- `昨收` and `今开` chart references render correctly.
+- no watchdog reset or unexpected reboot.
 
-- a host mock/stub compile;
-- a parser fixture;
-- a successful firmware compile without upload;
-- screenshots or assumptions from a different T-Display model.
+Use `docs/hardware-acceptance.md` for complete acceptance.
 
 ## Scope and safety
 
-Deployment work is limited to the connected T-Display-S3 and this repository.
-Do not modify unrelated repositories, servers, routers, DHCP, Wi-Fi infrastructure, or other network devices as part of flashing this board.
-
-Do not hard-code Wi-Fi passwords, GitHub credentials, API secrets, broker credentials, or personal account information into the repository.
+Deployment is limited to the connected T-Display-S3 and this repository. Do not modify unrelated servers, routers, DHCP, Wi-Fi infrastructure, or other devices. Never hard-code Wi-Fi passwords, GitHub credentials, API secrets, broker credentials, or personal account data.
 
 ## Documentation
 
-If behavior, pins, Provider contracts, build commands, or first-boot UX change, update the relevant documentation in the same commit/PR:
+When behavior, pins, Provider contracts, build commands, market scheduling, or UI orientation change, update the relevant files in the same PR:
 
 - `README.md`
 - `docs/deployment.md`
 - `docs/api-contract.md`
 - `docs/hardware-acceptance.md`
 
-A code change that makes these documents materially wrong is incomplete.
+A change that makes these documents materially wrong is incomplete.
