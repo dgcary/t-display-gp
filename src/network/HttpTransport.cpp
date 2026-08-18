@@ -61,10 +61,10 @@ HttpResponse makeResponse(HttpTransportError error, int statusCode, std::string 
 HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& headers) {
   const uint32_t startedMs = millis();
   WiFiClientSecure client;
-  // V1 keeps the existing TLS behavior in this stability change. Certificate
-  // verification hardening is intentionally a separate security task.
+  // V1 keeps the existing TLS identity behavior in this stability change.
+  // Bound handshake time explicitly: Arduino-ESP32 2.0.14 defaults to 120 s.
   client.setInsecure();
-  client.setTimeout(BuildConfig::HTTP_READ_TIMEOUT_MS);
+  client.setHandshakeTimeout(BuildConfig::HTTP_TLS_HANDSHAKE_TIMEOUT_SEC);
 
   HTTPClient http;
   http.setConnectTimeout(BuildConfig::HTTP_CONNECT_TIMEOUT_MS);
