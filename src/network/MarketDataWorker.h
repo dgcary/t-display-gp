@@ -175,10 +175,13 @@ class PendingMarketWork {
     auto best = highPriority_.end();
     for (auto it = highPriority_.begin(); it != highPriority_.end(); ++it) {
       if (!MarketRequestPolicy::ready(*it, nowMs)) continue;
-      if (best == highPriority_.end() || static_cast<uint8_t>(it->priority) < static_cast<uint8_t>(best->priority) ||
-          (it->priority == best->priority && MarketRequestPolicy::elapsed(best->createdMs, it->createdMs) < 0x80000000U)) {
-        best = it;
-      }
+      const bool higherPriority = best == highPriority_.end() ||
+          static_cast<uint8_t>(it->priority) < static_cast<uint8_t>(best->priority);
+      const bool newerCurrentQuote = best != highPriority_.end() &&
+          it->priority == MarketRequestPriority::CURRENT_QUOTE &&
+          best->priority == MarketRequestPriority::CURRENT_QUOTE &&
+          static_cast<int32_t>(it->createdMs - best->createdMs) > 0;
+      if (higherPriority || newerCurrentQuote) best = it;
     }
     if (best != highPriority_.end()) {
       out = *best;
