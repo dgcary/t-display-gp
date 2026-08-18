@@ -23,6 +23,10 @@ struct MarketResult {
   ProviderError error = ProviderError::NONE;
   QuoteSnapshot quote;
   IntradaySeries intraday;
+  ProviderId provider = ProviderId::EAST_MONEY;
+  uint8_t attempt = 1;
+  uint32_t queueWaitMs = 0;
+  ProviderDiagnostics diagnostics;
 };
 
 class PendingMarketRequests {
