@@ -2,6 +2,9 @@
 
 #include "StockScreen.h"
 
+void setUp() {}
+void tearDown() {}
+
 void test_layout_matches_170x320_design() {
   TEST_ASSERT_EQUAL(0, StockScreenLayout::HEADER_Y0);
   TEST_ASSERT_EQUAL(28, StockScreenLayout::HEADER_Y1);
