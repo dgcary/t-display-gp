@@ -23,7 +23,9 @@ class Queue final : public IMarketDataQueue {
 
 AppConfig config() {
   AppConfig c; c.quoteRefreshSec=5;
-  c.stocks={{StockSymbol::parse("600519"),"茅台"},{StockSymbol::parse("000001"),"平安"}};
+  c.stocks={{StockSymbol::parse("600519"),"茅台"},
+            {StockSymbol::parse("000001"),"平安"},
+            {StockSymbol::parse("300750"),"宁德"}};
   return c;
 }
 
@@ -51,7 +53,9 @@ void test_controller_marks_current_and_background_quote_priorities() {
 
 void test_cancelled_result_releases_controller_outstanding() {
   Queue q; StockController c(q); c.begin(config()); c.setWifiOnline(true); c.tick(1000,trading());
-  const MarketRequest first=*find(q,"600519",MarketRequestType::QUOTE);
+  const MarketRequest* firstPtr=find(q,"600519",MarketRequestType::QUOTE);
+  TEST_ASSERT_NOT_NULL(firstPtr);
+  const MarketRequest first=*firstPtr;
   MarketResult cancelled; cancelled.requestId=first.requestId; cancelled.type=first.type;
   cancelled.provider=first.provider; cancelled.error=ProviderError::CANCELLED;
   q.results.push_back(cancelled); c.consumeMarketResults();
