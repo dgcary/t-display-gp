@@ -28,10 +28,19 @@ git rev-parse HEAD
 pio test -e native
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
+python tools/validate_http_transport_contract.py
 pio run -e lilygo-t-display-s3
 ```
 
 任一失败：**禁止烧录**。
+
+HTTP transport 合约检查会确认：
+
+- connect timeout = 1500 ms
+- HTTP/read timeout setting = 2500 ms
+- TLS handshake timeout = 5 s
+- `HTTPClient::setReuse(false)` 保持启用
+- 不把毫秒常量直接传给 Arduino-ESP32 2.0.14 的秒制 `WiFiClientSecure::setTimeout()`
 
 ## 4. 烧录
 
@@ -99,6 +108,7 @@ pio device monitor --port COM6 -b 115200
 - GPIO0/GPIO14 每按一次只切一只股票
 - 分时请求失败/重试期间按键和 UI 仍响应
 - 分时失败时旧图保留，报价仍可继续更新
+- 午休/收盘后不误报 `报价延迟` / `分时延迟`
 - 串口无 watchdog / panic / reboot
 
 ## 8. 行情稳定性真机检查
@@ -164,7 +174,7 @@ dur
 attempt
 ```
 
-不要先拉长 timeout、关闭更多 TLS 检查或放宽 parser。
+不要先拉长 timeout、关闭更多 TLS 检查或放宽 parser。当前 transport 已显式将 TLS handshake 限制为 5 秒；如果仍出现明显长于此值的单请求阻塞，保存完整 `[md]` 和前后串口日志再定位。
 
 ### 分时失败但报价正常
 
