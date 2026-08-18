@@ -44,9 +44,10 @@
 
 - Wi-Fi 断开：`离线`
 - 尚无有效报价：`等待报价`
-- 报价超过 15 秒未成功更新：`报价延迟`
-- 分时超过 180 秒未成功更新：`分时延迟`
+- **交易中**报价超过 15 秒未成功更新：`报价延迟`
+- **交易中**分时超过 180 秒未成功更新：`分时延迟`
 - 单次偶发分时失败且旧图仍新鲜：不显示全局错误
+- 午休、收盘、休市时缓存自然变旧：不误报延迟
 
 ## 请求诊断日志
 
@@ -68,6 +69,20 @@
 - 实收/期望响应大小
 
 不要把 Windows `curl`/Schannel 错误直接等同于 ESP32 错误，应以设备 `[md]` 日志为准。
+
+## HTTP timeout 约束
+
+当前 Arduino-ESP32 2.0.14 transport 明确限制：
+
+```text
+TCP/connect: 1500 ms
+TLS handshake: 5 s
+HTTP/read setting: 2500 ms
+```
+
+Arduino-ESP32 2.0.14 的 secure-client TLS handshake 默认上限可达 120 秒，因此固件显式设置 5 秒握手上限，避免唯一的行情 Worker 被异常握手长期占住。
+
+`WiFiClientSecure::setTimeout()` 在该版本是秒制 API，不能直接传入 2500 这样的毫秒常量；CI 使用 `tools/validate_http_transport_contract.py` 防止该错误回归。
 
 ## 横屏界面
 
@@ -118,12 +133,13 @@
 pio test -e native
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
+python tools/validate_http_transport_contract.py
 pio run -e lilygo-t-display-s3
 pio run -e lilygo-t-display-s3 -t upload
 pio device monitor -b 115200
 ```
 
-测试或 firmware build 失败时不得烧录。
+测试、合约校验或 firmware build 失败时不得烧录。
 
 完整步骤见 [docs/deployment.md](docs/deployment.md)。
 
@@ -139,6 +155,7 @@ src/network/           HTTP / MarketDataWorker / 配网
 src/device/            T-Display-S3 硬件层
 src/ui/                横屏 UI / 分时图
 test/                  PlatformIO native tests
+tools/                 TFT / 配网 / HTTP transport 合约校验
 docs/                  API、部署、真机验收、设计规格
 ```
 
@@ -175,4 +192,6 @@ EastMoney/Tencent 使用的是公开但非官方稳定契约的接口，可能�
 
 ## TLS 说明
 
-当前 V1 延续既有 `WiFiClientSecure::setInsecure()` 行为；本次行情稳定性修改不进一步降低 TLS 安全性，也不把 TLS 加固与稳定性修复混在同一批改动中。若未来加入账户、Token、交易或其他敏感数据，必须单独恢复严格证书验证。
+当前 V1 延续既有 `WiFiClientSecure::setInsecure()` 行为；本次行情稳定性修改没有进一步降低 TLS 安全性。5 秒 handshake 上限只是阻塞保护，不改变证书验证策略。
+
+若未来加入账户、Token、交易或其他敏感数据，必须单独恢复严格证书验证。
