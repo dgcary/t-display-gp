@@ -13,7 +13,9 @@ enum class ProviderError {
   PARSE,
   MISSING_FIELD,
   STALE,
-  UNSUPPORTED
+  UNSUPPORTED,
+  CANCELLED,
+  EXPIRED
 };
 
 struct ProviderDiagnostics {
