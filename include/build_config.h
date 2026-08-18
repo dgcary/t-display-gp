@@ -15,6 +15,13 @@ constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
 constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 1500;
 constexpr uint32_t HTTP_READ_TIMEOUT_MS = 2500;
 constexpr size_t HTTP_MAX_BODY_BYTES = 32768;
+constexpr uint32_t QUOTE_REQUEST_TTL_MS = 15000;
+constexpr uint32_t INTRADAY_REQUEST_TTL_MS = 10000;
+constexpr uint8_t INTRADAY_MAX_ATTEMPTS = 3;
+constexpr uint32_t INTRADAY_RETRY_1_MS = 1500;
+constexpr uint32_t INTRADAY_RETRY_2_MS = 4000;
+constexpr uint32_t QUOTE_DELAY_MS = 15000;
+constexpr uint32_t INTRADAY_DELAY_MS = 180000;
 constexpr char CONFIG_NAMESPACE[] = "stockticker";
 constexpr uint32_t CONFIG_SCHEMA_VERSION = 1;
 }  // namespace BuildConfig
