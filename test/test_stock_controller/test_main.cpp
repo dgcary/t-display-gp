@@ -101,9 +101,11 @@ void test_intraday_failure_does_not_poison_quote_health_or_clear_cache() {
   pushQuoteSuccess(q,quote0); pushIntradaySuccess(q,trend0); c.consumeMarketResults();
 
   q.requests.clear(); c.tick(61000,trading());
-  trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY); TEST_ASSERT_NOT_NULL(trendPtr);
-  const MarketRequest trend1=*trendPtr;
-  pushFailure(q,trend1,ProviderError::NETWORK); c.consumeMarketResults();
+  quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  trendPtr=lastRequest(q,"600519",MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(quotePtr); TEST_ASSERT_NOT_NULL(trendPtr);
+  const MarketRequest quote1=*quotePtr; const MarketRequest trend1=*trendPtr;
+  pushQuoteSuccess(q,quote1,1411.0); pushFailure(q,trend1,ProviderError::NETWORK); c.consumeMarketResults();
 
   TEST_ASSERT_TRUE(c.viewModel().hasQuote);
   TEST_ASSERT_TRUE(c.viewModel().hasIntraday);
