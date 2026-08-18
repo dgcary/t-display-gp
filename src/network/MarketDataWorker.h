@@ -85,7 +85,7 @@ inline bool expired(const MarketRequest& request, uint32_t nowMs) {
 }
 
 inline bool ready(const MarketRequest& request, uint32_t nowMs) {
-  return request.notBeforeMs == 0 || timeReached(nowMs, request.notBeforeMs);
+  return timeReached(nowMs, request.notBeforeMs);
 }
 
 inline bool retryable(ProviderError error, const ProviderDiagnostics& diagnostics) {
