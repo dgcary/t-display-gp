@@ -48,7 +48,26 @@ void test_controller_marks_current_and_background_quote_priorities() {
   TEST_ASSERT_EQUAL(MarketRequestPriority::BACKGROUND_QUOTE,background->priority);
   TEST_ASSERT_EQUAL_UINT32(1000,current->createdMs);
   TEST_ASSERT_EQUAL_UINT32(1000,current->notBeforeMs);
+  TEST_ASSERT_EQUAL_UINT32(1000,current->cycleStartedMs);
   TEST_ASSERT_EQUAL_UINT8(1,current->attempt);
+}
+
+void test_switching_to_background_symbol_promotes_quote_priority() {
+  Queue q; StockController c(q); c.begin(config()); c.setWifiOnline(true); c.tick(1000,trading());
+  const MarketRequest* background=find(q,"000001",MarketRequestType::QUOTE);
+  TEST_ASSERT_NOT_NULL(background);
+  TEST_ASSERT_EQUAL(MarketRequestPriority::BACKGROUND_QUOTE,background->priority);
+  const uint32_t oldId=background->requestId;
+  const size_t before=q.requests.size();
+
+  c.onButton(ButtonEvent::NEXT);
+
+  TEST_ASSERT_EQUAL_UINT32(1,c.viewModel().index);
+  TEST_ASSERT_TRUE(q.requests.size()>before);
+  const MarketRequest* promoted=find(q,"000001",MarketRequestType::QUOTE);
+  TEST_ASSERT_NOT_NULL(promoted);
+  TEST_ASSERT_EQUAL(MarketRequestPriority::CURRENT_QUOTE,promoted->priority);
+  TEST_ASSERT_NOT_EQUAL(oldId,promoted->requestId);
 }
 
 void test_cancelled_result_releases_controller_outstanding() {
@@ -68,6 +87,7 @@ void test_cancelled_result_releases_controller_outstanding() {
 int main(){
   UNITY_BEGIN();
   RUN_TEST(test_controller_marks_current_and_background_quote_priorities);
+  RUN_TEST(test_switching_to_background_symbol_promotes_quote_priority);
   RUN_TEST(test_cancelled_result_releases_controller_outstanding);
   return UNITY_END();
 }
