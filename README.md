@@ -2,216 +2,177 @@
 
 基于 **LILYGO T-Display-S3** 的 A 股实时行情桌面终端。
 
-本项目面向 ESP32-S3 + 170×320 ST7789 彩屏，目标是在不依赖手机 App、PC 常驻程序或额外服务器的情况下，通过 Wi-Fi 直接获取 A 股公开行情，在设备上显示当前价、涨跌、日内指标和分时走势图。
-
-> **GitHub 仓库 `dgcary/t-display-gp` 是本项目唯一事实源（Source of Truth）。**
-> 后续开发、修复、部署和 Codex 操作都应从 GitHub 最新代码开始，不以本地旧副本为准。
+> **GitHub `dgcary/t-display-gp` 是项目唯一事实源。** 开发、修复和 Codex 部署都应从 GitHub 指定分支/提交开始。
 
 ## V1 功能
 
-- A 股：沪市 / 深市 / 北交所代码识别
-- 股票池：3–5 只
-- 交易时段快照刷新：3–5 秒可配置
-- 分时图刷新：60 秒
-- 两个实体按键切换上一只 / 下一只股票
-- 首次启动自动进入 Wi-Fi Captive Portal 配网
-- 手机浏览器修改股票池和刷新周期
-- 东方财富作为主行情源
-- 腾讯行情作为快照备用源
-- 主行情源连续失败后自动切换，恢复后自动切回
-- 非交易时段保留最后行情和当日分时
-- Wi-Fi/行情异常时保留缓存，不阻塞按键和 UI
-- 170×320 竖屏界面，支持中文股票名称
-- 分时图午休断点，不把 11:30→13:00 画成连续交易
+- 沪/深/北 A 股，股票池 3–5 只
+- 报价 3–5 秒刷新可配置
+- 东方财富：报价 + 分时主源
+- 腾讯：报价备用源
+- **320×170 横屏界面**
+- 实体按键切换股票
+- 首次 Captive Portal 配网 + 局域网 Web 配置
+- 网络/Provider 失败时保留最后有效报价和分时图
+- 分时午休断点
+- 分时图同时显示 **昨收** 和 **今开** 参考线
+- 报价与分时健康状态独立，不再因一次分时失败把整页标成“数据异常”
+
+## 行情稳定性设计
+
+行情 HTTP 始终在 `MarketDataWorker` 中执行，主循环不做阻塞网络请求。
+
+请求优先级：
+
+```text
+当前股票报价 > 后台报价 > 主源恢复探测 > 分时 > 分时重试
+```
+
+分时采用 **latest-wins**：尚未执行的旧分时请求不会在快速切股时不断堆积。
+
+东财分时发生可恢复的网络/服务器错误时，最多 3 次尝试：
+
+```text
+首次失败 -> 约 1.5s ±20% 后重试
+再次失败 -> 约 4s ±20% 后重试
+仍失败 -> 本轮结束，继续保留旧分时图
+```
+
+重试是延迟任务，必须让出报价请求；不会在 Provider 内连续阻塞重试。
+
+页面状态：
+
+- Wi-Fi 断开：`离线`
+- 尚无有效报价：`等待报价`
+- 报价超过 15 秒未成功更新：`报价延迟`
+- 分时超过 180 秒未成功更新：`分时延迟`
+- 单次偶发分时失败且旧图仍新鲜：不显示全局错误
+
+## 请求诊断日志
+
+串口 `115200` 会输出一行一个行情请求的 `[md]` 日志，例如：
+
+```text
+[md] id=182 type=INTRADAY symbol=000831 provider=EM attempt=2/3 queue=8ms dur=2680ms http=200 native=-5 tls=-29184 bytes=8192/13824 result=NETWORK
+```
+
+可直接区分：
+
+- 哪只股票 / 哪类请求
+- EastMoney / Tencent
+- 第几次尝试
+- 排队时间和请求耗时
+- HTTP 状态
+- HTTPClient 原生错误
+- TLS 错误
+- 实收/期望响应大小
+
+不要把 Windows `curl`/Schannel 错误直接等同于 ESP32 错误，应以设备 `[md]` 日志为准。
+
+## 横屏界面
+
+物理屏幕仍是 ST7789 170×320，固件旋转为 **320×170 横屏**：
+
+```text
+┌──────────────┬────────────────────────┐
+│ 股票 / 价格   │                        │
+│ 涨跌 / 指标   │       分 时 图          │
+│ 开高低昨      │   昨收 ----            │
+│ 量 / 额       │   今开 · · ·           │
+├──────────────┴────────────────────────┤
+│ 页码 / WiFi / EM|TX / 状态             │
+└───────────────────────────────────────┘
+```
+
+`昨收` 和 `今开` 使用不同线型，不只依赖颜色区分。今开无有效数据时不猜测、不绘制。
 
 ## 硬件
 
-目标设备：**LILYGO T-Display-S3**
+- LILYGO T-Display-S3
+- ESP32-S3
+- ST7789 170×320，8-bit parallel
+- GPIO15：屏幕供电
+- GPIO38：背光
+- GPIO0：上一只
+- GPIO14：下一只
+- TFT RGB 顺序：`TFT_RGB`
+- `INIT_SEQUENCE_3`
 
-- MCU：ESP32-S3
-- 屏幕：ST7789，170×320
-- Flash：16 MB（PlatformIO 官方板卡定义）
-- 显示供电：GPIO15，初始化 TFT 前必须拉高
-- LCD Backlight：GPIO38
-- 上一只股票：GPIO0
-- 下一只股票：GPIO14
+## 首次使用
 
-TFT 参数与 TFT_eSPI 官方 `Setup206_LilyGo_T_Display_S3.h` 对齐，使用 RGB 顺序、`INIT_SEQUENCE_3` 和 8-bit parallel bus。
+无有效配置时：
 
-## 使用方式
+1. 连接热点 `TDisplay-GP-Setup`
+2. 打开 Captive Portal（必要时访问 `192.168.4.1`）
+3. 选择 Wi-Fi
+4. 填入 3–5 个 A 股代码
+5. 选择 3 / 4 / 5 秒报价刷新周期
+6. 保存
+7. 设备受控重启后自动连接 Wi-Fi 并进入行情界面
 
-### 第一次开机
+示例代码：`600519`、`300750.SZ`、`920047.BJ`。代码与后缀冲突会被拒绝。
 
-如果设备没有有效 Wi-Fi/股票配置：
-
-1. 设备启动热点：`TDisplay-GP-Setup`
-2. 手机连接该热点
-3. 系统通常会自动弹出 Captive Portal；没有弹出时访问 `192.168.4.1`
-4. 选择 Wi-Fi
-5. 填入 3–5 个 A 股代码，例如：
-   - `600519` 或 `600519.SH`
-   - `300750` 或 `300750.SZ`
-   - `920047` 或 `920047.BJ`
-6. 可填写自定义股票名称
-7. 选择 3 / 4 / 5 秒刷新间隔
-8. 保存后设备连接 Wi-Fi 并进入股票界面
-
-股票代码与交易所后缀必须一致，例如 `600519.SZ` 会被配置校验直接拒绝。
-
-### 正常运行后修改配置
-
-在同一局域网中，用浏览器访问设备 IP：
-
-- 修改股票池
-- 修改快照刷新间隔
-- 查看当前 IP、RSSI 和运行时间
-- 触发“更换 Wi-Fi”并重新进入配网模式
-
-配置保存采用“**先写入 NVS，再受控重启**”方式，避免运行中的 Controller/UI 出现半更新状态。
-
-## 行情架构
-
-```text
-                    T-Display GP
-                         │
-                    StockController
-                    /             \
-             MarketDataWorker      StockScreen
-                    │
-             Provider interface
-              /             \
-       EastMoney          Tencent
-       primary            fallback
-          │
-     snapshot + trend
-```
-
-### Provider 策略
-
-- **东方财富**：主快照 + 主分时
-- **腾讯**：快照备用
-- 东方财富在 60 秒窗口内连续失败 3 次后，快照切换腾讯
-- 主源恢复探测不快于 120 秒一次
-- 连续 2 次恢复成功后切回东方财富
-- 分时数据 V1 始终由东方财富提供，主源异常时保留旧分时缓存
-
-详细字段与超时规范见：[docs/api-contract.md](docs/api-contract.md)。
-
-## 交易时段行为
-
-设备按中国标准时间运行：
-
-- 09:30–11:30：连续交易
-- 11:30–13:00：午休
-- 13:00–15:00：连续交易
-- 收盘后：显示已收盘并保留最后行情/分时
-- 次交易日开盘：自动恢复高频刷新
-- 周末/节假日：不进行 3–5 秒高频轮询
-
-Controller 会区分“昨天缓存”与“今天已确认休市”，避免设备隔夜运行后被旧时间戳错误阻塞第二天开盘刷新。
-
-## 开发环境
-
-推荐：**PlatformIO + Arduino/C++**。
+## 开发与烧录
 
 ```bash
 pio test -e native
+python tools/validate_tdisplay_setup.py
+python tools/validate_provisioning_contract.py
 pio run -e lilygo-t-display-s3
-```
-
-### 烧录
-
-```bash
 pio run -e lilygo-t-display-s3 -t upload
 pio device monitor -b 115200
 ```
 
-完整部署和真机检查步骤见：[docs/deployment.md](docs/deployment.md)。
+测试或 firmware build 失败时不得烧录。
 
-## 目录结构
+完整步骤见 [docs/deployment.md](docs/deployment.md)。
+
+## 目录
 
 ```text
-.
-├── AGENTS.md                    # 给 Codex / 自动化 Agent 的操作约束
-├── platformio.ini               # PlatformIO 固件与 native test 环境
-├── include/
-│   └── build_config.h
-├── lib/
-│   ├── core/                    # 股票代码、配置、交易时钟、格式化、故障切换
-│   └── providers/               # Provider 接口与纯 C++ JSON/文本解析器
-├── src/
-│   ├── app/                     # StockController
-│   ├── device/                  # NVS、按钮、T-Display-S3 硬件层
-│   ├── network/                 # HTTP、Worker、配网与 Web 配置
-│   ├── ui/                      # 170×320 股票界面和分时图
-│   └── main.cpp                 # 固件启动与非阻塞主循环
-├── test/                        # PlatformIO native / host 行为测试
-├── tools/                       # 构建契约校验
-└── docs/
-    ├── api-contract.md          # 行情接口字段与故障切换契约
-    ├── deployment.md            # Codex/人工烧录与验收步骤
-    ├── hardware-acceptance.md   # 真机详细验收清单
-    └── superpowers/             # 已批准设计规格与实现计划
+AGENTS.md              Codex / 自动化 Agent 规则
+include/               固件常量
+lib/core/              股票代码、配置、交易时钟、故障切换
+lib/providers/         Provider 接口与解析器
+src/app/               StockController
+src/network/           HTTP / MarketDataWorker / 配网
+src/device/            T-Display-S3 硬件层
+src/ui/                横屏 UI / 分时图
+test/                  PlatformIO native tests
+docs/                  API、部署、真机验收、设计规格
 ```
 
-## 设计原则
+## 核心原则
 
-1. **UI loop 不做 HTTP。** 网络请求在 FreeRTOS MarketDataWorker 中执行，主循环只做队列、按键、WebServer 和局部 UI 更新。
-2. **行情接口可替换。** Provider 和 Parser 分层，避免将某个非正式公开接口写死在 UI/Controller。
-3. **缓存优先于黑屏。** 网络错误时保留最后有效行情和分时。
-4. **配置原子化。** 手机配置先持久化，再重启整套模块。
-5. **真实硬件证据优先。** Host test 通过不等于真机通过；没有实际 build/flash/屏幕验证时不得把 PENDING 写成 PASS。
-6. **尽量复用成熟生态。** 使用 TFT_eSPI、U8g2_for_TFT_eSPI、WiFiManager、ArduinoJson，不重新造底层轮子。
+1. 主循环不做行情 HTTP。
+2. Quote/Intraday 通过 Provider 抽象访问，不把原始接口格式写进 UI。
+3. 缓存优先：网络失败不清空最后有效画面。
+4. Parser 严格失败关闭，不为了“提高成功率”接受异常数据。
+5. 不通过无限重试、无限延长 timeout 或降低 TLS 安全性掩盖问题。
+6. 真机 PASS 必须来自实体 T-Display-S3，不以 host test 或 firmware build 代替。
 
-## 测试状态
+## Provider 说明
 
-当前开发分支的软件侧自动化验证包含：
+EastMoney/Tencent 使用的是公开但非官方稳定契约的接口，可能发生格式或访问策略变化。详细字段、错误和故障切换约定见 [docs/api-contract.md](docs/api-contract.md)。
 
-- 股票代码规范化与市场映射
-- 配置编码/解码和校验
-- A 股交易时段状态机
-- 东方财富 parser
-- 腾讯 parser
-- Provider URL/HTTP 合约与故障切换
-- Wi-Fi/股票配置表单核心
-- 按键消抖/长按/`millis()` 回绕
-- Worker 请求去重
-- Controller 缓存、切股、刷新和故障转移
-- 分时图坐标和 UTF-8 安全截断
-- 跨交易日/旧缓存边界
+当前稳定性改造**不新增分时备用 Provider**。如果真机在有限重试后，30 个以上分时刷新周期成功率仍低于 80%，再单独评审分时备用源。
 
-开发环境最终 host 回归：**58/58 tests passing**。
+## 真机稳定性目标
 
-### 仍需真机完成的项目
+最终验收至少包括：
 
-以下项目在没有实体 T-Display-S3 和完整 PlatformIO 网络环境时不能声称通过：
+- 5 只股票
+- 100+ 次按键切换
+- 500+ 次报价请求，测试网络下目标成功率 ≥99%
+- 30+ 个分时刷新周期，有限重试后目标成功率 ≥80%
+- 健康报价源下当前报价 P95 更新间隔 ≤7 秒
+- 单次分时失败不应造成 >10 秒报价空档
+- 分时 P95 数据年龄 ≤180 秒
+- 无 watchdog、异常重启、缓存丢失
+- 最终完成一次 09:25–15:10 完整交易日运行
 
-- 真实 ESP32-S3 PlatformIO firmware build
-- USB 烧录
-- LCD 颜色、方向和中文字体实显
-- GPIO0/GPIO14 实体按键
-- Captive Portal 手机实测
-- 东方财富/腾讯在设备网络上的实时访问
-- 长时间运行/隔夜切换
+详见 [docs/hardware-acceptance.md](docs/hardware-acceptance.md)。
 
-请严格按照 [docs/hardware-acceptance.md](docs/hardware-acceptance.md) 记录结果。
+## TLS 说明
 
-## 安全说明
-
-V1 的公开行情 HTTPS 传输可能使用 `WiFiClientSecure::setInsecure()`。请求不包含账户、密码、交易凭证或其他私密 payload，但这意味着设备不会验证远端 TLS 身份。
-
-如果后续项目加入券商账户、交易接口、Token 或任何敏感数据，**必须先改为证书验证，不能沿用当前 transport identity trade-off**。
-
-## Codex / 自动化 Agent
-
-如果使用 Codex 直接从 GitHub 部署到设备：
-
-1. 必须先阅读根目录 [AGENTS.md](AGENTS.md)
-2. 默认以 GitHub 最新目标分支为准，不复用本机旧工程
-3. 先运行 native tests
-4. 再执行 firmware build
-5. build 成功后才允许 upload
-6. 烧录后必须执行最低真机 smoke test
-7. 不得因为 host test 通过就声称硬件验收通过
-
-详细命令见 [docs/deployment.md](docs/deployment.md)。
+当前 V1 延续既有 `WiFiClientSecure::setInsecure()` 行为；本次行情稳定性修改不进一步降低 TLS 安全性，也不把 TLS 加固与稳定性修复混在同一批改动中。若未来加入账户、Token、交易或其他敏感数据，必须单独恢复严格证书验证。
