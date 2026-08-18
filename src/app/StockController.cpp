@@ -157,16 +157,28 @@ void StockController::onButton(ButtonEvent event) {
   if (wifiOnline_) scheduleForCurrent(lastNowMs_, true);
 }
 
-bool StockController::hasOutstanding(const StockSymbol& symbol, MarketRequestType type) const {
+bool StockController::hasOutstandingAtOrAbove(const StockSymbol& symbol, MarketRequestType type,
+                                              MarketRequestPriority priority) const {
   return std::any_of(outstanding_.begin(), outstanding_.end(), [&](const OutstandingRequest& request) {
-    return request.type == type && request.symbol.canonical() == symbol.canonical();
+    return request.type == type && request.symbol.canonical() == symbol.canonical() &&
+           static_cast<uint8_t>(request.priority) <= static_cast<uint8_t>(priority);
   });
 }
 
 bool StockController::enqueueRequest(size_t stockIndex, MarketRequestType type, ProviderId provider, uint32_t nowMs) {
   if (stockIndex >= config_.stocks.size()) return false;
   const StockSymbol& symbol = config_.stocks[stockIndex].symbol;
-  if (hasOutstanding(symbol, type)) return false;
+
+  MarketRequestPriority priority = MarketRequestPriority::CURRENT_QUOTE;
+  if (type == MarketRequestType::INTRADAY) {
+    priority = MarketRequestPriority::INTRADAY;
+  } else if (type == MarketRequestType::PRIMARY_PROBE) {
+    priority = MarketRequestPriority::PRIMARY_PROBE;
+  } else {
+    priority = stockIndex == currentIndex_ ? MarketRequestPriority::CURRENT_QUOTE
+                                           : MarketRequestPriority::BACKGROUND_QUOTE;
+  }
+  if (hasOutstandingAtOrAbove(symbol, type, priority)) return false;
 
   MarketRequest request;
   request.requestId = nextRequestId_++;
@@ -178,17 +190,10 @@ bool StockController::enqueueRequest(size_t stockIndex, MarketRequestType type, 
   request.notBeforeMs = nowMs;
   request.cycleStartedMs = nowMs;
   request.attempt = 1;
-  if (type == MarketRequestType::INTRADAY) {
-    request.priority = MarketRequestPriority::INTRADAY;
-  } else if (type == MarketRequestType::PRIMARY_PROBE) {
-    request.priority = MarketRequestPriority::PRIMARY_PROBE;
-  } else {
-    request.priority = stockIndex == currentIndex_ ? MarketRequestPriority::CURRENT_QUOTE
-                                                   : MarketRequestPriority::BACKGROUND_QUOTE;
-  }
+  request.priority = priority;
   if (!queue_.enqueue(request)) return false;
 
-  outstanding_.push_back({request.requestId, type, symbol, provider});
+  outstanding_.push_back({request.requestId, type, symbol, provider, priority});
   auto& cache = caches_[stockIndex];
   if (type == MarketRequestType::INTRADAY) cache.intradayHealth.lastAttemptMs = nowMs;
   else if (type == MarketRequestType::QUOTE) cache.quoteHealth.lastAttemptMs = nowMs;
