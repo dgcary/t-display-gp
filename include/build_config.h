@@ -14,6 +14,7 @@ constexpr uint32_t INTRADAY_REFRESH_MS = 60000;
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
 constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 1500;
 constexpr uint32_t HTTP_READ_TIMEOUT_MS = 2500;
+constexpr uint32_t HTTP_TLS_HANDSHAKE_TIMEOUT_SEC = 5;
 constexpr size_t HTTP_MAX_BODY_BYTES = 32768;
 constexpr uint32_t QUOTE_REQUEST_TTL_MS = 15000;
 constexpr uint32_t INTRADAY_REQUEST_TTL_MS = 10000;
