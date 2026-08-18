@@ -34,6 +34,17 @@ void test_quote_priority_beats_waiting_intraday() {
   TEST_ASSERT_EQUAL_UINT32(2,next.requestId);
 }
 
+void test_latest_current_page_quote_wins_same_priority() {
+  PendingMarketWork pending(8);
+  auto oldPage=makeRequest(1,"600519",MarketRequestType::QUOTE,MarketRequestPriority::CURRENT_QUOTE,1000,1000);
+  auto newPage=makeRequest(2,"000001",MarketRequestType::QUOTE,MarketRequestPriority::CURRENT_QUOTE,1100,1100);
+  TEST_ASSERT_TRUE(pending.add(oldPage).accepted);
+  TEST_ASSERT_TRUE(pending.add(newPage).accepted);
+  MarketRequest next; std::vector<MarketRequest> expired;
+  TEST_ASSERT_TRUE(pending.popNextReady(1100,next,expired));
+  TEST_ASSERT_EQUAL_UINT32(2,next.requestId);
+}
+
 void test_intraday_pending_is_latest_wins() {
   PendingMarketWork pending(8);
   auto first=makeRequest(1,"600519",MarketRequestType::INTRADAY,MarketRequestPriority::INTRADAY);
@@ -102,6 +113,7 @@ void test_not_before_defers_retry_but_allows_quote() {
 int main(){
   UNITY_BEGIN();
   RUN_TEST(test_quote_priority_beats_waiting_intraday);
+  RUN_TEST(test_latest_current_page_quote_wins_same_priority);
   RUN_TEST(test_intraday_pending_is_latest_wins);
   RUN_TEST(test_expired_requests_are_returned_without_execution);
   RUN_TEST(test_retry_classification_and_limits);
