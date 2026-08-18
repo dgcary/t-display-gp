@@ -151,7 +151,10 @@ class PendingMarketWork {
     if (!request.symbol.valid()) return result;
 
     if (MarketRequestPolicy::isIntraday(request)) {
-      if (intraday_ && sameKey(*intraday_, request)) return result;
+      if (intraday_ && sameKey(*intraday_, request) &&
+          static_cast<uint8_t>(request.priority) >= static_cast<uint8_t>(intraday_->priority)) {
+        return result;
+      }
       result.accepted = true;
       if (intraday_) {
         result.replaced = true;
@@ -161,11 +164,19 @@ class PendingMarketWork {
       return result;
     }
 
-    if (highPriority_.size() >= capacity_) return result;
-    if (std::any_of(highPriority_.begin(), highPriority_.end(),
-                    [&](const MarketRequest& item) { return sameKey(item, request); })) {
+    const auto existing = std::find_if(highPriority_.begin(), highPriority_.end(),
+                                       [&](const MarketRequest& item) { return sameKey(item, request); });
+    if (existing != highPriority_.end()) {
+      if (static_cast<uint8_t>(request.priority) < static_cast<uint8_t>(existing->priority)) {
+        result.accepted = true;
+        result.replaced = true;
+        result.replacedRequest = *existing;
+        *existing = request;
+      }
       return result;
     }
+
+    if (highPriority_.size() >= capacity_) return result;
     highPriority_.push_back(request);
     result.accepted = true;
     return result;
