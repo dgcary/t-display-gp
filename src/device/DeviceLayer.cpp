@@ -23,7 +23,7 @@ void DeviceLayer::begin() {
   pinMode(BuildConfig::PIN_BUTTON_NEXT, INPUT_PULLUP);
 
   tft_.init();
-  tft_.setRotation(0);  // 170 x 320 portrait
+  tft_.setRotation(1);  // 320 x 170 landscape
   tft_.fillScreen(TFT_BLACK);
 
   unicodeFont_.begin(tft_);
@@ -80,12 +80,12 @@ void DeviceLayer::drawSmokeScreen() {
   tft_.fillScreen(TFT_BLACK);
   unicodeFont_.setFont(u8g2_font_wqy12_t_gb2312);
   unicodeFont_.setForegroundColor(TFT_WHITE);
-  unicodeFont_.setCursor(10, 38);
+  unicodeFont_.setCursor(12, 34);
   unicodeFont_.print("T-Display GP");
-  unicodeFont_.setCursor(10, 72);
-  unicodeFont_.print("屏幕 OK");
-  unicodeFont_.setCursor(10, 106);
-  unicodeFont_.print("BTN0 / BTN14");
-  unicodeFont_.setCursor(10, 140);
+  unicodeFont_.setCursor(12, 66);
+  unicodeFont_.print("横屏 320x170 / 屏幕 OK");
+  unicodeFont_.setCursor(12, 98);
+  unicodeFont_.print("BTN0 上一只 / BTN14 下一只");
+  unicodeFont_.setCursor(12, 130);
   unicodeFont_.print(wifiConnected() ? "Wi-Fi: 已连接" : "Wi-Fi: 未连接");
 }
