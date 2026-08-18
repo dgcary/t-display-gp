@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-18-market-stability-landscape-design.md`
 
+> **Spec-authority correction (2026-08-18):** The approved spec is binding. Earlier draft plan values that grouped quote/probe TTL at 15 s and intraday/retry TTL at 10 s were incorrect and are superseded. Exact TTLs are current quote 8 s, background quote 12 s, primary probe 30 s, normal intraday 75 s, and intraday retry cycle 15 s from the first attempt. Delay policy is also the approved rule: during active trading, 2 consecutive failed refresh cycles **or** the age threshold triggers the corresponding delay state.
+
 ## Global Constraints
 
 - Base implementation branch is `feature/market-stability-landscape`, created from `f7ec12d42e875651719a49334259570017c6e3fd`.
@@ -21,8 +23,9 @@
 - No infinite retry, no unbounded timeout extension, no TLS-security downgrade.
 - Keep `HTTPClient::setReuse(false)` in this change.
 - Intraday retry is deferred and bounded to 3 total attempts: ~1500 ms then ~4000 ms, each ±20% jitter.
-- QUOTE/PRIMARY_PROBE request TTL is 15000 ms; INTRADAY request/retry TTL is 10000 ms.
-- Quote delay threshold is 15 s; intraday delay threshold is 180 s.
+- Request TTLs: current quote 8000 ms; background quote 12000 ms; primary probe 30000 ms; normal intraday 75000 ms; retry cycle 15000 ms from first attempt.
+- During active trading, quote delay is 2 failed quote cycles or age >=15 s; intraday delay is 2 failed intraday cycles or age >=180 s.
+- TLS handshake is explicitly capped at 5 s; the HTTP/read setting remains 2500 ms and connect timeout 1500 ms.
 - Physical display becomes 320×170 landscape.
 
 ---
@@ -61,8 +64,6 @@ Also verify a `MarketResult` can carry request/provider/attempt/queue-wait/trans
 
 - [ ] **Step 2: Run native tests and verify RED**
 
-Run:
-
 ```bash
 pio test -e native -f test_live_providers -f test_market_data_worker
 ```
@@ -71,18 +72,19 @@ Expected: compile/test failure because the diagnostics fields do not exist.
 
 - [ ] **Step 3: Implement diagnostics without changing Provider semantics**
 
-Extend transport/result models with explicit fields. `HttpTransport::get()` must measure elapsed time with `millis()`, preserve `HTTPClient::GET()` negative error codes, call `WiFiClientSecure::lastError()` before the client is destroyed when a transport failure occurs, and record byte counts/content length. Keep `setReuse(false)` and existing size checks.
+Extend transport/result models with explicit fields. `HttpTransport::get()` must measure elapsed time with `millis()`, preserve `HTTPClient::GET()` negative error codes, call `WiFiClientSecure::lastError()` before the client is destroyed when a transport failure occurs, and record byte counts/content length. Keep `setReuse(false)` and existing size checks. Explicitly cap TLS handshake time at 5 seconds; do not pass millisecond constants directly to Arduino-ESP32 2.0.14 `WiFiClientSecure::setTimeout()`, which is seconds-based.
 
 - [ ] **Step 4: Run affected tests GREEN**
 
 ```bash
 pio test -e native -f test_live_providers -f test_market_data_worker
+python tools/validate_http_transport_contract.py
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/network/HttpTransport.* src/network/MarketDataWorker.h test/test_live_providers/test_main.cpp test/test_market_data_worker/test_main.cpp
+git add src/network/HttpTransport.* src/network/MarketDataWorker.h test/test_live_providers/test_main.cpp test/test_market_data_worker/test_main.cpp tools/validate_http_transport_contract.py
 git commit -m "feat: add market request diagnostics"
 ```
 
@@ -97,7 +99,7 @@ git commit -m "feat: add market request diagnostics"
 - Test: `test/test_acceptance_behavior/test_main.cpp`
 
 **Interfaces:**
-- Produces: independent quote/intraday health state with last error, last attempt, last success, consecutive failures.
+- Produces: independent quote/intraday health state with last error, last attempt, last success, consecutive failed refresh cycles.
 - Produces: `StockViewModel::quoteAgeSeconds`, `intradayAgeSeconds`, `quoteDelayed`, `intradayDelayed`.
 
 - [ ] **Step 1: Add failing health-isolation tests**
@@ -109,19 +111,22 @@ INTRADAY fail -> quote health remains healthy and cached quote remains visible.
 QUOTE success -> does not clear existing intraday error.
 QUOTE fail -> intraday success does not clear quote error.
 Single intraday failure with an existing chart -> no generic page-level data error.
-Quote age >= 15 s -> quoteDelayed=true.
-Intraday age >= 180 s -> intradayDelayed=true.
+Two quote refresh cycles fail while quote age <15 s -> quoteDelayed=true.
+Two intraday refresh cycles fail while intraday age <180 s -> intradayDelayed=true.
+Quote age >=15 s during trading -> quoteDelayed=true.
+Intraday age >=180 s during trading -> intradayDelayed=true.
+Lunch/closed/non-trading cached data aging -> no false delay badge.
 ```
 
 - [ ] **Step 2: Run tests RED**
 
 ```bash
-pio test -e native -f test_stock_controller -f test_acceptance_behavior
+pio test -e native -f test_stock_controller -f test_acceptance_behavior -f test_market_health_policy
 ```
 
 - [ ] **Step 3: Implement independent health state**
 
-Replace shared `StockCacheEntry::lastError` behavior with two channel-health objects. Failed requests update only their channel. Successful requests clear only their own channel and update `lastSuccessMs`. Existing cached payloads are never cleared on failure.
+Replace shared `StockCacheEntry::lastError` behavior with two channel-health objects. Failed completed refresh cycles update only their channel. Successful requests clear only their own channel and update `lastSuccessMs`. Existing cached payloads are never cleared on failure.
 
 UI-facing badge policy at Controller level:
 
@@ -133,18 +138,18 @@ intradayDelayed -> 分时延迟
 otherwise -> empty
 ```
 
-An isolated intraday failure with a still-fresh chart does not set `分时延迟`.
+Delay badges are active-trading health signals. An isolated intraday failure with a still-fresh chart does not set `分时延迟`; lunch/closed/non-trading aging does not create false alarms.
 
 - [ ] **Step 4: Run tests GREEN**
 
 ```bash
-pio test -e native -f test_stock_controller -f test_acceptance_behavior
+pio test -e native -f test_stock_controller -f test_acceptance_behavior -f test_market_health_policy
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/app/StockController.* test/test_stock_controller/test_main.cpp test/test_acceptance_behavior/test_main.cpp
+git add src/app/StockController.* test/test_stock_controller/test_main.cpp test/test_acceptance_behavior/test_main.cpp test/test_market_health_policy
 git commit -m "feat: separate quote and intraday health"
 ```
 
@@ -164,7 +169,7 @@ git commit -m "feat: separate quote and intraday health"
 - Create: `test/test_market_request_policy/test_main.cpp`
 
 **Interfaces:**
-- `MarketRequest` adds `createdMs`, `notBeforeMs`, `attempt`, `priority`/equivalent scheduling metadata.
+- `MarketRequest` adds `createdMs`, `notBeforeMs`, `cycleStartedMs`, `attempt`, and priority metadata.
 - Worker guarantees quote-class work is selected before waiting intraday work.
 - Waiting intraday is latest-wins and at most one low-priority pending item is retained.
 - Every accepted request eventually yields success/failure/cancelled-expired result so Controller can release outstanding state.
@@ -175,8 +180,13 @@ Cover:
 
 ```text
 current QUOTE chosen before waiting INTRADAY;
-new current-stock INTRADAY replaces older not-started intraday request;
-expired QUOTE (>15 s) and expired INTRADAY (>10 s) do not execute HTTP;
+latest current-page quote wins among same-priority current quotes;
+new current-stock INTRADAY replaces older not-started intraday work;
+current quote expires after 8 s;
+background quote expires after 12 s;
+primary probe expires after 30 s;
+normal intraday expires after 75 s;
+intraday retry cycle expires after 15 s from the first attempt, not from each retry;
 NETWORK / connection-lost / read-timeout / HTTP 408 / HTTP 5xx are retryable;
 PARSE / MISSING_FIELD / BODY_TOO_LARGE / 4xx except 408 are not immediate-retryable;
 max intraday attempts = 3;
@@ -193,19 +203,22 @@ pio test -e native -f test_market_data_worker -f test_market_request_policy -f t
 
 - [ ] **Step 3: Implement QoS scheduler**
 
-Keep one HTTP worker task. Replace simple FIFO execution semantics with bounded quote-class pending plus one latest-wins intraday slot/deferred retry. Do not run retry loops inside Provider methods. Retry requests carry `notBeforeMs`; worker always services ready quote traffic first.
+Keep one HTTP worker task. Replace simple FIFO execution semantics with bounded quote-class pending plus one latest-wins intraday slot/deferred retry. Do not run retry loops inside Provider methods. Retry requests carry `notBeforeMs`; worker always services ready quote traffic first. Retry requests retain the original `cycleStartedMs` while updating `createdMs` for per-attempt queue timing.
 
 Use constants in `build_config.h`:
 
 ```cpp
-constexpr uint32_t QUOTE_REQUEST_TTL_MS = 15000;
-constexpr uint32_t INTRADAY_REQUEST_TTL_MS = 10000;
+constexpr uint32_t CURRENT_QUOTE_REQUEST_TTL_MS = 8000;
+constexpr uint32_t BACKGROUND_QUOTE_REQUEST_TTL_MS = 12000;
+constexpr uint32_t PRIMARY_PROBE_REQUEST_TTL_MS = 30000;
+constexpr uint32_t INTRADAY_REQUEST_TTL_MS = 75000;
+constexpr uint32_t INTRADAY_RETRY_CYCLE_TTL_MS = 15000;
 constexpr uint8_t INTRADAY_MAX_ATTEMPTS = 3;
 constexpr uint32_t INTRADAY_RETRY_1_MS = 1500;
 constexpr uint32_t INTRADAY_RETRY_2_MS = 4000;
 ```
 
-Jitter is deterministic/testable through a small helper or injectable seed and must remain within ±20%.
+Jitter is deterministic/testable and remains within ±20%.
 
 - [ ] **Step 4: Add concise serial request completion logging**
 
@@ -315,7 +328,7 @@ git commit -m "feat: add landscape market display"
 - Modify: `.github/workflows/ci.yml` if new validation/test directories require explicit steps.
 
 **Interfaces:**
-- Documentation records 320×170 landscape, request diagnostics, retry policy, health semantics and stability acceptance.
+- Documentation records 320×170 landscape, request diagnostics, retry/TTL policy, health semantics and stability acceptance.
 
 - [ ] **Step 1: Run complete automated regression**
 
@@ -323,6 +336,7 @@ git commit -m "feat: add landscape market display"
 pio test -e native
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
+python tools/validate_http_transport_contract.py
 pio run -e lilygo-t-display-s3
 ```
 
@@ -339,6 +353,8 @@ quote success cannot clear intraday health;
 intraday success cannot clear quote health;
 worker has bounded low-priority intraday pending;
 no retry loop can occupy worker for all three attempts;
+retry cycle cannot exceed its 15 s first-attempt deadline;
+lunch/closed states do not show false delay badges;
 ```
 
 - [ ] **Step 3: Update docs**
@@ -351,6 +367,7 @@ Record exact behavior and the physical validation checklist. Do not mark physica
 pio test -e native
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
+python tools/validate_http_transport_contract.py
 pio run -e lilygo-t-display-s3
 ```
 
