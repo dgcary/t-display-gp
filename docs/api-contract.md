@@ -1,124 +1,186 @@
 # Market Data API Contract
 
-Status date: 2026-08-11
+Status date: 2026-08-18
 
-This document records the V1 provider contract implemented by T-Display GP. These are public, unauthenticated endpoints and are not vendor-supported APIs. The provider layer is intentionally replaceable because response formats or access policy may change without notice.
+T-Display GP uses public, unauthenticated, unofficial market endpoints. Provider and parser boundaries remain replaceable because formats/access policy may change.
 
 ## Provider matrix
 
 | Capability | EastMoney | Tencent |
 |---|---|---|
-| Quote snapshot | Primary | Fallback |
+| Quote | Primary | Fallback |
 | Intraday trend | Primary | Not used in V1 |
-| SSE symbol mapping | `1.<code>` | `sh<code>` |
-| SZSE symbol mapping | `0.<code>` | `sz<code>` |
-| BSE symbol mapping | `0.<code>` | `bj<code>` candidate |
-| Parser fixture coverage | Yes | Yes |
-| Live raw endpoint validation in this environment | Pending | SSE quote checked; SZ/BSE pending |
-
-The BSE stock `920047` is recognized by EastMoney's public quote site. The raw EastMoney `push2` endpoint and Tencent BSE `bj` endpoint still require validation on an unrestricted network/device before being marked accepted.
+| SSE | `1.<code>` | `sh<code>` |
+| SZSE | `0.<code>` | `sz<code>` |
+| BSE | `0.<code>` | `bj<code>` candidate; physical validation required |
 
 ## EastMoney quote
-
-Request:
 
 ```text
 GET https://push2.eastmoney.com/api/qt/stock/get?secid=<secid>&fields=f57,f58,f43,f44,f45,f46,f47,f48,f60,f86,f169,f170
 Referer: https://quote.eastmoney.com/
 ```
 
-Fields consumed by V1:
+Consumed fields:
 
-| Field | Meaning in V1 | Decode |
-|---|---|---|
-| `f57` | stock code | string; must match requested symbol |
-| `f58` | stock name | UTF-8 string |
-| `f43` | current price | integer-like values ÷ 100; decimal values used directly |
-| `f44` | high | same price scaling |
-| `f45` | low | same price scaling |
-| `f46` | open | same price scaling |
-| `f47` | volume | unsigned integer |
-| `f48` | amount | numeric, used directly |
-| `f60` | previous close | same price scaling |
-| `f86` | quote time | Unix epoch seconds |
-| `f169` | change | price scaling |
-| `f170` | change percent | price scaling |
+| Field | Meaning |
+|---|---|
+| `f57` | code; must match requested symbol |
+| `f58` | UTF-8 name |
+| `f43` | last |
+| `f44` | high |
+| `f45` | low |
+| `f46` | open |
+| `f47` | volume |
+| `f48` | amount |
+| `f60` | previous close |
+| `f86` | Unix quote timestamp |
+| `f169` | change |
+| `f170` | change percent |
 
-A missing, malformed, stale-symbol or structurally invalid response is rejected; the caller keeps the previously cached value.
+Integer-like price/change values use the existing ÷100 scaling rule; decimal values are used directly. Missing, malformed, mismatched-symbol or structurally invalid payloads are rejected and do not replace cache.
 
-## EastMoney intraday trend
-
-Request:
+## EastMoney intraday
 
 ```text
 GET https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=<secid>&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=1&iscr=0&iscca=0
 Referer: https://quote.eastmoney.com/
 ```
 
-V1 consumes each `trends` CSV row as:
+Each trend row uses column 0 time, 1 price, 5 volume and 7 average price. Only 09:30–11:30 and 13:00–15:00 are retained. Duplicate/out-of-order minutes are skipped; series is capped at 242 points.
 
-```text
-<datetime>,<price>,...,<volume>,...,<average-price>
-```
-
-Specifically: column 0 time, column 1 price, column 5 volume, column 7 average price. Only 09:30–11:30 and 13:00–15:00 points are retained; duplicate/out-of-order minutes are skipped and the series is capped at 242 points.
+Parser strictness is unchanged by the stability work. Unknown malformed payloads are not accepted merely to improve apparent success rate.
 
 ## Tencent quote fallback
-
-Request:
 
 ```text
 GET https://qt.gtimg.cn/q=<market-prefix><code>
 ```
 
-Expected body form:
+Important zero-based fields:
 
-```text
-v_sh600519="...~...";
-```
-
-Fields consumed by zero-based tilde index:
-
-| Index | Meaning in V1 |
+| Index | Meaning |
 |---:|---|
-| 1 | stock name |
-| 2 | stock code |
-| 3 | current price |
+| 1 | name |
+| 2 | code |
+| 3 | last |
 | 4 | previous close |
 | 5 | open |
 | 6 | volume |
-| 30 | `YYYYMMDDhhmmss` China-local quote timestamp |
+| 30 | China-local `YYYYMMDDhhmmss` timestamp |
 | 31 | change |
 | 32 | change percent |
 | 33 | high |
 | 34 | low |
-| 37 | amount in ten-thousand currency units; V1 multiplies by 10,000 |
+| 37 | amount (V1 converts ten-thousand units to base units) |
 
-The timestamp is converted from UTC+8 local civil time to Unix UTC epoch seconds. The timestamp is required because the controller uses provider dates to distinguish a stale prior-session quote from current-session data.
+Tencent remains quote-only fallback. No intraday fallback is added in this change.
 
 ## HTTP transport contract
 
-- HTTP status must be exactly 200.
+- HTTP 200 is required for successful Provider parsing.
 - Connect timeout: 1500 ms.
 - Read timeout: 2500 ms.
-- Maximum body retained in RAM: 32 KiB.
-- A declared or streamed body larger than the limit is rejected.
-- Chunked responses are consumed through `HTTPClient::writeToStream` into a bounded sink.
-- V1 uses `WiFiClientSecure::setInsecure()` for these public quote endpoints. TLS encryption remains present but endpoint certificate identity is not verified.
-- Market HTTP runs only in the FreeRTOS market worker; the UI loop never performs HTTP.
+- Maximum retained response body: 32 KiB.
+- Declared/streamed oversize responses are rejected.
+- Content-Length mismatch after an otherwise successful read is classified as truncated transport failure.
+- `HTTPClient::setReuse(false)` remains unchanged for this stability release.
+- Current V1 keeps its existing `WiFiClientSecure::setInsecure()` behavior; certificate-verification hardening is a separate security task.
+- All market HTTP executes in `MarketDataWorker`; UI/main loop does not perform blocking market HTTP.
 
-## Failover contract
+Transport diagnostics preserve:
 
-1. EastMoney is the normal quote provider.
-2. Three EastMoney quote failures within 60 seconds switch active quote traffic to Tencent.
-3. While Tencent is active, EastMoney is probed at most once every 120 seconds.
-4. Two successful EastMoney probes restore EastMoney as active provider.
-5. A failed recovery probe resets the recovery-success count.
-6. Intraday remains EastMoney-only in V1; a quote fallback does not erase the cached EastMoney intraday chart.
-7. Network/provider failure never clears a previously valid quote or intraday cache.
+- HTTP status
+- native HTTPClient error code
+- TLS last error when available
+- expected Content-Length
+- received byte count
+- elapsed time
 
-## Validation status
+## Worker scheduling contract
 
-Automated parser/provider/controller fixtures cover SSE, SZSE and BSE symbol mapping, malformed payload rejection, quote-date handling, provider fallback/recovery and retained-cache behavior.
+Request priority:
 
-During the 2026-08-11 development session, a current Tencent SSE response for `sh600519` matched the implemented tilde-field contract and carried a `20260811161401` timestamp. Full live raw validation for EastMoney `push2`, Tencent SZSE, and Tencent BSE is still a hardware/unrestricted-network acceptance item, not an automated-pass claim.
+1. latest current-page quote
+2. background quote
+3. EastMoney recovery probe
+4. intraday
+5. intraday retry
+
+Waiting intraday uses latest-wins semantics: only one not-yet-started intraday item is retained. A newer current-stock trend request replaces an older pending trend request; the replaced request produces an explicit cancellation result so Controller outstanding state is released.
+
+TTL:
+
+- quote / primary probe: 15 s
+- intraday / intraday retry: 10 s
+
+Expired accepted requests produce an explicit expiry result rather than silently disappearing.
+
+## Intraday retry contract
+
+Only transient failures are eligible:
+
+- transport/network failure, including connection loss/read failure/truncated body
+- HTTP 408
+- HTTP 5xx
+
+No immediate retry for:
+
+- parser/schema errors
+- missing fields
+- body too large
+- unsupported data
+- ordinary HTTP 4xx other than 408
+
+Maximum: **3 total attempts per intraday refresh cycle**.
+
+Deferred delays:
+
+```text
+attempt 2: ~1500 ms ±20%
+attempt 3: ~4000 ms ±20%
+```
+
+Retry never loops inside the Provider; quote work can run between attempts.
+
+## Quote failover contract
+
+1. EastMoney is normal quote Provider.
+2. Three EastMoney quote failures within 60 s switch quote traffic to Tencent.
+3. While Tencent is active, EastMoney recovery probe is no faster than once per 120 s.
+4. Two successful probes restore EastMoney.
+5. Failed probe resets recovery-success count.
+6. Intraday failure does not trigger Tencent intraday use.
+
+## Cache and health contract
+
+Quote and intraday have independent health state:
+
+- last error
+- last attempt
+- last success
+- consecutive failures
+
+A quote success clears only quote health. An intraday success clears only intraday health. Failure never erases the corresponding last valid payload.
+
+UI thresholds:
+
+- quote age >=15 s: `报价延迟`
+- intraday age >=180 s: `分时延迟`
+- one isolated intraday failure with a fresh cached chart: no generic page-wide error
+
+## Request log contract
+
+Each completed/expired/cancelled request emits a concise `[md]` line. Example:
+
+```text
+[md] id=182 type=INTRADAY symbol=000831 provider=EM attempt=2/3 queue=8ms dur=2680ms http=200 native=-5 tls=-29184 bytes=8192/13824 result=NETWORK
+```
+
+Do not log full response bodies by default.
+
+## Validation policy
+
+PC `curl`/Windows Schannel behavior is useful external evidence, but is not treated as proof of the ESP32 failure type. Device-side `[md]` diagnostics are the source used to classify actual ESP32 transport failures.
+
+If at least 30 physical intraday refresh cycles still have <80% final-cycle success after bounded retries, open a separate design review for an intraday fallback Provider rather than weakening parser or retry limits.
