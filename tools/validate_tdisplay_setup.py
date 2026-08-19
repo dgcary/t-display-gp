@@ -46,6 +46,7 @@ required_native_test_wiring = {
     "+<network/TencentProvider.cpp>",
     "+<network/ProvisioningForm.cpp>",
     "+<ui/StockScreen.cpp>",
+    "+<ui/WeatherVisuals.cpp>",
 }
 missing_native = sorted(item for item in required_native_test_wiring if item not in text)
 
@@ -54,6 +55,8 @@ present_forbidden = [flag for flag in forbidden if flag in text]
 
 device = Path("src/device/DeviceLayer.cpp").read_text(encoding="utf-8")
 screen = Path("src/ui/StockScreen.h").read_text(encoding="utf-8")
+stock_screen_cpp = Path("src/ui/StockScreen.cpp").read_text(encoding="utf-8")
+weather_screen_cpp = Path("src/ui/WeatherScreen.cpp").read_text(encoding="utf-8")
 required_landscape = {
     "DeviceLayer.cpp": ["tft_.setRotation(3)"],
     "StockScreen.h": ["SCREEN_WIDTH = 320", "SCREEN_HEIGHT = 170"],
@@ -66,7 +69,26 @@ for needle in required_landscape["StockScreen.h"]:
     if needle not in screen:
         missing_landscape.append(f"StockScreen.h: {needle}")
 
-if missing or present_forbidden or missing_native or missing_landscape:
+required_ui_wiring = {
+    "StockScreen.cpp": [
+        "StockScreenText::providerSummary(model.provider, model.intradayProvider, model.hasIntraday)",
+        "previous_.intradayProvider != next.intradayProvider",
+    ],
+    "WeatherScreen.cpp": [
+        "font.print(conditionName(day.weatherCode))",
+        "renderAnimation",
+        "WeatherVisuals::catMood",
+    ],
+}
+missing_ui = []
+for needle in required_ui_wiring["StockScreen.cpp"]:
+    if needle not in stock_screen_cpp:
+        missing_ui.append(f"StockScreen.cpp: {needle}")
+for needle in required_ui_wiring["WeatherScreen.cpp"]:
+    if needle not in weather_screen_cpp:
+        missing_ui.append(f"WeatherScreen.cpp: {needle}")
+
+if missing or present_forbidden or missing_native or missing_landscape or missing_ui:
     if missing:
         print("missing TFT contract flags:")
         for flag in missing:
@@ -83,6 +105,10 @@ if missing or present_forbidden or missing_native or missing_landscape:
         print("missing landscape contract:")
         for item in missing_landscape:
             print(f"  {item}")
+    if missing_ui:
+        print("missing UI wiring contract:")
+        for item in missing_ui:
+            print(f"  {item}")
     sys.exit(1)
 
-print("T-Display-S3 TFT + 320x170 + multi-app native wiring contract: OK")
+print("T-Display-S3 TFT + 320x170 + multi-app native/UI wiring contract: OK")
