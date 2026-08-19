@@ -45,8 +45,7 @@ bool WeatherController::configured() const {
 bool WeatherController::refreshDue(uint32_t nowMs) const {
   if (!attempted_) return true;
   const uint32_t refreshMs = config_.refreshMinutes * 60U * 1000U;
-  const uint32_t anchor = hasSuccessTime_ ? lastSuccessMs_ : lastAttemptMs_;
-  return elapsed(nowMs, anchor) >= refreshMs;
+  return elapsed(nowMs, lastAttemptMs_) >= refreshMs;
 }
 
 void WeatherController::consumeResults(uint32_t nowMs) {
