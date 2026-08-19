@@ -69,7 +69,7 @@ menu:
   GPIO14 long  -> enter selected app
 ```
 
-Run `tools/validate_tdisplay_setup.py` for TFT/build wiring changes.
+Run `tools/validate_tdisplay_setup.py` for TFT/build/UI wiring changes.
 
 ## Multi-app architecture invariants
 
@@ -77,9 +77,17 @@ Run `tools/validate_tdisplay_setup.py` for TFT/build wiring changes.
 - Each app owns its controller/screen/service boundary and follows enter/exit/input/tick/render semantics.
 - Only the active app receives normal input/tick/render calls.
 - Exiting an app preserves valid cache/state; do not reconstruct an app on every switch.
-- App registry/menu must remain extensible; do not hard-code menu behavior around exactly two apps.
+- App registry/menu must remain extensible; do not hard-code menu behavior around an exact app count.
 - Startup defaults to StockApp unless a separately approved configuration feature changes it.
+- Current shell includes StockApp, WeatherApp and DeviceInfoApp.
 - Future AirQuality/HomeAssistant/ServiceMonitor apps should use the same shell rather than bypassing AppManager.
+
+## DeviceInfoApp invariants
+
+- DeviceInfoApp is local-only; it must not create network requests.
+- It exposes the current LAN IP prominently so the user can reach the existing Web configuration page.
+- It may show SSID, RSSI, MAC, uptime, local time, free/min heap and PSRAM state.
+- Device diagnostics must never display Wi-Fi passwords, API tokens, Home Assistant tokens, or other secrets.
 
 ## StockApp invariants
 
@@ -87,16 +95,22 @@ Run `tools/validate_tdisplay_setup.py` for TFT/build wiring changes.
 - GPIO0/GPIO14 short presses must preserve previous/next-stock behavior.
 - When StockApp exits, pause new MarketDataWorker execution; do not force-kill an in-flight HTTPS request.
 - Returning to StockApp preserves cache and resumes existing QoS/refresh behavior.
+- Quote provider and intraday provider are independent and must be observable separately in the footer/diagnostics.
 
 ## Market-data architecture invariants
 
 - Main/UI never performs blocking market HTTP.
 - EastMoney remains quote + intraday primary.
-- Tencent remains quote-only fallback.
+- Tencent remains quote fallback and is also the intraday fallback after the EastMoney intraday cycle cannot complete.
+- Quote failover and intraday failover are independent; Tencent intraday success/failure must not alter quote-provider health.
+- Every new intraday cycle starts with EastMoney even when quote traffic is currently on Tencent.
+- EastMoney transient intraday errors use the existing bounded/deferred retries before falling back to Tencent.
+- Tencent intraday failure never recursively falls back again.
+- A fully failed intraday cycle waits the normal intraday refresh interval before opening another cycle; no empty-cache retry storm.
 - Quote/intraday failures preserve the last valid caches and have independent health state.
 - Quote traffic outranks intraday.
 - Waiting intraday is latest-wins.
-- Intraday transient retry is bounded/deferred: max 3 total attempts; it must yield to quote traffic.
+- Intraday transient retry is bounded/deferred: max 3 EastMoney attempts; it must yield to quote traffic.
 - Existing approved request TTLs remain unchanged unless separately designed.
 - Do not weaken parser validation to accept unknown malformed market payloads.
 
@@ -110,6 +124,8 @@ Run `tools/validate_tdisplay_setup.py` for TFT/build wiring changes.
 - Weather failure affects WeatherApp only and must not poison stock health.
 - Raw weather JSON is discarded after strict parse into bounded structured state.
 - WeatherApp does not actively schedule when it is not the active app.
+- Weather pet animation is procedural/lightweight; animation-only frames redraw only the bounded pet region, not the full TFT.
+- Weather condition text shown in Chinese must use the Unicode font path, including the three-day forecast cards.
 
 ## Shared network / memory invariants
 
@@ -149,6 +165,12 @@ Low-frequency app data: `[appdata]`
 
 Runtime resources every ~60 seconds: `[sys]`, including active app, free/min heap, PSRAM totals/free, and main task stack high-water mark.
 
+Intraday fallback should emit a concise marker such as:
+
+```text
+[md] id=... type=INTRADAY symbol=... fallback=EM->TX
+```
+
 When diagnosing a live issue, preserve the relevant request line plus surrounding `[sys]` lines. Do not log full response bodies or credentials by default.
 
 ## UI invariants
@@ -156,7 +178,8 @@ When diagnosing a live issue, preserve the relevant request line plus surroundin
 - Logical layout remains 320×170 landscape.
 - Stock positive change = red; negative = green.
 - Stock lunch discontinuity and `昨收`/`今开` references remain.
-- Menu and Weather use bounded text/simple shapes; do not add large bitmap assets without a memory review.
+- Stock footer distinguishes quote (`Q`) and intraday (`I`) source when intraday data exists.
+- Menu/Weather/DeviceInfo use bounded text/simple shapes; do not add large bitmap/GIF assets without a memory review.
 - Inactive apps must never redraw the TFT after a late network completion.
 
 ## Provider caution
@@ -179,9 +202,13 @@ At minimum verify on the actual T-Display-S3:
 - short stock buttons still work,
 - long GPIO0 enters menu without also switching stock,
 - menu short navigation and GPIO14-long enter work,
+- DeviceInfo shows the real LAN IP and `http://<IP>/` is reachable from the LAN,
 - WeatherApp retrieves configured location data,
+- weather colors, three-day Chinese condition text and two-frame cat animation render without visible corruption/flicker,
+- with EastMoney intraday unavailable, `[md] fallback=EM->TX` appears and Tencent minute data can populate/refresh the chart,
+- footer reflects the actual quote/intraday source (for example `Q:TX I:TX`),
 - Stock/Weather caches survive menu transitions and failures,
-- 100 Stock/Menu/Weather transitions with no watchdog/reboot/freeze,
+- 100 Stock/Menu/Weather/DeviceInfo transitions with no watchdog/reboot/freeze,
 - `[sys]` heap does not exhibit monotonic leakage.
 
 Use `docs/hardware-acceptance.md` for the full checklist.
