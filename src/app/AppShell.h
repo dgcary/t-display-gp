@@ -11,6 +11,7 @@ enum class AppId {
   MENU,
   STOCK,
   WEATHER,
+  DEVICE_INFO,
 };
 
 struct AppDescriptor {
