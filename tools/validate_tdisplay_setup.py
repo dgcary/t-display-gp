@@ -52,7 +52,7 @@ present_forbidden = [flag for flag in forbidden if flag in text]
 device = Path("src/device/DeviceLayer.cpp").read_text(encoding="utf-8")
 screen = Path("src/ui/StockScreen.h").read_text(encoding="utf-8")
 required_landscape = {
-    "DeviceLayer.cpp": ["tft_.setRotation(1)"],
+    "DeviceLayer.cpp": ["tft_.setRotation(3)"],
     "StockScreen.h": ["SCREEN_WIDTH = 320", "SCREEN_HEIGHT = 170"],
 }
 missing_landscape = []
