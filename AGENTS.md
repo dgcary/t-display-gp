@@ -91,7 +91,7 @@ Run `tools/validate_tdisplay_setup.py` for TFT/build/UI wiring changes.
 
 ## StockApp invariants
 
-- Existing `StockController`, `StockScreen`, `MarketDataWorker`, EastMoney/Tencent behavior remain the stock source of truth.
+- Existing `StockController`, `StockScreen`, `MarketDataWorker`, Tencent/EastMoney behavior remain the stock source of truth.
 - GPIO0/GPIO14 short presses must preserve previous/next-stock behavior.
 - When StockApp exits, pause new MarketDataWorker execution; do not force-kill an in-flight HTTPS request.
 - Returning to StockApp preserves cache and resumes existing QoS/refresh behavior.
@@ -100,19 +100,20 @@ Run `tools/validate_tdisplay_setup.py` for TFT/build/UI wiring changes.
 ## Market-data architecture invariants
 
 - Main/UI never performs blocking market HTTP.
-- EastMoney remains quote + intraday primary.
-- Tencent remains quote fallback and is also the intraday fallback after the EastMoney intraday cycle cannot complete.
-- Quote failover and intraday failover are independent; Tencent intraday success/failure must not alter quote-provider health.
-- Every new intraday cycle starts with EastMoney even when quote traffic is currently on Tencent.
-- EastMoney transient intraday errors use the existing bounded/deferred retries before falling back to Tencent.
-- Tencent intraday failure never recursively falls back again.
+- **Tencent is quote + intraday primary.**
+- **EastMoney is quote + intraday secondary/fallback.**
+- Quote failover and intraday failover are independent; intraday success/failure must not alter quote-provider health.
+- Every new intraday cycle starts with Tencent even when quote traffic is temporarily on EastMoney.
+- Tencent transient intraday errors use the existing bounded/deferred retries before falling back to EastMoney.
+- EastMoney intraday failure never recursively falls back again.
 - A fully failed intraday cycle waits the normal intraday refresh interval before opening another cycle; no empty-cache retry storm.
 - Quote/intraday failures preserve the last valid caches and have independent health state.
 - Quote traffic outranks intraday.
 - Waiting intraday is latest-wins.
-- Intraday transient retry is bounded/deferred: max 3 EastMoney attempts; it must yield to quote traffic.
+- Intraday transient retry is bounded/deferred: max 3 Tencent attempts; it must yield to quote traffic.
 - Existing approved request TTLs remain unchanged unless separately designed.
 - Do not weaken parser validation to accept unknown malformed market payloads.
+- Quote primary failover: 3 Tencent failures within the existing failure window switch to EastMoney; while on EastMoney, probe Tencent at the existing interval and require 2 Tencent probe successes to recover.
 
 ## WeatherApp invariants
 
@@ -124,7 +125,8 @@ Run `tools/validate_tdisplay_setup.py` for TFT/build/UI wiring changes.
 - Weather failure affects WeatherApp only and must not poison stock health.
 - Raw weather JSON is discarded after strict parse into bounded structured state.
 - WeatherApp does not actively schedule when it is not the active app.
-- Weather pet animation is procedural/lightweight; animation-only frames redraw only the bounded pet region, not the full TFT.
+- Weather pet style is `HAND_PAINTED_WATERCOLOR`; keep it lightweight/procedural and bounded to the pet region.
+- Animation-only frames redraw only the bounded pet region, not the full TFT.
 - Weather condition text shown in Chinese must use the Unicode font path, including the three-day forecast cards.
 
 ## Shared network / memory invariants
@@ -165,10 +167,10 @@ Low-frequency app data: `[appdata]`
 
 Runtime resources every ~60 seconds: `[sys]`, including active app, free/min heap, PSRAM totals/free, and main task stack high-water mark.
 
-Intraday fallback should emit a concise marker such as:
+Intraday fallback should emit:
 
 ```text
-[md] id=... type=INTRADAY symbol=... fallback=EM->TX
+[md] id=... type=INTRADAY symbol=... fallback=TX->EM
 ```
 
 When diagnosing a live issue, preserve the relevant request line plus surrounding `[sys]` lines. Do not log full response bodies or credentials by default.
@@ -180,6 +182,7 @@ When diagnosing a live issue, preserve the relevant request line plus surroundin
 - Stock lunch discontinuity and `昨收`/`今开` references remain.
 - Stock footer distinguishes quote (`Q`) and intraday (`I`) source when intraday data exists.
 - Menu/Weather/DeviceInfo use bounded text/simple shapes; do not add large bitmap/GIF assets without a memory review.
+- Weather companion uses the approved hand-painted watercolor look through layered low-saturation primitives; do not regress to the old single-color geometric orange cat.
 - Inactive apps must never redraw the TFT after a late network completion.
 
 ## Provider caution
@@ -204,9 +207,10 @@ At minimum verify on the actual T-Display-S3:
 - menu short navigation and GPIO14-long enter work,
 - DeviceInfo shows the real LAN IP and `http://<IP>/` is reachable from the LAN,
 - WeatherApp retrieves configured location data,
-- weather colors, three-day Chinese condition text and two-frame cat animation render without visible corruption/flicker,
-- with EastMoney intraday unavailable, `[md] fallback=EM->TX` appears and Tencent minute data can populate/refresh the chart,
-- footer reflects the actual quote/intraday source (for example `Q:TX I:TX`),
+- weather colors, three-day Chinese condition text and two-frame hand-painted watercolor cat animation render without visible corruption/flicker,
+- normal market operation prefers Tencent (`Q:TX`, and `I:TX` after intraday cache exists),
+- with Tencent intraday unavailable, `[md] fallback=TX->EM` appears and EastMoney can populate/refresh the chart when healthy,
+- footer reflects the actual quote/intraday source (for example `Q:TX I:TX` or fallback `Q:TX I:EM`),
 - Stock/Weather caches survive menu transitions and failures,
 - 100 Stock/Menu/Weather/DeviceInfo transitions with no watchdog/reboot/freeze,
 - `[sys]` heap does not exhibit monotonic leakage.
