@@ -91,13 +91,13 @@ void test_success_updates_cache_and_waits_for_refresh_interval() {
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 31.2f, controller.viewModel().weather.currentTemp);
   TEST_ASSERT_EQUAL(WeatherError::NONE, controller.viewModel().error);
 
-  controller.tick(200 + 15u * 60u * 1000u - 1u);
+  controller.tick(100 + 15u * 60u * 1000u - 1u);
   TEST_ASSERT_EQUAL_UINT32(1, queue.requests.size());
-  controller.tick(200 + 15u * 60u * 1000u);
+  controller.tick(100 + 15u * 60u * 1000u);
   TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
 }
 
-void test_failed_refresh_preserves_last_valid_cache() {
+void test_failed_refresh_preserves_last_valid_cache_and_does_not_retry_immediately() {
   FakeAppDataQueue queue;
   WeatherController controller(queue);
   controller.begin(weatherConfig());
@@ -113,7 +113,7 @@ void test_failed_refresh_preserves_last_valid_cache() {
   queue.results.push_back(ok);
   controller.tick(20);
 
-  const uint32_t refreshAt = 20 + 15u * 60u * 1000u;
+  const uint32_t refreshAt = 10 + 15u * 60u * 1000u;
   controller.tick(refreshAt);
   TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
 
@@ -127,6 +127,12 @@ void test_failed_refresh_preserves_last_valid_cache() {
   TEST_ASSERT_TRUE(controller.viewModel().hasData);
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 30.0f, controller.viewModel().weather.currentTemp);
   TEST_ASSERT_EQUAL(WeatherError::NETWORK, controller.viewModel().error);
+  TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
+
+  controller.tick(refreshAt + 1000);
+  TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
+  controller.tick(refreshAt + 15u * 60u * 1000u);
+  TEST_ASSERT_EQUAL_UINT32(3, queue.requests.size());
 }
 
 void test_offline_or_inactive_does_not_schedule() {
@@ -184,7 +190,7 @@ int main() {
   UNITY_BEGIN();
   RUN_TEST(test_first_active_online_tick_enqueues_weather_request);
   RUN_TEST(test_success_updates_cache_and_waits_for_refresh_interval);
-  RUN_TEST(test_failed_refresh_preserves_last_valid_cache);
+  RUN_TEST(test_failed_refresh_preserves_last_valid_cache_and_does_not_retry_immediately);
   RUN_TEST(test_offline_or_inactive_does_not_schedule);
   RUN_TEST(test_disabled_weather_reports_not_configured_and_does_not_schedule);
   RUN_TEST(test_stale_flag_uses_last_success_and_wrap_safe_elapsed);
