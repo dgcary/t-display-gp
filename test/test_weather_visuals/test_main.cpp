@@ -33,7 +33,7 @@ void test_animation_frame_is_two_phase_and_wrap_independent() {
   TEST_ASSERT_EQUAL_UINT8(1, WeatherVisuals::animationFrame(500));
   TEST_ASSERT_EQUAL_UINT8(1, WeatherVisuals::animationFrame(999));
   TEST_ASSERT_EQUAL_UINT8(0, WeatherVisuals::animationFrame(1000));
-  TEST_ASSERT_EQUAL_UINT8(1, WeatherVisuals::animationFrame(0xFFFFFFFFU));
+  TEST_ASSERT_EQUAL_UINT8(0, WeatherVisuals::animationFrame(0xFFFFFFFFU));
 }
 
 int main() {
