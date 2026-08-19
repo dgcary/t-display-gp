@@ -59,7 +59,6 @@ class MenuApp final : public IApp {
 
   size_t selectedIndex() const { return selectedIndex_; }
   AppId selectedAppId() const;
-  uint32_t exitCountForTest() const { return exitCount_; }
 
  private:
   std::vector<AppDescriptor> items_;
@@ -67,7 +66,6 @@ class MenuApp final : public IApp {
   size_t selectedIndex_ = 0;
   bool dirty_ = true;
   bool fullRedraw_ = true;
-  uint32_t exitCount_ = 0;
 };
 
 class AppManager {
