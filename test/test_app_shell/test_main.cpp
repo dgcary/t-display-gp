@@ -89,7 +89,7 @@ void test_menu_selection_wraps_and_next_long_enters_selected_app() {
   f.manager.onInput(InputEvent::NEXT_LONG);
   TEST_ASSERT_EQUAL(AppId::WEATHER, f.manager.activeAppId());
   TEST_ASSERT_EQUAL_INT(1, f.weather.enters);
-  TEST_ASSERT_EQUAL_INT(1, f.menu.exitCountForTest());
+  TEST_ASSERT_EQUAL_INT(1, f.stock.exits);
 }
 
 void test_reserved_next_long_is_swallowed_in_normal_app() {
