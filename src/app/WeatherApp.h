@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "AppDataTypes.h"
 #include "AppShell.h"
 #include "DeviceLayer.h"
@@ -30,4 +32,8 @@ class WeatherApp final : public IApp {
   bool active_ = false;
   bool forceDirty_ = false;
   bool forceFullRedraw_ = false;
+  bool animationInitialized_ = false;
+  bool animationDirty_ = false;
+  bool animationOnlyRender_ = false;
+  uint8_t animationFrame_ = 0;
 };
