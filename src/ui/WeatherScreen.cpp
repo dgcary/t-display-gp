@@ -88,8 +88,11 @@ void drawDailyCard(TFT_eSPI& tft, U8g2_for_TFT_eSPI& font, int x, const char* la
   tft.setTextColor(UiTheme::TEXT, UiTheme::CARD);
   tft.setTextDatum(TL_DATUM);
   tft.drawString(values, x + 30, 128, 1);
-  tft.setTextColor(UiTheme::MUTED, UiTheme::CARD);
-  tft.drawString(conditionName(day.weatherCode), x + 30, 143, 1);
+  font.setBackgroundColor(UiTheme::CARD);
+  font.setForegroundColor(UiTheme::MUTED);
+  font.setCursor(x + 30, 155);
+  font.print(conditionName(day.weatherCode));
+  font.setBackgroundColor(UiTheme::BACKGROUND);
 }
 
 void drawWeatherBackdrop(TFT_eSPI& tft, WeatherVisualKind kind, uint8_t frame) {
@@ -146,7 +149,6 @@ void drawCat(TFT_eSPI& tft, CatMood mood, uint8_t frame) {
   const int headX = 257;
   const int headY = 75 + bob;
 
-  // Tail and body move by one or two pixels between the two animation frames.
   tft.drawLine(278, 94 + bob, frame ? 293 : 289, frame ? 86 : 101, UiTheme::CAT);
   tft.drawLine(279, 95 + bob, frame ? 294 : 290, frame ? 87 : 102, UiTheme::CAT);
   tft.fillRoundRect(241, 83 + bob, 39, 24, 10, UiTheme::CAT);
@@ -154,7 +156,6 @@ void drawCat(TFT_eSPI& tft, CatMood mood, uint8_t frame) {
   tft.fillTriangle(244, 65 + bob, 250, 52 + bob, 255, 66 + bob, UiTheme::CAT);
   tft.fillTriangle(259, 65 + bob, 267, 52 + bob, 271, 68 + bob, UiTheme::CAT);
 
-  // Cream muzzle keeps the face readable on the tiny panel.
   tft.fillCircle(252, 80 + bob, 5, UiTheme::CAT_LIGHT);
   tft.fillCircle(262, 80 + bob, 5, UiTheme::CAT_LIGHT);
   tft.fillTriangle(255, 79 + bob, 259, 79 + bob, 257, 82 + bob, UiTheme::CAT_PINK);
@@ -302,6 +303,7 @@ void WeatherScreen::render(const WeatherViewModel& model, bool, uint8_t animatio
   drawDailyCard(*display_, *unicodeFont_, 110, "明", w.tomorrow);
   drawDailyCard(*display_, *unicodeFont_, 216, "后", w.dayAfter);
 
+  unicodeFont_->setBackgroundColor(UiTheme::BACKGROUND);
   unicodeFont_->setForegroundColor(UiTheme::MUTED);
   unicodeFont_->setCursor(8, 169);
   unicodeFont_->print("长按左键返回主菜单");
