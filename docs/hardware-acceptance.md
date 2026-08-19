@@ -7,7 +7,7 @@
 - 自动化 native tests：GitHub Actions 验证
 - Windows native：GitHub Actions 验证
 - ESP32-S3 firmware build：GitHub Actions 验证
-- 实体 flash / DeviceInfo / Weather pet / Tencent intraday fallback / App 切换稳定性：**PENDING，必须在真机完成**
+- 实体 flash / DeviceInfo / Weather watercolor pet / Tencent-primary market path / App 切换稳定性：**PENDING，必须在真机完成**
 
 每次真机验收记录：branch、完整 commit SHA、日期、Wi-Fi 环境、端口和结果。
 
@@ -172,14 +172,20 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 - 更新时间可见
 - 数据不是永久停在“正在获取”
 
-右侧天气角色：
+右侧天气角色采用用户已选定的 **方案 4：手绘水彩风小猫**。验收：
 
-- 可见轻量像素/卡通小猫
+- 小猫使用奶油/暖棕、低饱和多层晕染效果，不应再像旧版单色几何橘猫
 - 约 500 ms 两帧切换，可观察到轻微身体/尾巴动作
 - 晴/多云/雾/雨/雪/雷雨背景元素与天气代码匹配
-- 高温、寒冷、雨、雾、雷暴等场景的小猫表情/配件有对应变化
+- 高温：汗滴
+- 雾/困倦：睡眠符号
+- 雨：雨伞
+- 低温：围巾
+- 雷暴：闪电/受惊表情
 - 动画过程中左侧天气文字和底部三日卡片不应每 500 ms 整屏闪烁
 - 无明显残影、花屏或长期黑块
+
+只能对真机当时能自然触发的天气状态判 PASS；其他状态记为 `NOT TESTABLE`，不能仅凭代码测试冒充物理验收。
 
 串口必须有：
 
@@ -238,9 +244,9 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 - `main_stack_hwm` 不应持续下降到接近 0
 - 无分配失败、panic、watchdog
 
-## 12. 股票回归
+## 12. 股票回归 / 正常腾讯主链路
 
-多 App 版本仍必须通过原股票 Smoke：
+多 App 版本仍必须通过原股票 Smoke，并验证腾讯已经成为默认主源：
 
 - 正涨红、下跌绿
 - 中文名称可读
@@ -251,47 +257,68 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 - GPIO0/GPIO14 短按一次只切一次
 - 分时失败旧图保留
 - Quote/Intraday 健康独立
-- EastMoney quote 失败后 Tencent quote fallback 语义不变
+- 启动/正常网络下报价首先使用 Tencent
+- 每个新的分时周期首先使用 Tencent
 
-股票页脚应区分实际数据源：
+常态预期页脚：
 
 ```text
-Q:EM
-Q:TX I:EM
 Q:TX I:TX
 ```
 
-其中 `Q:` 是报价来源，`I:` 是当前有效分时缓存来源。
+`Q:` 是当前报价来源，`I:` 是当前有效分时缓存来源。若尚无分时缓存，可只显示 `Q:TX`。
 
-## 13. Tencent 分时 fallback 真机验收
+## 13. Quote failover：Tencent -> EastMoney
 
-本轮重点验证 EastMoney `trends2` 不稳定时的自动接管。
+只有在腾讯报价真实失败时测试；不要为触发 fallback 修改源码或破坏外部网络基础设施。
+
+策略：
+
+1. 默认 `Q:TX`。
+2. 60 秒 failure window 内累计达到 3 次 Tencent quote failure 后，报价切到 EastMoney。
+3. fallback 期间报价来源应显示 `Q:EM`（若 EastMoney 自身可用）。
+4. fallback 期间按约 120 秒周期探测 Tencent。
+5. 连续 2 次 Tencent probe 成功后恢复 `Q:TX`。
+6. probe 失败会重置 recovery success count。
+7. EastMoney fallback 也失败时，不继续递归寻找第三 Provider；保留最后有效 quote cache。
+
+如果本次真机中 Tencent 始终稳定，该路径记录：
+
+```text
+QUOTE FALLBACK TX->EM: NOT TRIGGERED
+```
+
+不要人为把正常链路判成未通过。
+
+## 14. Intraday fallback：Tencent -> EastMoney
+
+新的正常路径为 Tencent minute first。
 
 保持正常 StockApp 前台运行并观察 `[md]`：
 
-1. 新分时周期首先应请求 `provider=EM`。
-2. EastMoney 可重试的 transient 错误按既有有限重试执行。
-3. EastMoney 周期最终失败后，应出现：
+1. 新分时周期首先应请求 `provider=TX`。
+2. Tencent 可重试 transient 错误按既有有限重试执行，最多 3 次总尝试。
+3. Tencent 周期最终失败或遇到非重试型 Provider error 后，应出现：
 
 ```text
-[md] id=... type=INTRADAY symbol=... fallback=EM->TX
+[md] id=... type=INTRADAY symbol=... fallback=TX->EM
 ```
 
-4. 随后应看到同一逻辑周期的 Tencent minute 请求。
-5. Tencent 成功后：
+4. 随后应看到同一逻辑周期的 EastMoney intraday 请求。
+5. EastMoney 成功后：
    - 分时图出现/更新；
    - 旧图不会先被清空；
-   - footer `I:TX`；
+   - footer `I:EM`；
    - quote provider 不因该成功自动改变。
-6. 若 Tencent 也失败：
+6. 若 EastMoney 也失败：
    - 不递归 fallback；
    - 不进入 tight loop；
    - 旧有效分时缓存保留；
-   - 完整失败后等待正常分时刷新间隔再从 EM 开新周期。
+   - 完整失败后等待正常分时刷新间隔再从 Tencent 开新周期。
 
-如果当前环境中 EastMoney 恰好恢复稳定，需记录为 `fallback path NOT TRIGGERED`，不得臆测 PASS。
+由于用户现场已经观察到 Tencent 行情链路稳定而 EastMoney TLS 经常失败，**主要真机成功标准是 `Q:TX I:TX` 能持续工作**。`TX->EM` fallback 只有在 Tencent 自然出现故障时才能完整物理验证；未触发时写 `NOT TRIGGERED`。
 
-## 14. 股票请求日志
+## 15. 股票请求日志
 
 ```text
 [md] id=... type=QUOTE|INTRADAY|PROBE symbol=... provider=EM|TX attempt=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
@@ -299,7 +326,7 @@ Q:TX I:TX
 
 保留失败前后至少 30 秒日志，并结合同时期 `[sys]` 判断。
 
-## 15. Wi-Fi 中断
+## 16. Wi-Fi 中断
 
 加载有效股票和天气后断 Wi-Fi 至少 2 分钟：
 
@@ -309,7 +336,7 @@ Q:TX I:TX
 - UI 不等待 HTTP 卡死
 - Wi-Fi 恢复后无需人工重启即可继续后续请求
 
-## 16. 多 App 稳定性量化
+## 17. 多 App 稳定性量化
 
 至少：
 
@@ -326,16 +353,16 @@ monotonic heap leak = 0
 
 建议同时混入股票短按切换，使输入状态机覆盖真实使用。
 
-## 17. 股票交易时段量化
+## 18. 股票交易时段量化
 
-原有目标继续有效：
+目标：
 
 ```text
 股票切换 >=100 次
 quote 请求 >=500 次
-quote 成功率目标 >=99%（测试网络条件）
+Tencent primary quote 成功率目标 >=99%（测试网络条件）
 intraday 刷新周期 >=30 个
-EastMoney->Tencent 组合分时周期成功率目标 >=80%
+Tencent->EastMoney 组合分时周期成功率目标 >=80%
 健康 quote Provider 下当前报价 P95 更新间隔 <=7 秒
 单次 intraday 失败时 quote gap <=10 秒
 intraday P95 age <=180 秒
@@ -344,9 +371,9 @@ unexpected reboot = 0
 cache loss = 0
 ```
 
-若组合分时 30+ 周期最终成功率仍 <80%，再独立评审其他 Provider；不要无限重试或放宽 parser。
+若腾讯 primary 本身在测试网络中持续低于目标，应先基于真实 `[md]` 证据重新评估 Provider；不要无限重试或放宽 parser。
 
-## 18. 完整交易日
+## 19. 完整交易日
 
 最终仍建议至少运行一次 **09:25–15:10**，期间穿插进入 Weather/Menu/DeviceInfo：
 
@@ -376,8 +403,11 @@ Flash:
 Menu/Input:
 DeviceInfo/IP:
 Weather live:
-Weather pet/UI:
-Tencent intraday fallback:
+Weather watercolor pet/UI:
+Tencent primary quote:
+Tencent primary intraday:
+Quote TX->EM fallback:
+Intraday TX->EM fallback:
 Stock regression:
 100-switch stability:
 Heap/resource notes:
