@@ -16,6 +16,7 @@ struct DataChannelHealth {
   uint32_t lastAttemptMs = 0;
   uint32_t lastSuccessMs = 0;
   uint32_t consecutiveFailures = 0;
+  bool hasAttempt = false;
 };
 
 struct StockCacheEntry {
