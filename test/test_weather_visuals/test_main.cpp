@@ -13,7 +13,7 @@ void test_weather_codes_map_to_visual_kinds() {
   TEST_ASSERT_EQUAL(WeatherVisualKind::RAIN, WeatherVisuals::kindForCode(82));
   TEST_ASSERT_EQUAL(WeatherVisualKind::SNOW, WeatherVisuals::kindForCode(73));
   TEST_ASSERT_EQUAL(WeatherVisualKind::STORM, WeatherVisuals::kindForCode(95));
-  TEST_ASSERT_EQUAL(WeatherVisualKind::OTHER, WeatherVisuals::kindForCode(99));
+  TEST_ASSERT_EQUAL(WeatherVisualKind::OTHER, WeatherVisuals::kindForCode(90));
 }
 
 void test_cat_mood_reacts_to_weather_and_temperature() {
