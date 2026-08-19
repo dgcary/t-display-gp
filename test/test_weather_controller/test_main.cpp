@@ -186,6 +186,28 @@ void test_stale_flag_uses_last_success_and_wrap_safe_elapsed() {
   TEST_ASSERT_TRUE(controller.viewModel().stale);
 }
 
+void test_delayed_result_consumption_preserves_real_cache_age() {
+  FakeAppDataQueue queue;
+  WeatherController controller(queue);
+  controller.begin(weatherConfig());
+  controller.setWifiOnline(true);
+  controller.setActive(true);
+  const uint32_t start = 1000u;
+  controller.tick(start);
+
+  AppDataResult ok;
+  ok.requestId = queue.requests.back().requestId;
+  ok.type = AppDataRequestType::WEATHER;
+  ok.error = WeatherError::NONE;
+  ok.weather = snapshot(27.0f);
+  ok.completedMs = start + 100u;
+  queue.results.push_back(ok);
+
+  controller.tick(start + 31u * 60u * 1000u);
+  TEST_ASSERT_TRUE(controller.viewModel().hasData);
+  TEST_ASSERT_TRUE(controller.viewModel().stale);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_first_active_online_tick_enqueues_weather_request);
@@ -194,5 +216,6 @@ int main() {
   RUN_TEST(test_offline_or_inactive_does_not_schedule);
   RUN_TEST(test_disabled_weather_reports_not_configured_and_does_not_schedule);
   RUN_TEST(test_stale_flag_uses_last_success_and_wrap_safe_elapsed);
+  RUN_TEST(test_delayed_result_consumption_preserves_real_cache_age);
   return UNITY_END();
 }
