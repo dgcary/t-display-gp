@@ -20,15 +20,15 @@
 
 - 沪/深/北 A 股，股票池 3–5 只
 - 报价 3–5 秒刷新可配置
-- 东方财富：报价 + 分时主源
-- 腾讯：报价备用源 + 分时备用源
+- **腾讯：报价 + 分时主源**
+- **东方财富：报价 + 分时备用源**
 - 320×170 横屏
 - 网络/Provider 失败保留最后有效报价和分时图
 - 分时午休断点、昨收/今开参考线
 - Quote/Intraday 健康状态与 Provider failover 独立
-- 每个新分时周期先尝试东财；东财有限重试仍失败后自动切腾讯分钟接口
+- 每个新分时周期先尝试腾讯；腾讯有限重试仍失败后自动切东方财富分时接口
 - 完整分时周期失败后等待正常刷新间隔，不产生 empty-cache retry storm
-- 页脚区分 `Q:` 报价源和 `I:` 分时源，例如 `Q:TX I:TX`
+- 页脚区分 `Q:` 报价源和 `I:` 分时源，例如常态 `Q:TX I:TX`
 - StockApp 退出到菜单后暂停新的行情 Worker 执行；已经开始的 HTTPS 请求允许自然完成，返回股票时恢复原 QoS/刷新
 
 ### 天气 App
@@ -38,7 +38,8 @@
 - 当前温度、体感、湿度、风速、降雨概率、天气状态
 - 今天/明天/后天高低温与中文天气状态
 - 重点信息按天气/温度着色
-- 右侧轻量天气小猫：晴、多云、雾、雨、雪、雷雨背景及高温/寒冷/雨/雷暴等状态反应
+- 右侧天气角色采用 **手绘水彩风奶油/暖棕小猫**，用多层低饱和“水彩晕染”绘制，不依赖 GIF/大位图
+- 晴/多云/雾/雨/雪/雷雨背景，以及高温汗滴、雨伞、低温围巾、睡眠符号、雷暴闪电等反应
 - 两帧动画约 500 ms 切换；动画只局部刷新右侧宠物区域，避免整屏闪烁
 - 默认 15 分钟刷新，可配置 5–60 分钟
 - 请求失败保留最后有效天气缓存
@@ -73,7 +74,7 @@ AppManager
 │   └── MarketDataWorker
 ├── WeatherApp
 │   ├── WeatherController
-│   ├── WeatherScreen / WeatherVisuals
+│   ├── WeatherScreen / WeatherVisuals / WeatherCatArt
 │   └── AppDataWorker / OpenMeteoProvider
 └── DeviceInfoApp
     └── DeviceInfoScreen
@@ -119,7 +120,9 @@ HTTPClient reuse: false
 当前股票报价 > 后台报价 > 主源恢复探测 > 分时 > 分时重试
 ```
 
-分时采用 latest-wins。东财可恢复网络/服务器错误最多 3 次尝试，约在 1.5 秒、4 秒后延迟重试，且重试必须让出报价请求；东财分时周期最终无法完成时才交给腾讯分钟接口。腾讯分时失败是该周期终点，不递归 fallback。
+分时采用 latest-wins。腾讯可恢复网络/服务器错误最多 3 次尝试，约在 1.5 秒、4 秒后延迟重试，且重试必须让出报价请求；腾讯分时周期最终无法完成时才交给东方财富。东方财富作为二级分时源失败后，该周期结束，不递归 fallback。
+
+报价默认同样使用腾讯。连续 3 次腾讯主报价失败进入东方财富备用，备用期间按 120 秒节奏探测腾讯；连续 2 次腾讯探测成功恢复主源。
 
 ## 配置 schema
 
@@ -228,8 +231,9 @@ docs/                  API、部署、真机验收、设计规格/计划
 - 菜单可进入 Stock / Weather / DeviceInfo
 - DeviceInfo 显示真实 IP 且 Web 配置页可访问
 - Weather 能获取实时数据，中文三日预报正常
-- 天气小猫动画/天气反应正常且无整屏闪烁
-- EastMoney 分时失败时能出现 `fallback=EM->TX`，腾讯成功后分时图刷新且 footer `I:TX`
+- 手绘水彩小猫动画/天气反应正常且无整屏闪烁
+- 常态行情优先看到 `Q:TX I:TX`
+- Tencent 分时最终失败时能出现 `fallback=TX->EM`，东方财富成功后 footer `I:EM`
 - Quote 继续独立正常更新
 - Weather/Stock 失败均保留各自缓存
 - Stock ⇄ Menu ⇄ Weather ⇄ DeviceInfo 至少 100 次无 watchdog/reboot/freeze
