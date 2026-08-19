@@ -10,20 +10,24 @@ class TFT_eSPI;
 class U8g2_for_TFT_eSPI;
 
 namespace StockScreenLayout {
+constexpr int SCREEN_WIDTH = 320;
+constexpr int SCREEN_HEIGHT = 170;
+constexpr int LEFT_X0 = 0;
+constexpr int LEFT_X1 = 115;
 constexpr int HEADER_Y0 = 0;
-constexpr int HEADER_Y1 = 28;
-constexpr int PRICE_Y0 = 30;
-constexpr int PRICE_Y1 = 86;
-constexpr int METRICS_Y0 = 88;
-constexpr int METRICS_Y1 = 142;
-constexpr int TURNOVER_Y0 = 144;
-constexpr int TURNOVER_Y1 = 166;
-constexpr int CHART_X0 = 8;
-constexpr int CHART_X1 = 162;
-constexpr int CHART_Y0 = 172;
-constexpr int CHART_Y1 = 292;
-constexpr int FOOTER_Y0 = 296;
-constexpr int FOOTER_Y1 = 319;
+constexpr int HEADER_Y1 = 24;
+constexpr int PRICE_Y0 = 26;
+constexpr int PRICE_Y1 = 70;
+constexpr int METRICS_Y0 = 72;
+constexpr int METRICS_Y1 = 124;
+constexpr int TURNOVER_Y0 = 126;
+constexpr int TURNOVER_Y1 = 149;
+constexpr int CHART_X0 = 120;
+constexpr int CHART_X1 = 316;
+constexpr int CHART_Y0 = 4;
+constexpr int CHART_Y1 = 150;
+constexpr int FOOTER_Y0 = 153;
+constexpr int FOOTER_Y1 = 169;
 }  // namespace StockScreenLayout
 
 struct ChartRange {
@@ -32,7 +36,7 @@ struct ChartRange {
 };
 
 namespace StockScreenMath {
-ChartRange chartRange(const IntradaySeries& series, double prevClose);
+ChartRange chartRange(const IntradaySeries& series, double prevClose, double openPrice = 0);
 int chartX(uint16_t minuteOfDay);
 int chartY(double price, const ChartRange& range);
 std::string truncateUtf8(const std::string& text, size_t maxCodepoints);

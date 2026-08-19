@@ -11,6 +11,13 @@
 #include "MarketDataWorker.h"
 #include "ProviderFailover.h"
 
+struct DataChannelHealth {
+  ProviderError lastError = ProviderError::NONE;
+  uint32_t lastAttemptMs = 0;
+  uint32_t lastSuccessMs = 0;
+  uint32_t consecutiveFailures = 0;
+};
+
 struct StockCacheEntry {
   QuoteSnapshot quote;
   IntradaySeries intraday;
@@ -18,9 +25,8 @@ struct StockCacheEntry {
   bool hasIntraday = false;
   uint32_t quoteUpdatedMs = 0;
   uint32_t intradayUpdatedMs = 0;
-  uint32_t lastQuoteAttemptMs = 0;
-  uint32_t lastIntradayAttemptMs = 0;
-  ProviderError lastError = ProviderError::NONE;
+  DataChannelHealth quoteHealth;
+  DataChannelHealth intradayHealth;
 };
 
 struct StockViewModel {
@@ -34,6 +40,12 @@ struct StockViewModel {
   bool hasIntraday = false;
   MarketStatus marketStatus = MarketStatus::UNKNOWN;
   uint32_t dataAgeSeconds = 0;
+  uint32_t quoteAgeSeconds = 0;
+  uint32_t intradayAgeSeconds = 0;
+  ProviderError quoteError = ProviderError::NONE;
+  ProviderError intradayError = ProviderError::NONE;
+  bool quoteDelayed = false;
+  bool intradayDelayed = false;
   bool wifiOnline = false;
   ProviderId provider = ProviderId::EAST_MONEY;
   std::string errorBadge;
@@ -59,10 +71,12 @@ class StockController {
     MarketRequestType type = MarketRequestType::QUOTE;
     StockSymbol symbol;
     ProviderId provider = ProviderId::EAST_MONEY;
+    MarketRequestPriority priority = MarketRequestPriority::CURRENT_QUOTE;
   };
 
   bool enqueueRequest(size_t stockIndex, MarketRequestType type, ProviderId provider, uint32_t nowMs);
-  bool hasOutstanding(const StockSymbol& symbol, MarketRequestType type) const;
+  bool hasOutstandingAtOrAbove(const StockSymbol& symbol, MarketRequestType type,
+                               MarketRequestPriority priority) const;
   size_t cacheIndexFor(const StockSymbol& symbol) const;
   bool quoteIsForLocalDate(const QuoteSnapshot& quote, const LocalDateTime& local) const;
   static int dateKey(const LocalDateTime& local);

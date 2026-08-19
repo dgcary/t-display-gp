@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the TFT_eSPI compile-time contract for LILYGO T-Display-S3."""
+"""Validate the T-Display-S3 TFT and logical-orientation contract."""
 from pathlib import Path
 import sys
 
@@ -45,9 +45,25 @@ required_native_test_wiring = {
     "+<ui/StockScreen.cpp>",
 }
 missing_native = sorted(item for item in required_native_test_wiring if item not in text)
+
 forbidden = ["-DTFT_RGB_ORDER=TFT_BGR"]
 present_forbidden = [flag for flag in forbidden if flag in text]
-if missing or present_forbidden or missing_native:
+
+device = Path("src/device/DeviceLayer.cpp").read_text(encoding="utf-8")
+screen = Path("src/ui/StockScreen.h").read_text(encoding="utf-8")
+required_landscape = {
+    "DeviceLayer.cpp": ["tft_.setRotation(3)"],
+    "StockScreen.h": ["SCREEN_WIDTH = 320", "SCREEN_HEIGHT = 170"],
+}
+missing_landscape = []
+for needle in required_landscape["DeviceLayer.cpp"]:
+    if needle not in device:
+        missing_landscape.append(f"DeviceLayer.cpp: {needle}")
+for needle in required_landscape["StockScreen.h"]:
+    if needle not in screen:
+        missing_landscape.append(f"StockScreen.h: {needle}")
+
+if missing or present_forbidden or missing_native or missing_landscape:
     if missing:
         print("missing TFT contract flags:")
         for flag in missing:
@@ -60,5 +76,10 @@ if missing or present_forbidden or missing_native:
         print("forbidden TFT contract flags:")
         for flag in present_forbidden:
             print(f"  {flag}")
+    if missing_landscape:
+        print("missing landscape contract:")
+        for item in missing_landscape:
+            print(f"  {item}")
     sys.exit(1)
-print("T-Display-S3 TFT build contract: OK")
+
+print("T-Display-S3 TFT + 320x170 landscape contract: OK")

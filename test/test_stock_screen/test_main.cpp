@@ -5,32 +5,35 @@
 void setUp() {}
 void tearDown() {}
 
-void test_layout_matches_170x320_design() {
-  TEST_ASSERT_EQUAL(0, StockScreenLayout::HEADER_Y0);
-  TEST_ASSERT_EQUAL(28, StockScreenLayout::HEADER_Y1);
-  TEST_ASSERT_EQUAL(30, StockScreenLayout::PRICE_Y0);
-  TEST_ASSERT_EQUAL(86, StockScreenLayout::PRICE_Y1);
-  TEST_ASSERT_EQUAL(8, StockScreenLayout::CHART_X0);
-  TEST_ASSERT_EQUAL(162, StockScreenLayout::CHART_X1);
-  TEST_ASSERT_EQUAL(172, StockScreenLayout::CHART_Y0);
-  TEST_ASSERT_EQUAL(292, StockScreenLayout::CHART_Y1);
-  TEST_ASSERT_EQUAL(296, StockScreenLayout::FOOTER_Y0);
-  TEST_ASSERT_EQUAL(319, StockScreenLayout::FOOTER_Y1);
+void test_layout_fits_320x170_landscape() {
+  TEST_ASSERT_EQUAL(320, StockScreenLayout::SCREEN_WIDTH);
+  TEST_ASSERT_EQUAL(170, StockScreenLayout::SCREEN_HEIGHT);
+  TEST_ASSERT_TRUE(StockScreenLayout::LEFT_X0 >= 0);
+  TEST_ASSERT_TRUE(StockScreenLayout::LEFT_X1 < StockScreenLayout::SCREEN_WIDTH);
+  TEST_ASSERT_TRUE(StockScreenLayout::CHART_X0 > StockScreenLayout::LEFT_X1);
+  TEST_ASSERT_TRUE(StockScreenLayout::CHART_X1 < StockScreenLayout::SCREEN_WIDTH);
+  TEST_ASSERT_TRUE(StockScreenLayout::CHART_Y0 >= 0);
+  TEST_ASSERT_TRUE(StockScreenLayout::CHART_Y1 < StockScreenLayout::SCREEN_HEIGHT);
+  TEST_ASSERT_TRUE(StockScreenLayout::FOOTER_Y1 < StockScreenLayout::SCREEN_HEIGHT);
+  TEST_ASSERT_TRUE(StockScreenLayout::CHART_Y1 - StockScreenLayout::CHART_Y0 + 1 >= 145);
 }
 
-void test_chart_range_includes_prev_close_and_forces_minimum_span() {
+void test_chart_range_includes_prev_close_open_and_forces_minimum_span() {
   IntradaySeries flat = {{570, 100.0f, 100.0f, 0}, {571, 100.05f, 100.0f, 0}};
-  const ChartRange padded = StockScreenMath::chartRange(flat, 100.0);
+  const ChartRange padded = StockScreenMath::chartRange(flat, 100.0, 0.0);
   TEST_ASSERT_DOUBLE_WITHIN(0.0001, 99.9, padded.minPrice);
   TEST_ASSERT_DOUBLE_WITHIN(0.0001, 100.1, padded.maxPrice);
 
-  IntradaySeries wide = {{570, 98.0f, 98.0f, 0}, {900, 103.0f, 102.0f, 0}};
-  const ChartRange natural = StockScreenMath::chartRange(wide, 100.0);
-  TEST_ASSERT_DOUBLE_WITHIN(0.0001, 98.0, natural.minPrice);
-  TEST_ASSERT_DOUBLE_WITHIN(0.0001, 103.0, natural.maxPrice);
+  IntradaySeries wide = {{570, 99.0f, 99.0f, 0}, {900, 101.0f, 100.0f, 0}};
+  const ChartRange withOpen = StockScreenMath::chartRange(wide, 100.0, 103.0);
+  TEST_ASSERT_TRUE(withOpen.minPrice <= 99.0);
+  TEST_ASSERT_TRUE(withOpen.maxPrice >= 103.0);
+
+  const ChartRange invalidOpen = StockScreenMath::chartRange(wide, 100.0, 0.0);
+  TEST_ASSERT_DOUBLE_WITHIN(0.0001, 101.0, invalidOpen.maxPrice);
 }
 
-void test_chart_x_preserves_small_lunch_gap() {
+void test_chart_x_preserves_small_lunch_gap_in_right_panel() {
   TEST_ASSERT_EQUAL(StockScreenLayout::CHART_X0, StockScreenMath::chartX(570));
   const int morningClose = StockScreenMath::chartX(690);
   const int afternoonOpen = StockScreenMath::chartX(780);
@@ -56,9 +59,9 @@ void test_utf8_truncation_never_splits_chinese_codepoint() {
 
 int main() {
   UNITY_BEGIN();
-  RUN_TEST(test_layout_matches_170x320_design);
-  RUN_TEST(test_chart_range_includes_prev_close_and_forces_minimum_span);
-  RUN_TEST(test_chart_x_preserves_small_lunch_gap);
+  RUN_TEST(test_layout_fits_320x170_landscape);
+  RUN_TEST(test_chart_range_includes_prev_close_open_and_forces_minimum_span);
+  RUN_TEST(test_chart_x_preserves_small_lunch_gap_in_right_panel);
   RUN_TEST(test_chart_y_maps_max_to_top_and_min_to_bottom);
   RUN_TEST(test_utf8_truncation_never_splits_chinese_codepoint);
   return UNITY_END();

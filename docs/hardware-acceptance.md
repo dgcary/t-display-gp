@@ -1,161 +1,184 @@
 # T-Display-S3 Hardware Acceptance
 
-This checklist separates behavior already covered by host tests from checks that require a physical LILYGO T-Display-S3 and unrestricted network access.
+本清单只用于 **LILYGO T-Display-S3 真机**。Host tests / firmware build 不能代替实体板验收。
 
-## Current acceptance state
+## 当前状态
 
-- Host-domain and behavioral tests: **implemented and passing in the development environment**.
-- Arduino/TFT integration contract compilation with local API stubs: **completed**.
-- Real PlatformIO ESP32-S3 firmware build: **pending** because PlatformIO cannot be installed in the current isolated environment.
-- Physical flash/display/buttons/captive-portal acceptance: **pending** until the actual board is attached.
-- Full live provider matrix: **pending** for endpoints the current environment cannot reach directly.
+- 自动化 native tests：由 GitHub Actions 验证
+- ESP32-S3 firmware build：由 GitHub Actions 验证
+- 实体 flash / 横屏 / 按键 / Wi-Fi / 实时行情稳定性：**PENDING，必须在真机完成**
 
-Do not change any PENDING item to PASS without running the corresponding procedure.
+每次真机验收记录：branch、40 位 commit SHA、日期、Wi-Fi 环境和结果。
 
-## 1. Build and flash
-
-On a machine with PlatformIO and USB access:
+## 1. Build / Flash
 
 ```bash
 pio test -e native
+python tools/validate_tdisplay_setup.py
+python tools/validate_provisioning_contract.py
+python tools/validate_http_transport_contract.py
 pio run -e lilygo-t-display-s3
-pio run -e lilygo-t-display-s3 -t upload
-pio device monitor -b 115200
+pio run -e lilygo-t-display-s3 -t upload --upload-port <PORT>
+pio device monitor --port <PORT> -b 115200
 ```
 
-For first-boot provisioning acceptance, erase NVS/flash before the upload if the board has prior Wi-Fi/configuration state.
+要求：无启动循环、panic、watchdog、MarketDataWorker 启动失败。
 
-Pass criteria:
+## 2. 屏幕与按键
 
-- firmware builds without warnings promoted to errors by project settings;
-- device boots repeatedly without reset loop;
-- Serial output does not show allocation, watchdog, queue or HTTP worker startup failures.
+硬件不变量：
 
-## 2. Display and buttons
+- GPIO15 屏幕供电 HIGH
+- GPIO38 背光
+- GPIO0 上一只
+- GPIO14 下一只
+- ST7789 物理 170×320
+- 应用逻辑 **320×170 横屏**
 
-Hardware expectations:
+通过标准：
 
-- display power GPIO15 is asserted HIGH before TFT initialization;
-- TFT_eSPI uses LCD backlight GPIO38 with active-HIGH control;
-- portrait display is 170×320;
-- previous stock button is GPIO0;
-- next stock button is GPIO14;
-- buttons use internal pull-up and active-low input.
+- 横屏方向正确，无裁切/花屏
+- 中文名称可读
+- 正涨红、下跌绿
+- 左侧价格/涨跌/开高低昨/量额布局可读
+- 右侧分时图充分利用屏幕
+- `昨收` 与 `今开` 参考线可区分；今开无效时不绘制
+- 午休 11:30→13:00 不画假连续线
+- 每次按键只切一只；长按不自动连跳
+- 快速切股无明显 UI 卡死
 
-Pass criteria:
+## 3. 首次配网
 
-- screen powers on with correct orientation and no obvious corruption;
-- Chinese names are legible;
-- current price/change/open/high/low/prev-close/volume/amount fit the intended regions;
-- intraday chart fits without crossing the footer;
-- lunchtime is visibly discontinuous rather than drawing a false 11:30→13:00 line;
-- each physical press advances exactly one stock; holding a button does not auto-repeat;
-- repeated page changes do not cause obvious full-screen flashing beyond intentional full redraw on symbol change.
+擦除/无有效配置后：
 
-## 3. Factory provisioning
+1. `TDisplay-GP-Setup` 可见
+2. 手机可进入 Captive Portal
+3. 可保存 Wi-Fi + 3–5 股票 + 3/4/5 秒刷新
+4. 保存后受控重启
+5. 重启后自动连 Wi-Fi
+6. 串口最终出现：
 
-With Wi-Fi/configuration erased or invalid:
+```text
+[boot] market loop ready
+```
 
-1. Power the board.
-2. Confirm AP `TDisplay-GP-Setup` appears without a V1 password.
-3. Connect a phone to that AP.
-4. Confirm the captive portal opens; if the OS does not auto-open it, browse to `192.168.4.1`.
-5. Select Wi-Fi and enter 3–5 A-share symbols, optional names, and a 3–5 second quote interval.
-6. Save.
+## 4. 行情基本功能
 
-Pass criteria:
+建议至少测试 SSE、SZSE、BSE 示例。
 
-- no serial terminal is required for initial setup;
-- invalid stock count/code/refresh interval is rejected rather than persisted;
-- valid settings survive restart;
-- after successful Wi-Fi association the normal stock UI starts.
+验证：
 
-## 4. LAN settings page
+- 当前价和指标合理
+- 报价按配置周期持续更新
+- 分时独立刷新
+- EastMoney 正常时 footer 为 EM
+- EastMoney quote 连续故障后腾讯 quote fallback 能工作
+- 分时仍保持 EastMoney-only，不擅自切腾讯趋势
 
-While the device is on the normal LAN:
+BSE 腾讯备用若真机不符合现有 schema，记录为限制，不猜字段/前缀。
 
-- open the device IP in a phone browser;
-- change the stock pool and/or refresh interval;
-- save;
-- exercise the dedicated Wi-Fi reconfiguration action.
+## 5. `[md]` 请求日志
 
-Pass criteria:
+行情运行时必须能看到类似：
 
-- `/api/status` is reachable;
-- `/api/config` returns/saves valid configuration;
-- settings save first, then the device performs the controlled restart;
-- Wi-Fi reconfiguration restarts into the captive portal;
-- no half-updated running controller state is visible before restart.
+```text
+[md] id=... type=QUOTE|INTRADAY|PROBE symbol=... provider=EM|TX attempt=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
+```
 
-## 5. Live market-data smoke test
+发生失败时记录实际设备错误，不把 Windows Schannel/curl 错误直接等同为 ESP32 错误。
 
-Suggested symbols:
+Transport 真机预期：
 
-- SSE: `600519` 贵州茅台
-- SZSE: `300750` 宁德时代
-- BSE: `920047` 诺思兰德
+- TCP/connect 上限约 1.5 秒
+- TLS handshake 显式上限 5 秒
+- HTTP/read timeout setting 2.5 秒
+- 单个异常请求不应因 Arduino-ESP32 默认 120 秒 TLS handshake timeout 长时间占住唯一 Worker
 
-During an active A-share session, verify for each supported symbol:
+## 6. 分时失败恢复
 
-- current price and daily metrics are plausible against a second market source;
-- provider timestamp is for the current China-local trading date;
-- current symbol refreshes at the configured 3–5 second interval;
-- intraday trend refreshes independently every 60 seconds;
-- cached data stays visible if one network request fails.
+在 EastMoney trends2 波动时重点验证：
 
-BSE-specific rule: if Tencent `bj920047` does not return the expected quote schema on the actual network, record Tencent+BSE as unsupported and keep BSE on EastMoney rather than guessing a new prefix or parser.
+- 单次分时失败不清空旧图
+- 单次分时失败不把正常报价标成全局“数据异常”
+- 分时 transient failure 最多 3 次尝试
+- 重试之间报价仍有机会优先执行
+- 新股票的 pending 分时可替换已过时、尚未执行的旧分时
+- 分时持续过旧时显示 `分时延迟`
+- 后续分时成功后自动恢复正常状态
 
-## 6. Session-state acceptance
+## 7. Quote / Intraday 状态隔离
 
-Host acceptance tests already cover the scheduler with a controlled clock. Real-device verification should still observe these transitions once convenient:
+验证：
 
-- pre-open: no 3–5 second high-frequency loop;
-- 09:30/09:31: trading refresh starts without being blocked by yesterday's cache;
-- 11:30→13:00 lunch: quote polling drops to 60 seconds and chart keeps the lunch gap;
-- 13:00: normal trading refresh resumes;
-- after 15:00: UI shows closed state and retains final quote/chart;
-- next trading day: refresh resumes automatically;
-- weekday holiday: a successful stale provider quote after the 09:31 grace point confirms NON_TRADING_DAY rather than remaining in a high-frequency loop.
+- quote 失败不会清空 intraday cache
+- intraday 成功不会清除 quote 错误
+- intraday 失败不会污染 quote health
+- quote 成功不会错误清掉 intraday health
+- 活跃交易时 quote age >=15 秒时可显示 `报价延迟`
+- 活跃交易时 intraday age >=180 秒时可显示 `分时延迟`
+- 午休、收盘、休市时缓存自然变旧不会误报延迟
 
-## 7. Resilience acceptance
+## 8. Wi-Fi 中断
 
-### Wi-Fi interruption
+加载有效画面后断 Wi-Fi 至少 2 分钟：
 
-1. Let valid quote/chart data load.
-2. Disable the AP/router or otherwise block Wi-Fi for at least two minutes.
-3. Use both stock buttons while offline.
-4. Restore Wi-Fi.
+- 显示 `离线`
+- 已有报价/分时仍可查看
+- 按键仍响应
+- UI 不等待 HTTP 卡死
+- Wi-Fi 恢复后无需人工重启即可恢复请求
 
-Pass criteria:
+## 9. 稳定性量化验收
 
-- cached screens remain usable;
-- no UI freeze waiting for HTTP;
-- offline/error badge is visible as applicable;
-- data resumes without reboot after connectivity returns.
+交易时段使用 5 只股票：
 
-### Provider fallback
+```text
+股票切换 >=100 次
+quote 请求 >=500 次
+quote 成功率目标 >=99%（测试网络条件）
+intraday 刷新周期 >=30 个
+intraday 有限重试后周期成功率目标 >=80%
+健康 quote Provider 下当前报价 P95 更新间隔 <=7 秒
+单次 intraday 失败时 quote gap <=10 秒
+intraday P95 age <=180 秒
+watchdog = 0
+unexpected reboot = 0
+cache loss = 0
+```
 
-In a controlled build/test network, make EastMoney quote requests fail while Tencent remains reachable.
+如果 30+ 分时周期最终成功率仍 <80%，进入分时备用 Provider 的独立设计评审；不要无限重试或放宽 parser。
 
-Pass criteria:
+## 10. 完整交易日
 
-- after three EastMoney failures within 60 seconds, quote provider changes to Tencent;
-- intraday cache is retained;
-- EastMoney recovery probes occur no faster than once per 120 seconds;
-- two successful primary probes restore EastMoney;
-- a failed recovery probe resets the consecutive recovery count.
+最终目标：至少运行一次 **09:25–15:10**：
 
-## 8. Long-run check
+- 开盘前
+- 上午盘
+- 午休
+- 下午盘
+- 收盘
 
-Leave the device powered through at least one full session transition, preferably overnight.
-
-Pass criteria:
-
-- no watchdog reboot or progressive UI slowdown;
-- no obvious heap exhaustion after repeated HTTP/JSON operations;
-- next-day transition does not treat yesterday's cached timestamp as proof that the new day is closed;
-- persisted Wi-Fi and stock configuration survive ordinary power cycling.
+要求全程无异常重启/卡死/缓存丢失，收盘后保留最终报价与分时图。
 
 ## Acceptance record
 
-Record real-device results here or in a GitHub issue/PR with firmware commit SHA, board revision, Wi-Fi environment, date and observed failures. The current development session intentionally leaves physical-only checks as PENDING.
+建议在 PR/Issue 或部署记录中写：
+
+```text
+Repository: dgcary/t-display-gp
+Branch:
+Commit SHA:
+Board: LILYGO T-Display-S3
+Port:
+Wi-Fi:
+Date:
+Host tests:
+Firmware build:
+Flash:
+Smoke:
+Stability:
+Full-day:
+Notes:
+```
+
+没有实体板证据的项目必须保持 PENDING。
