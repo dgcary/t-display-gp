@@ -43,7 +43,7 @@ const MarketRequest* lastRequest(const FakeQueue& queue, MarketRequestType type)
   return nullptr;
 }
 
-void failQuote(FakeQueue& queue, const MarketRequest& request) {
+void pushFailure(FakeQueue& queue, const MarketRequest& request) {
   MarketResult result;
   result.requestId = request.requestId;
   result.type = request.type;
@@ -64,7 +64,15 @@ void test_tencent_quote_failover_still_starts_intraday_with_eastmoney() {
     const MarketRequest* quote = lastRequest(queue, MarketRequestType::QUOTE);
     TEST_ASSERT_NOT_NULL(quote);
     TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, quote->provider);
-    failQuote(queue, *quote);
+    pushFailure(queue, *quote);
+
+    // Resolve the first intraday request as a real failed cycle so it does not
+    // remain outstanding and artificially suppress the next 60 s refresh.
+    if (i == 0) {
+      const MarketRequest* intraday = lastRequest(queue, MarketRequestType::INTRADAY);
+      TEST_ASSERT_NOT_NULL(intraday);
+      pushFailure(queue, *intraday);
+    }
     controller.consumeMarketResults();
     now += 5000;
   }
