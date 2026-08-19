@@ -42,6 +42,10 @@ int chartY(double price, const ChartRange& range);
 std::string truncateUtf8(const std::string& text, size_t maxCodepoints);
 }  // namespace StockScreenMath
 
+namespace StockScreenText {
+std::string providerSummary(ProviderId quoteProvider, ProviderId intradayProvider, bool hasIntraday);
+}  // namespace StockScreenText
+
 class StockScreen {
  public:
   void begin(TFT_eSPI& display, U8g2_for_TFT_eSPI& unicodeFont);
@@ -70,6 +74,7 @@ class StockScreen {
     MarketStatus marketStatus = MarketStatus::UNKNOWN;
     bool wifiOnline = false;
     ProviderId provider = ProviderId::EAST_MONEY;
+    ProviderId intradayProvider = ProviderId::EAST_MONEY;
     std::string errorBadge;
   };
 
