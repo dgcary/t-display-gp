@@ -61,6 +61,7 @@ void test_failed_empty_intraday_waits_full_refresh_interval_before_new_cycle() {
 
   const MarketRequest* first = lastRequest(queue, MarketRequestType::INTRADAY);
   TEST_ASSERT_NOT_NULL(first);
+  TEST_ASSERT_EQUAL(ProviderId::TENCENT, first->provider);
   pushFailure(queue, *first);
   controller.consumeMarketResults();
 
@@ -76,10 +77,10 @@ void test_failed_empty_intraday_waits_full_refresh_interval_before_new_cycle() {
   controller.tick(65000, trading());
   const MarketRequest* due = lastRequest(queue, MarketRequestType::INTRADAY);
   TEST_ASSERT_NOT_NULL(due);
-  TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, due->provider);
+  TEST_ASSERT_EQUAL(ProviderId::TENCENT, due->provider);
 }
 
-void test_tencent_quote_failover_does_not_suppress_eastmoney_first_intraday_cycle() {
+void test_eastmoney_quote_fallback_does_not_suppress_tencent_first_intraday_cycle() {
   FakeQueue queue;
   StockController controller(queue);
   controller.begin(config());
@@ -90,11 +91,12 @@ void test_tencent_quote_failover_does_not_suppress_eastmoney_first_intraday_cycl
     controller.tick(now, trading());
     const MarketRequest* quote = lastRequest(queue, MarketRequestType::QUOTE);
     TEST_ASSERT_NOT_NULL(quote);
-    TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, quote->provider);
+    TEST_ASSERT_EQUAL(ProviderId::TENCENT, quote->provider);
     pushFailure(queue, *quote);
     if (i == 0) {
       const MarketRequest* intraday = lastRequest(queue, MarketRequestType::INTRADAY);
       TEST_ASSERT_NOT_NULL(intraday);
+      TEST_ASSERT_EQUAL(ProviderId::TENCENT, intraday->provider);
       pushFailure(queue, *intraday);
     }
     controller.consumeMarketResults();
@@ -105,13 +107,13 @@ void test_tencent_quote_failover_does_not_suppress_eastmoney_first_intraday_cycl
   controller.tick(now, trading());
   const MarketRequest* quote = lastRequest(queue, MarketRequestType::QUOTE);
   TEST_ASSERT_NOT_NULL(quote);
-  TEST_ASSERT_EQUAL(ProviderId::TENCENT, quote->provider);
+  TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, quote->provider);
 
   queue.requests.clear();
   controller.tick(65000, trading());
   const MarketRequest* intraday = lastRequest(queue, MarketRequestType::INTRADAY);
   TEST_ASSERT_NOT_NULL(intraday);
-  TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, intraday->provider);
+  TEST_ASSERT_EQUAL(ProviderId::TENCENT, intraday->provider);
 }
 
 void test_tencent_intraday_success_records_chart_source_without_changing_quote_provider() {
@@ -123,6 +125,7 @@ void test_tencent_intraday_success_records_chart_source_without_changing_quote_p
 
   const MarketRequest* intraday = lastRequest(queue, MarketRequestType::INTRADAY);
   TEST_ASSERT_NOT_NULL(intraday);
+  TEST_ASSERT_EQUAL(ProviderId::TENCENT, intraday->provider);
 
   MarketResult result;
   result.requestId = intraday->requestId;
@@ -135,14 +138,14 @@ void test_tencent_intraday_success_records_chart_source_without_changing_quote_p
 
   TEST_ASSERT_TRUE(controller.viewModel().hasIntraday);
   TEST_ASSERT_EQUAL(ProviderId::TENCENT, controller.viewModel().intradayProvider);
-  TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, controller.viewModel().provider);
+  TEST_ASSERT_EQUAL(ProviderId::TENCENT, controller.viewModel().provider);
   TEST_ASSERT_EQUAL(ProviderError::NONE, controller.viewModel().intradayError);
 }
 
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_failed_empty_intraday_waits_full_refresh_interval_before_new_cycle);
-  RUN_TEST(test_tencent_quote_failover_does_not_suppress_eastmoney_first_intraday_cycle);
+  RUN_TEST(test_eastmoney_quote_fallback_does_not_suppress_tencent_first_intraday_cycle);
   RUN_TEST(test_tencent_intraday_success_records_chart_source_without_changing_quote_provider);
   return UNITY_END();
 }
