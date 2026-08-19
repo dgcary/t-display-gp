@@ -256,6 +256,7 @@ class MarketDataWorker final : public IMarketDataQueue {
   MarketDataWorker& operator=(const MarketDataWorker&) = delete;
 
   bool begin();
+  void setPaused(bool paused);
   bool enqueue(const MarketRequest& request) override;
   bool tryReceive(MarketResult& result) override;
 
