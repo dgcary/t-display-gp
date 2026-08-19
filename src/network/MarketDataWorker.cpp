@@ -62,6 +62,7 @@ struct MarketDataWorker::Impl {
   SemaphoreHandle_t pendingMutex = nullptr;
   TaskHandle_t workerTask = nullptr;
   bool started = false;
+  bool paused = false;
 
   void cleanupPrimitives() {
     if (resultQueue) { vQueueDelete(resultQueue); resultQueue = nullptr; }
@@ -103,7 +104,7 @@ struct MarketDataWorker::Impl {
 
   bool installRetry(const MarketRequest& retry) {
     if (xSemaphoreTake(pendingMutex, portMAX_DELAY) != pdTRUE) return false;
-    const bool installed = pending.installRetryIfEmpty(retry);
+    const bool installed = !paused && pending.installRetryIfEmpty(retry);
     xSemaphoreGive(pendingMutex);
     return installed;
   }
@@ -166,7 +167,7 @@ struct MarketDataWorker::Impl {
 
       if (xSemaphoreTake(pendingMutex, portMAX_DELAY) == pdTRUE) {
         cancelledNow.swap(cancelled);
-        haveRequest = pending.popNextReady(nowMs, request, expired);
+        if (!paused) haveRequest = pending.popNextReady(nowMs, request, expired);
         xSemaphoreGive(pendingMutex);
       }
 
@@ -217,9 +218,21 @@ bool MarketDataWorker::begin() {
   return true;
 }
 
+void MarketDataWorker::setPaused(bool paused) {
+  if (!impl_->started || !impl_->pendingMutex) return;
+  if (xSemaphoreTake(impl_->pendingMutex, portMAX_DELAY) != pdTRUE) return;
+  impl_->paused = paused;
+  xSemaphoreGive(impl_->pendingMutex);
+  if (!paused && impl_->workerTask) xTaskNotifyGive(impl_->workerTask);
+}
+
 bool MarketDataWorker::enqueue(const MarketRequest& request) {
   if (!impl_->started || !request.symbol.valid()) return false;
   if (xSemaphoreTake(impl_->pendingMutex, 0) != pdTRUE) return false;
+  if (impl_->paused) {
+    xSemaphoreGive(impl_->pendingMutex);
+    return false;
+  }
   const PendingAddResult result = impl_->pending.add(request);
   if (result.accepted && result.replaced) impl_->cancelled.push_back(result.replacedRequest);
   xSemaphoreGive(impl_->pendingMutex);
