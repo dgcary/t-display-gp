@@ -59,7 +59,7 @@ void WeatherController::consumeResults(uint32_t nowMs) {
       cache_ = result.weather;
       hasData_ = true;
       hasSuccessTime_ = true;
-      lastSuccessMs_ = nowMs;
+      lastSuccessMs_ = result.completedMs != 0 ? result.completedMs : nowMs;
       lastError_ = WeatherError::NONE;
     } else {
       lastError_ = result.error;
