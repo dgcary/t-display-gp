@@ -31,7 +31,7 @@ void DeviceInfoScreen::render(const DeviceInfoViewModel& model, bool) {
   unicodeFont_->print("配置 IP");
 
   display_->setTextDatum(TL_DATUM);
-  display_->setTextColor(model.wifiOnline ? UiTheme::ACCENT : UiTheme::WARNING, UiTheme::BACKGROUND);
+  display_->setTextColor(model.wifiOnline ? UiTheme::CHART : UiTheme::WARNING, UiTheme::BACKGROUND);
   display_->setTextFont(2);
   display_->setTextSize(2);
   display_->drawString(model.ip.empty() ? "0.0.0.0" : model.ip.c_str(), 68, 27);
@@ -44,7 +44,7 @@ void DeviceInfoScreen::render(const DeviceInfoViewModel& model, bool) {
   unicodeFont_->print(line);
 
   std::snprintf(line, sizeof(line), "RSSI  %d dBm", model.rssi);
-  unicodeFont_->setForegroundColor(model.rssi >= -67 ? UiTheme::UP : UiTheme::WARNING);
+  unicodeFont_->setForegroundColor(model.rssi >= -67 ? UiTheme::CHART : UiTheme::WARNING);
   unicodeFont_->setCursor(9, 91);
   unicodeFont_->print(line);
   unicodeFont_->setForegroundColor(UiTheme::MUTED);
@@ -69,7 +69,7 @@ void DeviceInfoScreen::render(const DeviceInfoViewModel& model, bool) {
   unicodeFont_->setCursor(9, 150);
   unicodeFont_->print(line);
 
-  unicodeFont_->setForegroundColor(UiTheme::ACCENT);
+  unicodeFont_->setForegroundColor(UiTheme::CHART);
   std::snprintf(line, sizeof(line), "Web: http://%s/", model.ip.empty() ? "0.0.0.0" : model.ip.c_str());
   unicodeFont_->setCursor(9, 167);
   unicodeFont_->print(line);
