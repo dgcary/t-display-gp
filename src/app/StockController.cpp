@@ -105,9 +105,11 @@ void StockController::tick(uint32_t nowMs, const LocalDateTime& local) {
     const bool due = !current.hasQuote || current.quoteHealth.lastAttemptMs == 0 ||
                      elapsed(nowMs, current.quoteHealth.lastAttemptMs) >= interval;
     if (due) scheduleTradingCycle(nowMs);
-    if (failover_.activeProvider(nowMs) == ProviderId::EAST_MONEY &&
-        (!current.hasIntraday || current.intradayHealth.lastAttemptMs == 0 ||
-         elapsed(nowMs, current.intradayHealth.lastAttemptMs) >= BuildConfig::INTRADAY_REFRESH_MS)) {
+    if (!current.hasIntraday || current.intradayHealth.lastAttemptMs == 0 ||
+        elapsed(nowMs, current.intradayHealth.lastAttemptMs) >= BuildConfig::INTRADAY_REFRESH_MS) {
+      // Intraday provider health is independent of quote failover. Each new
+      // cycle starts with EastMoney; MarketDataWorker falls back to Tencent
+      // only if the EastMoney trend request cannot complete successfully.
       enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::EAST_MONEY, nowMs);
     }
   } else {
@@ -145,7 +147,7 @@ void StockController::scheduleForCurrent(uint32_t nowMs, bool forceStaleOnly) {
   if (!forceStaleOnly || quoteStale) {
     enqueueRequest(currentIndex_, MarketRequestType::QUOTE, failover_.activeProvider(nowMs), nowMs);
   }
-  if (failover_.activeProvider(nowMs) == ProviderId::EAST_MONEY && (!forceStaleOnly || intradayStale)) {
+  if (!forceStaleOnly || intradayStale) {
     enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::EAST_MONEY, nowMs);
   }
 }
@@ -257,6 +259,7 @@ void StockController::consumeMarketResults() {
     if (context.type == MarketRequestType::INTRADAY) {
       cache.intraday = std::move(result.intraday);
       cache.hasIntraday = true;
+      cache.intradayProvider = result.provider;
       cache.intradayUpdatedMs = lastNowMs_;
       cache.intradayHealth.lastSuccessMs = lastNowMs_;
       cache.intradayHealth.lastError = ProviderError::NONE;
@@ -307,6 +310,7 @@ void StockController::publishView() {
     next.hasIntraday = cache.hasIntraday;
     next.quote = cache.hasQuote ? &cache.quote : nullptr;
     next.intraday = cache.hasIntraday ? &cache.intraday : nullptr;
+    next.intradayProvider = cache.intradayProvider;
     next.displayName = !config_.stocks[currentIndex_].displayName.empty()
                            ? config_.stocks[currentIndex_].displayName
                            : cache.hasQuote ? cache.quote.name : next.symbol.canonical();
