@@ -52,6 +52,8 @@ struct AppDataWorker::Impl {
 
   void execute(std::unique_ptr<AppDataRequest> request) {
     if (!request) return;
+    const uint32_t startedMs = millis();
+    const uint32_t queueWaitMs = static_cast<uint32_t>(startedMs - request->createdMs);
     std::unique_ptr<AppDataResult> result(new (std::nothrow) AppDataResult());
     if (!result) return;
 
@@ -61,7 +63,7 @@ struct AppDataWorker::Impl {
       result->error = weather.fetch(request->location, result->weather, &result->diagnostics);
       Serial.printf("[appdata] id=%lu type=WEATHER location=%s queue=%lums dur=%lums http=%d native=%d tls=%d bytes=%u/%ld result=%s\n",
                     static_cast<unsigned long>(request->requestId), request->location.displayName.c_str(),
-                    static_cast<unsigned long>(millis() - request->createdMs),
+                    static_cast<unsigned long>(queueWaitMs),
                     static_cast<unsigned long>(result->diagnostics.elapsedMs),
                     result->diagnostics.httpStatus, result->diagnostics.nativeError,
                     result->diagnostics.tlsError,
