@@ -35,7 +35,7 @@ pio run -e lilygo-t-display-s3
 
 任一失败：**禁止烧录**。
 
-CI 同时验证 Ubuntu native 与 Windows native。TFT/UI contract 还会验证 rotation 3、WeatherVisuals native wiring、Weather Unicode 条件文本以及股票独立报价/分时 Provider 页脚接线。
+CI 同时验证 Ubuntu native 与 Windows native。TFT/UI contract 还会验证 Arduino C++17 构建契约、rotation 3、WeatherVisuals/WeatherCatArt native wiring、Weather Unicode 条件文本以及股票独立报价/分时 Provider 页脚接线。
 
 ## 4. 烧录
 
@@ -115,10 +115,10 @@ GPIO14 长按 -> 进入选中 App
 [md] id=... type=QUOTE|INTRADAY|PROBE symbol=... provider=EM|TX attempt=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
 ```
 
-东财分时交给腾讯时还应看到：
+正常情况下报价和分时都优先走腾讯。腾讯分时周期最终交给东方财富时应看到：
 
 ```text
-[md] id=... type=INTRADAY symbol=... fallback=EM->TX
+[md] id=... type=INTRADAY symbol=... fallback=TX->EM
 ```
 
 ### 天气 / App 数据
@@ -148,31 +148,39 @@ GPIO14 长按 -> 进入选中 App
 7. DeviceInfo 显示真实 IP、SSID、RSSI、MAC、Heap、uptime
 8. `Web: http://<IP>/` 能从同一 LAN 访问
 9. Weather 显示地点、当前天气、三日高低温和中文天气状态
-10. 右侧天气小猫持续两帧轻动画，无整屏闪烁/花屏
+10. 右侧**手绘水彩风小猫**持续两帧轻动画，无整屏闪烁/花屏
 11. 返回股票后旧股票缓存立即可见
 12. 串口无 watchdog / Guru Meditation / 异常 reboot
 
-## 10. 股票分时 fallback 检查
+## 10. 股票 Provider / 分时 fallback 检查
 
-新的分时行为与报价 failover 独立：
+当前策略：
 
 ```text
-新分时周期
-  -> EastMoney intraday
+报价：
+Tencent primary
+  -> 连续失败达到阈值
+  -> EastMoney fallback
+  -> 周期性探测 Tencent
+  -> 连续恢复成功后回 Tencent
+
+分时：
+Tencent intraday
   -> transient 时按既有有限重试
   -> 最终失败/非重试错误
-  -> Tencent minute fallback
+  -> EastMoney intraday fallback
 ```
 
 真机观察：
 
-- 每个新周期仍先 `provider=EM`
-- EM 最终失败后出现 `fallback=EM->TX`
-- 腾讯成功后图表出现/更新
-- 页脚 `I:TX`
-- 报价来源单独显示为 `Q:EM` 或 `Q:TX`
-- Tencent intraday 成功/失败均不得改变 quote failover 健康
-- EM+TX 都失败时旧图保留且不会紧密循环；下个周期等待正常分时刷新间隔后重新从 EM 开始
+- 正常状态优先出现 `provider=TX`
+- 新分时周期先 `provider=TX`
+- Tencent 最终分时失败后出现 `fallback=TX->EM`
+- EastMoney 成功后图表出现/更新，页脚 `I:EM`
+- 正常腾讯分时成功时页脚 `I:TX`
+- 报价来源单独显示为 `Q:TX` 或 fallback `Q:EM`
+- Intraday 成功/失败不得改变 quote failover 健康
+- TX+EM 分时都失败时旧图保留且不会 tight loop；下个周期等待正常分时刷新间隔后重新从 TX 开始
 
 ## 11. 网络隔离检查
 
@@ -199,7 +207,7 @@ cache loss = 0
 明显持续 Heap 泄漏 = 0
 ```
 
-股票原有交易时段量化目标与腾讯分时 fallback 细节见 `hardware-acceptance.md`。
+股票原有交易时段量化目标与 Provider fallback 细节见 `hardware-acceptance.md`。
 
 ## 13. 状态判定
 
@@ -212,7 +220,8 @@ FIRMWARE BUILD PASS
 FLASH PASS
 DEVICE INFO PASS
 WEATHER LIVE/UI PASS
-TENCENT INTRADAY FALLBACK PASS
+TENCENT PRIMARY PASS
+TX->EM FALLBACK PASS / NOT TRIGGERED
 STOCK STABILITY PASS
 FULL HARDWARE ACCEPTANCE PASS
 ```
@@ -229,9 +238,13 @@ FULL HARDWARE ACCEPTANCE PASS
 
 这是预期降级：保留旧缓存并显示天气错误/延迟。检查 `[appdata]`，不要通过高频无限重试修复。
 
-### 报价正常但分时图不更新
+### 腾讯报价或分时异常
 
-先看 `[md]`。若 EastMoney `trends2` TLS/HTTP 失败，应继续观察是否出现 `fallback=EM->TX` 以及后续 `provider=TX type=INTRADAY`。不要因为东财不稳定就放宽 Parser 或影响已经正常工作的腾讯报价。
+先看 `[md]`。正常路径应优先 `provider=TX`。若 Tencent 分时最终失败，应继续观察 `fallback=TX->EM` 和后续 `provider=EM type=INTRADAY`。不要通过放宽 Parser 或无限延长 timeout 掩盖数据源问题。
+
+### 东方财富备用仍然失败
+
+这是允许的降级场景。EastMoney 现在只是 secondary；若腾讯正常，主行情不应受影响。若 TX 和 EM 都失败，保留最后有效缓存并等待正常调度周期，不递归增加第三层或 tight retry。
 
 ### 返回菜单后仍看到一条股票请求完成
 
