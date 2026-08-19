@@ -7,6 +7,7 @@
 #include <ctime>
 
 #include "UiTheme.h"
+#include "WeatherCatArt.h"
 #include "WeatherVisuals.h"
 
 namespace {
@@ -14,6 +15,20 @@ constexpr int PET_X0 = 202;
 constexpr int PET_Y0 = 26;
 constexpr int PET_W = 118;
 constexpr int PET_H = 94;
+
+// Warm, low-saturation RGB565 palette used to imitate layered watercolor
+// washes on the small black panel without allocating a bitmap or sprite.
+constexpr uint16_t CAT_INK = 0x528A;
+constexpr uint16_t CAT_WASH_EDGE = 0xDEB3;
+constexpr uint16_t CAT_WASH = 0xF735;
+constexpr uint16_t CAT_WASH_LIGHT = 0xFF9A;
+constexpr uint16_t CAT_PATCH = 0xC4CC;
+constexpr uint16_t CAT_PATCH_LIGHT = 0xE651;
+constexpr uint16_t CAT_SHADOW = 0x3186;
+constexpr uint16_t CAT_BLUSH = 0xFCD3;
+constexpr uint16_t CAT_NOSE = 0xF36E;
+constexpr uint16_t CAT_SCARF = 0x5D9F;
+constexpr uint16_t CAT_UMBRELLA = 0xE45D;
 
 const char* conditionName(int code) {
   if (code == 0) return "晴";
@@ -99,97 +114,186 @@ void drawWeatherBackdrop(TFT_eSPI& tft, WeatherVisualKind kind, uint8_t frame) {
   const int drift = frame ? 2 : 0;
   switch (kind) {
     case WeatherVisualKind::CLEAR:
-      tft.fillCircle(292, 43 + drift, 9, UiTheme::WEATHER_SUN);
-      tft.drawLine(292, 29 + drift, 292, 34 + drift, UiTheme::WEATHER_SUN);
-      tft.drawLine(292, 52 + drift, 292, 58 + drift, UiTheme::WEATHER_SUN);
-      tft.drawLine(278, 43 + drift, 283, 43 + drift, UiTheme::WEATHER_SUN);
-      tft.drawLine(301, 43 + drift, 307, 43 + drift, UiTheme::WEATHER_SUN);
+      tft.fillCircle(298, 43 + drift, 8, UiTheme::WEATHER_SUN);
+      tft.drawLine(298, 30 + drift, 298, 34 + drift, UiTheme::WEATHER_SUN);
+      tft.drawLine(298, 52 + drift, 298, 57 + drift, UiTheme::WEATHER_SUN);
+      tft.drawLine(286, 43 + drift, 290, 43 + drift, UiTheme::WEATHER_SUN);
+      tft.drawLine(306, 43 + drift, 311, 43 + drift, UiTheme::WEATHER_SUN);
       break;
     case WeatherVisualKind::CLOUDY:
-      tft.fillCircle(284 + drift, 42, 8, UiTheme::WEATHER_FOG);
-      tft.fillCircle(295 + drift, 39, 11, UiTheme::WEATHER_FOG);
-      tft.fillCircle(306 + drift, 43, 7, UiTheme::WEATHER_FOG);
-      tft.fillRoundRect(278 + drift, 42, 34, 9, 4, UiTheme::WEATHER_FOG);
+      tft.fillCircle(288 + drift, 39, 7, UiTheme::WEATHER_FOG);
+      tft.fillCircle(298 + drift, 37, 9, UiTheme::WEATHER_FOG);
+      tft.fillCircle(307 + drift, 41, 6, UiTheme::WEATHER_FOG);
+      tft.fillRoundRect(282 + drift, 40, 31, 8, 4, UiTheme::WEATHER_FOG);
       break;
     case WeatherVisualKind::FOG:
       for (int i = 0; i < 3; ++i) {
-        tft.drawFastHLine(274 + (i == 1 ? drift : 0), 35 + i * 8, 37, UiTheme::WEATHER_FOG);
+        tft.drawFastHLine(279 + (i == 1 ? drift : 0), 34 + i * 8, 34, UiTheme::WEATHER_FOG);
       }
       break;
     case WeatherVisualKind::RAIN:
     case WeatherVisualKind::STORM:
-      tft.fillCircle(284, 38, 8, UiTheme::WEATHER_FOG);
-      tft.fillCircle(296, 36, 10, UiTheme::WEATHER_FOG);
-      tft.fillRoundRect(278, 39, 31, 8, 4, UiTheme::WEATHER_FOG);
-      tft.drawLine(282, 51 + drift, 278, 58 + drift, UiTheme::WEATHER_RAIN);
-      tft.drawLine(294, 51 + drift, 290, 58 + drift, UiTheme::WEATHER_RAIN);
-      tft.drawLine(306, 51 + drift, 302, 58 + drift, UiTheme::WEATHER_RAIN);
-      if (kind == WeatherVisualKind::STORM) {
-        tft.drawLine(297, 48, 291, 59, UiTheme::WEATHER_SUN);
-        tft.drawLine(291, 59, 297, 57, UiTheme::WEATHER_SUN);
-        tft.drawLine(297, 57, 292, 67, UiTheme::WEATHER_SUN);
-      }
+      tft.fillCircle(289, 37, 7, UiTheme::WEATHER_FOG);
+      tft.fillCircle(300, 35, 9, UiTheme::WEATHER_FOG);
+      tft.fillRoundRect(283, 39, 29, 7, 4, UiTheme::WEATHER_FOG);
+      tft.drawLine(287, 50 + drift, 284, 56 + drift, UiTheme::WEATHER_RAIN);
+      tft.drawLine(299, 50 + drift, 296, 56 + drift, UiTheme::WEATHER_RAIN);
+      tft.drawLine(309, 50 + drift, 306, 56 + drift, UiTheme::WEATHER_RAIN);
       break;
     case WeatherVisualKind::SNOW:
       for (int i = 0; i < 4; ++i) {
-        const int x = 280 + i * 9;
-        const int y = 36 + ((i + frame) & 1) * 10;
+        const int x = 283 + i * 8;
+        const int y = 35 + ((i + frame) & 1) * 9;
         tft.drawLine(x - 3, y, x + 3, y, UiTheme::WEATHER_COOL);
         tft.drawLine(x, y - 3, x, y + 3, UiTheme::WEATHER_COOL);
       }
       break;
     case WeatherVisualKind::OTHER:
-      tft.drawCircle(294, 43, 11, UiTheme::MUTED);
+      tft.drawCircle(298, 42, 10, UiTheme::MUTED);
       break;
   }
 }
 
-void drawCat(TFT_eSPI& tft, CatMood mood, uint8_t frame) {
-  const int bob = frame ? 1 : 0;
-  const int headX = 257;
-  const int headY = 75 + bob;
+void drawThickLine(TFT_eSPI& tft, int x0, int y0, int x1, int y1, uint16_t color) {
+  tft.drawLine(x0, y0, x1, y1, color);
+  tft.drawLine(x0 + 1, y0, x1 + 1, y1, color);
+  tft.drawLine(x0, y0 + 1, x1, y1 + 1, color);
+}
 
-  tft.drawLine(278, 94 + bob, frame ? 293 : 289, frame ? 86 : 101, UiTheme::CAT);
-  tft.drawLine(279, 95 + bob, frame ? 294 : 290, frame ? 87 : 102, UiTheme::CAT);
-  tft.fillRoundRect(241, 83 + bob, 39, 24, 10, UiTheme::CAT);
-  tft.fillCircle(headX, headY, 16, UiTheme::CAT);
-  tft.fillTriangle(244, 65 + bob, 250, 52 + bob, 255, 66 + bob, UiTheme::CAT);
-  tft.fillTriangle(259, 65 + bob, 267, 52 + bob, 271, 68 + bob, UiTheme::CAT);
+void drawUmbrella(TFT_eSPI& tft, int bob) {
+  // Three overlapping lobes give the canopy a softer hand-painted edge.
+  tft.fillCircle(246, 53 + bob, 10, CAT_UMBRELLA);
+  tft.fillCircle(258, 49 + bob, 13, CAT_UMBRELLA);
+  tft.fillCircle(271, 53 + bob, 10, CAT_UMBRELLA);
+  tft.fillRect(236, 53 + bob, 45, 7, CAT_UMBRELLA);
+  tft.drawFastHLine(238, 60 + bob, 41, CAT_INK);
+  drawThickLine(tft, 259, 59 + bob, 259, 89 + bob, CAT_INK);
+  tft.drawLine(259, 89 + bob, 264, 93 + bob, CAT_INK);
+}
 
-  tft.fillCircle(252, 80 + bob, 5, UiTheme::CAT_LIGHT);
-  tft.fillCircle(262, 80 + bob, 5, UiTheme::CAT_LIGHT);
-  tft.fillTriangle(255, 79 + bob, 259, 79 + bob, 257, 82 + bob, UiTheme::CAT_PINK);
+void drawWatercolorCat(TFT_eSPI& tft, CatMood mood, uint8_t frame) {
+  const WeatherCatPose pose = WeatherCatArt::pose(mood, frame);
+  const int bob = pose.bodyBob;
+  const int cx = 257;
+  const int headY = 73 + bob;
 
-  if (mood == CatMood::STARTLED) {
-    tft.fillCircle(251, 72 + bob, 3, UiTheme::TEXT);
-    tft.fillCircle(263, 72 + bob, 3, UiTheme::TEXT);
-    tft.fillCircle(251, 72 + bob, 1, UiTheme::BACKGROUND);
-    tft.fillCircle(263, 72 + bob, 1, UiTheme::BACKGROUND);
-    tft.drawCircle(257, 86 + bob, 2, UiTheme::BACKGROUND);
-  } else if (mood == CatMood::SLEEPY) {
-    tft.drawLine(248, 73 + bob, 253, 73 + bob, UiTheme::BACKGROUND);
-    tft.drawLine(261, 73 + bob, 266, 73 + bob, UiTheme::BACKGROUND);
-    tft.drawLine(254, 86 + bob, 260, 86 + bob, UiTheme::BACKGROUND);
+  // Ground shadow and tail. Several neighboring strokes emulate a soft brush.
+  tft.fillRoundRect(232, 108, 54, 5, 3, CAT_SHADOW);
+  drawThickLine(tft, 278, 95 + bob, 292 + pose.tailOffset, 88 + bob, CAT_WASH_EDGE);
+  drawThickLine(tft, 292 + pose.tailOffset, 88 + bob, 296 + pose.tailOffset, 78 + bob, CAT_PATCH);
+  tft.fillCircle(296 + pose.tailOffset, 78 + bob, 3, CAT_PATCH_LIGHT);
+
+  // Body wash: dark edge, warm wash and irregular light belly layered together.
+  tft.fillRoundRect(238, 84 + bob, 42, 27, 12, CAT_WASH_EDGE);
+  tft.fillRoundRect(240, 82 + bob, 39, 27, 12, CAT_WASH);
+  tft.fillCircle(258, 96 + bob, 14, CAT_WASH_LIGHT);
+  tft.fillCircle(247, 91 + bob, 8, CAT_PATCH_LIGHT);
+  tft.fillCircle(246, 92 + bob, 5, CAT_PATCH);
+  tft.fillCircle(269, 99 + bob, 7, CAT_PATCH_LIGHT);
+
+  // Small rounded paws keep the silhouette chibi rather than stick-like.
+  tft.fillCircle(247, 108 + bob, 6, CAT_WASH_EDGE);
+  tft.fillCircle(247, 106 + bob, 5, CAT_WASH_LIGHT);
+  tft.fillCircle(270, 108 + bob, 6, CAT_WASH_EDGE);
+  tft.fillCircle(270, 106 + bob, 5, CAT_WASH_LIGHT);
+
+  // Ears are drawn before the head so the circular wash softens their roots.
+  tft.fillTriangle(239, 66 + bob, 246, 49 + bob, 253, 66 + bob, CAT_WASH_EDGE);
+  tft.fillTriangle(261, 65 + bob, 270, 49 + bob, 276, 68 + bob, CAT_WASH_EDGE);
+  tft.fillTriangle(243, 64 + bob, 247, 54 + bob, 251, 65 + bob, CAT_NOSE);
+  tft.fillTriangle(265, 64 + bob, 270, 54 + bob, 273, 66 + bob, CAT_NOSE);
+
+  // Face: a slightly darker outer wash and two offset cream layers avoid the
+  // hard geometric look of the old single orange circle.
+  tft.fillCircle(cx, headY, 22, CAT_WASH_EDGE);
+  tft.fillCircle(cx - 1, headY - 1, 20, CAT_WASH);
+  tft.fillCircle(cx - 3, headY - 3, 16, CAT_WASH_LIGHT);
+
+  // Asymmetric tabby patches give the face a hand-painted character.
+  tft.fillCircle(244, 63 + bob, 7, CAT_PATCH_LIGHT);
+  tft.fillCircle(246, 64 + bob, 5, CAT_PATCH);
+  tft.fillCircle(268, 67 + bob, 6, CAT_PATCH_LIGHT);
+  tft.fillCircle(269, 68 + bob, 4, CAT_PATCH);
+  tft.drawLine(255, 55 + bob, 253, 61 + bob, CAT_PATCH);
+  tft.drawLine(259, 54 + bob, 259, 60 + bob, CAT_PATCH);
+  tft.drawLine(263, 55 + bob, 265, 61 + bob, CAT_PATCH);
+
+  // Cream muzzle and nose.
+  tft.fillCircle(251, 81 + bob, 7, CAT_WASH_LIGHT);
+  tft.fillCircle(263, 81 + bob, 7, CAT_WASH_LIGHT);
+  tft.fillTriangle(254, 79 + bob, 260, 79 + bob, 257, 83 + bob, CAT_NOSE);
+
+  // Eyes and expression.
+  if (pose.eyesClosed) {
+    tft.drawLine(246, 72 + bob, 251, 74 + bob, CAT_INK);
+    tft.drawLine(251, 74 + bob, 254, 72 + bob, CAT_INK);
+    tft.drawLine(261, 72 + bob, 264, 74 + bob, CAT_INK);
+    tft.drawLine(264, 74 + bob, 269, 72 + bob, CAT_INK);
+  } else if (pose.eyesWide) {
+    tft.fillCircle(250, 72 + bob, 4, CAT_INK);
+    tft.fillCircle(265, 72 + bob, 4, CAT_INK);
+    tft.fillCircle(249, 70 + bob, 1, UiTheme::TEXT);
+    tft.fillCircle(264, 70 + bob, 1, UiTheme::TEXT);
   } else {
-    tft.fillCircle(251, 72 + bob, 2, UiTheme::BACKGROUND);
-    tft.fillCircle(263, 72 + bob, 2, UiTheme::BACKGROUND);
-    if (mood == CatMood::HAPPY) {
-      tft.drawLine(257, 83 + bob, 254, 87 + bob, UiTheme::BACKGROUND);
-      tft.drawLine(257, 83 + bob, 260, 87 + bob, UiTheme::BACKGROUND);
-    } else if (mood == CatMood::HOT) {
-      tft.fillCircle(257, 87 + bob, 3, UiTheme::CAT_PINK);
-      tft.drawLine(282, 70 + bob, 285, 75 + bob, UiTheme::WEATHER_COOL);
-    } else if (mood == CatMood::RAINY) {
-      tft.drawLine(254, 87 + bob, 257, 84 + bob, UiTheme::BACKGROUND);
-      tft.drawLine(257, 84 + bob, 260, 87 + bob, UiTheme::BACKGROUND);
-    } else {
-      tft.drawFastHLine(254, 86 + bob, 6, UiTheme::BACKGROUND);
-    }
+    tft.fillCircle(250, 72 + bob, 3, CAT_INK);
+    tft.fillCircle(265, 72 + bob, 3, CAT_INK);
+    tft.fillCircle(249, 71 + bob, 1, UiTheme::TEXT);
+    tft.fillCircle(264, 71 + bob, 1, UiTheme::TEXT);
   }
 
-  if (mood == CatMood::COLD) {
-    tft.fillRoundRect(241, 87 + bob, 39, 5, 2, UiTheme::WEATHER_COOL);
-    tft.drawLine(244, 93 + bob, 239, 103 + bob, UiTheme::WEATHER_COOL);
+  if (pose.blush) {
+    tft.fillCircle(242, 82 + bob, 3, CAT_BLUSH);
+    tft.fillCircle(272, 82 + bob, 3, CAT_BLUSH);
+  }
+
+  if (pose.smile) {
+    tft.drawLine(257, 84 + bob, 253, 88 + bob, CAT_INK);
+    tft.drawLine(257, 84 + bob, 261, 88 + bob, CAT_INK);
+  } else if (pose.eyesWide) {
+    tft.drawCircle(257, 88 + bob, 2, CAT_INK);
+  } else if (pose.accessory == CatAccessory::SWEAT) {
+    tft.fillCircle(257, 88 + bob, 3, CAT_NOSE);
+    tft.drawFastHLine(254, 85 + bob, 6, CAT_INK);
+  } else {
+    tft.drawLine(254, 87 + bob, 257, 85 + bob, CAT_INK);
+    tft.drawLine(257, 85 + bob, 260, 87 + bob, CAT_INK);
+  }
+
+  // Whiskers are deliberately thin so the face stays soft on the 170px panel.
+  tft.drawLine(244, 85 + bob, 234, 83 + bob, CAT_INK);
+  tft.drawLine(244, 88 + bob, 234, 90 + bob, CAT_INK);
+  tft.drawLine(270, 85 + bob, 280, 83 + bob, CAT_INK);
+  tft.drawLine(270, 88 + bob, 280, 90 + bob, CAT_INK);
+
+  switch (pose.accessory) {
+    case CatAccessory::NONE:
+      break;
+    case CatAccessory::SWEAT:
+      tft.fillCircle(281, 67 + bob, 3, UiTheme::WEATHER_COOL);
+      tft.fillTriangle(278, 66 + bob, 284, 66 + bob, 281, 59 + bob, UiTheme::WEATHER_COOL);
+      break;
+    case CatAccessory::SLEEP_MARK:
+      tft.drawLine(279, 58, 288, 58, UiTheme::WEATHER_FOG);
+      tft.drawLine(288, 58, 279, 66, UiTheme::WEATHER_FOG);
+      tft.drawLine(279, 66, 288, 66, UiTheme::WEATHER_FOG);
+      tft.drawLine(290, 48, 297, 48, UiTheme::WEATHER_FOG);
+      tft.drawLine(297, 48, 290, 54, UiTheme::WEATHER_FOG);
+      tft.drawLine(290, 54, 297, 54, UiTheme::WEATHER_FOG);
+      break;
+    case CatAccessory::UMBRELLA:
+      drawUmbrella(tft, bob);
+      break;
+    case CatAccessory::SCARF:
+      tft.fillRoundRect(239, 88 + bob, 38, 7, 3, CAT_SCARF);
+      tft.fillRoundRect(269, 92 + bob, 7, 17, 3, CAT_SCARF);
+      tft.drawFastHLine(270, 100 + bob, 5, UiTheme::WEATHER_COOL);
+      break;
+    case CatAccessory::LIGHTNING:
+      tft.drawLine(282, 58, 276, 69, UiTheme::WEATHER_SUN);
+      tft.drawLine(276, 69, 283, 67, UiTheme::WEATHER_SUN);
+      tft.drawLine(283, 67, 277, 80, UiTheme::WEATHER_SUN);
+      tft.drawLine(283, 58, 277, 69, UiTheme::WEATHER_SUN);
+      break;
   }
 }
 }  // namespace
@@ -204,7 +308,7 @@ void WeatherScreen::drawPetScene(const WeatherViewModel& model, uint8_t animatio
   display_->fillRect(PET_X0, PET_Y0, PET_W, PET_H, UiTheme::BACKGROUND);
   const WeatherSnapshot& weather = model.weather;
   drawWeatherBackdrop(*display_, WeatherVisuals::kindForCode(weather.weatherCode), animationFrame);
-  drawCat(*display_, WeatherVisuals::catMood(weather.weatherCode, weather.apparentTemp), animationFrame);
+  drawWatercolorCat(*display_, WeatherVisuals::catMood(weather.weatherCode, weather.apparentTemp), animationFrame);
 }
 
 void WeatherScreen::renderAnimation(const WeatherViewModel& model, uint8_t animationFrame) {
