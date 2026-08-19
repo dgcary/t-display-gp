@@ -57,6 +57,15 @@ void test_utf8_truncation_never_splits_chinese_codepoint() {
   TEST_ASSERT_EQUAL_STRING("A股…", StockScreenMath::truncateUtf8("A股票价格", 3).c_str());
 }
 
+void test_provider_summary_distinguishes_quote_and_intraday_sources() {
+  TEST_ASSERT_EQUAL_STRING("Q:EM", StockScreenText::providerSummary(
+                                      ProviderId::EAST_MONEY, ProviderId::EAST_MONEY, false).c_str());
+  TEST_ASSERT_EQUAL_STRING("Q:TX I:TX", StockScreenText::providerSummary(
+                                           ProviderId::TENCENT, ProviderId::TENCENT, true).c_str());
+  TEST_ASSERT_EQUAL_STRING("Q:TX I:EM", StockScreenText::providerSummary(
+                                           ProviderId::TENCENT, ProviderId::EAST_MONEY, true).c_str());
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_layout_fits_320x170_landscape);
@@ -64,5 +73,6 @@ int main() {
   RUN_TEST(test_chart_x_preserves_small_lunch_gap_in_right_panel);
   RUN_TEST(test_chart_y_maps_max_to_top_and_min_to_bottom);
   RUN_TEST(test_utf8_truncation_never_splits_chinese_codepoint);
+  RUN_TEST(test_provider_summary_distinguishes_quote_and_intraday_sources);
   return UNITY_END();
 }
