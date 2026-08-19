@@ -23,7 +23,7 @@ void DeviceLayer::begin() {
   pinMode(BuildConfig::PIN_BUTTON_NEXT, INPUT_PULLUP);
 
   tft_.init();
-  tft_.setRotation(1);  // 320 x 170 landscape
+  tft_.setRotation(3);  // 320 x 170 landscape, opposite orientation from rotation 1
   tft_.fillScreen(TFT_BLACK);
 
   unicodeFont_.begin(tft_);
