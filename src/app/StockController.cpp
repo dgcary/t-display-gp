@@ -107,10 +107,10 @@ void StockController::tick(uint32_t nowMs, const LocalDateTime& local) {
     if (due) scheduleTradingCycle(nowMs);
     if (!current.intradayHealth.hasAttempt ||
         elapsed(nowMs, current.intradayHealth.lastAttemptMs) >= BuildConfig::INTRADAY_REFRESH_MS) {
-      // Intraday provider health is independent of quote failover. Each new
-      // cycle starts with EastMoney; MarketDataWorker falls back to Tencent
-      // only if the EastMoney trend request cannot complete successfully.
-      enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::EAST_MONEY, nowMs);
+      // Intraday health is independent of quote failover. Each new cycle starts
+      // with Tencent; MarketDataWorker falls back to EastMoney only if the
+      // Tencent minute request cannot complete successfully.
+      enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::TENCENT, nowMs);
     }
   } else {
     const uint32_t interval = marketClock_.recommendedQuoteIntervalMs(marketStatus_);
@@ -148,7 +148,7 @@ void StockController::scheduleForCurrent(uint32_t nowMs, bool forceStaleOnly) {
     enqueueRequest(currentIndex_, MarketRequestType::QUOTE, failover_.activeProvider(nowMs), nowMs);
   }
   if (!forceStaleOnly || intradayStale) {
-    enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::EAST_MONEY, nowMs);
+    enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::TENCENT, nowMs);
   }
 }
 
@@ -255,8 +255,8 @@ void StockController::consumeMarketResults() {
     }
 
     if (context.type == MarketRequestType::PRIMARY_PROBE) {
-      failover_.recordSuccess(ProviderId::EAST_MONEY, lastNowMs_);
-      if (failover_.activeProvider(lastNowMs_) != ProviderId::EAST_MONEY) continue;
+      failover_.recordSuccess(context.provider, lastNowMs_);
+      if (failover_.activeProvider(lastNowMs_) != ProviderId::TENCENT) continue;
     } else if (context.type == MarketRequestType::QUOTE) {
       failover_.recordSuccess(context.provider, lastNowMs_);
     }
@@ -291,11 +291,11 @@ void StockController::consumeMarketResults() {
 }
 
 void StockController::maybeProbePrimary(uint32_t nowMs) {
-  if (config_.stocks.empty() || failover_.activeProvider(nowMs) != ProviderId::TENCENT ||
+  if (config_.stocks.empty() || failover_.activeProvider(nowMs) != ProviderId::EAST_MONEY ||
       !failover_.shouldProbePrimary(nowMs)) {
     return;
   }
-  if (enqueueRequest(currentIndex_, MarketRequestType::PRIMARY_PROBE, ProviderId::EAST_MONEY, nowMs)) {
+  if (enqueueRequest(currentIndex_, MarketRequestType::PRIMARY_PROBE, ProviderId::TENCENT, nowMs)) {
     failover_.recordPrimaryProbeAttempt(nowMs);
   }
 }
