@@ -2,21 +2,27 @@
 #include <time.h>
 
 #include "AppConfig.h"
-#include "app/StockController.h"
-#include "device/ConfigStore.h"
-#include "device/DeviceLayer.h"
-#include "network/MarketDataWorker.h"
-#include "network/ProvisioningService.h"
-#include "ui/StockScreen.h"
+#include "AppDataWorker.h"
+#include "AppShell.h"
+#include "ConfigStore.h"
+#include "DeviceLayer.h"
+#include "MenuScreen.h"
+#include "NetworkArbiter.h"
+#include "ProvisioningService.h"
+#include "StockApp.h"
+#include "WeatherApp.h"
 
 namespace {
 AppConfig appConfig;
 ConfigStore configStore;
 ProvisioningService provisioning;
 DeviceLayer device;
-MarketDataWorker dataWorker;
-StockController controller(dataWorker);
-StockScreen screen;
+AppDataWorker appDataWorker;
+MenuScreen menuScreen;
+StockApp stockApp(device);
+WeatherApp weatherApp(device, appDataWorker);
+MenuApp menuApp({{AppId::STOCK, "股票"}, {AppId::WEATHER, "天气"}}, menuScreen);
+AppManager appManager(menuApp, {&stockApp, &weatherApp});
 bool appReady = false;
 
 void startChinaTimeSync() {
@@ -33,9 +39,6 @@ void setup() {
   // factory-erased device. DeviceLayer intentionally does not wait for NTP.
   device.begin();
 
-  // Load once for the documented lifecycle. ensureConnected() independently
-  // validates persistent app configuration and forces the captive portal when
-  // it is missing/invalid, even if Wi-Fi credentials already exist.
   configStore.load(appConfig);
   Serial.println("[boot] provisioning start");
   if (!provisioning.ensureConnected(appConfig)) {
@@ -45,20 +48,35 @@ void setup() {
     return;
   }
 
-  Serial.println("[boot] provisioning complete; starting application services");
+  Serial.println("[boot] provisioning complete; starting shared services");
   startChinaTimeSync();
   provisioning.beginWebPortal(appConfig);
 
-  if (!dataWorker.begin()) {
-    Serial.println("Market-data worker failed to start");
+  if (!sharedNetworkArbiter().begin()) {
+    Serial.println("Network arbiter failed to start");
+    return;
+  }
+  if (!appDataWorker.begin()) {
+    Serial.println("App-data worker failed to start");
     return;
   }
 
-  controller.begin(appConfig);
-  controller.setWifiOnline(device.wifiConnected());
-  screen.begin(device.display(), device.unicodeFont());
+  menuScreen.begin(device.display(), device.unicodeFont());
+  if (!stockApp.begin(appConfig)) {
+    Serial.println("Stock app failed to start");
+    return;
+  }
+  if (!weatherApp.begin(appConfig)) {
+    Serial.println("Weather app failed to start");
+    return;
+  }
+  if (!appManager.begin(AppId::STOCK)) {
+    Serial.println("App manager failed to start");
+    return;
+  }
+
   appReady = true;
-  Serial.println("[boot] market loop ready");
+  Serial.println("[boot] multi-app loop ready");
 }
 
 void loop() {
@@ -69,14 +87,9 @@ void loop() {
   }
 
   const uint32_t nowMs = millis();
-  controller.setWifiOnline(device.wifiConnected());
-  controller.onButton(device.pollButtons(nowMs));
-  controller.consumeMarketResults();
-  controller.tick(nowMs, device.localDateTime());
-
-  if (controller.takeDirtyFlag()) {
-    screen.render(controller.viewModel(), controller.takeFullRedrawFlag());
-  }
+  appManager.onInput(device.pollButtons(nowMs));
+  appManager.tick(nowMs);
+  appManager.render();
 
   delay(1);
 }
