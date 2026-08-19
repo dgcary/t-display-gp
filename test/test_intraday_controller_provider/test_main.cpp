@@ -52,7 +52,34 @@ void pushFailure(FakeQueue& queue, const MarketRequest& request) {
   queue.results.push_back(result);
 }
 
-void test_tencent_quote_failover_still_starts_intraday_with_eastmoney() {
+void test_failed_empty_intraday_waits_full_refresh_interval_before_new_cycle() {
+  FakeQueue queue;
+  StockController controller(queue);
+  controller.begin(config());
+  controller.setWifiOnline(true);
+  controller.tick(5000, trading());
+
+  const MarketRequest* first = lastRequest(queue, MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(first);
+  pushFailure(queue, *first);
+  controller.consumeMarketResults();
+
+  queue.requests.clear();
+  controller.tick(10000, trading());
+  TEST_ASSERT_NULL(lastRequest(queue, MarketRequestType::INTRADAY));
+
+  queue.requests.clear();
+  controller.tick(64999, trading());
+  TEST_ASSERT_NULL(lastRequest(queue, MarketRequestType::INTRADAY));
+
+  queue.requests.clear();
+  controller.tick(65000, trading());
+  const MarketRequest* due = lastRequest(queue, MarketRequestType::INTRADAY);
+  TEST_ASSERT_NOT_NULL(due);
+  TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, due->provider);
+}
+
+void test_tencent_quote_failover_does_not_suppress_eastmoney_first_intraday_cycle() {
   FakeQueue queue;
   StockController controller(queue);
   controller.begin(config());
@@ -65,9 +92,6 @@ void test_tencent_quote_failover_still_starts_intraday_with_eastmoney() {
     TEST_ASSERT_NOT_NULL(quote);
     TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, quote->provider);
     pushFailure(queue, *quote);
-
-    // Resolve the first intraday request as a real failed cycle so it does not
-    // remain outstanding and artificially suppress the next 60 s refresh.
     if (i == 0) {
       const MarketRequest* intraday = lastRequest(queue, MarketRequestType::INTRADAY);
       TEST_ASSERT_NOT_NULL(intraday);
@@ -83,10 +107,8 @@ void test_tencent_quote_failover_still_starts_intraday_with_eastmoney() {
   TEST_ASSERT_NOT_NULL(quote);
   TEST_ASSERT_EQUAL(ProviderId::TENCENT, quote->provider);
 
-  // Advance beyond the independent intraday refresh window. Quote provider
-  // must not suppress the next EastMoney-first intraday cycle.
   queue.requests.clear();
-  controller.tick(66000, trading());
+  controller.tick(65000, trading());
   const MarketRequest* intraday = lastRequest(queue, MarketRequestType::INTRADAY);
   TEST_ASSERT_NOT_NULL(intraday);
   TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, intraday->provider);
@@ -119,7 +141,8 @@ void test_tencent_intraday_success_records_chart_source_without_changing_quote_p
 
 int main() {
   UNITY_BEGIN();
-  RUN_TEST(test_tencent_quote_failover_still_starts_intraday_with_eastmoney);
+  RUN_TEST(test_failed_empty_intraday_waits_full_refresh_interval_before_new_cycle);
+  RUN_TEST(test_tencent_quote_failover_does_not_suppress_eastmoney_first_intraday_cycle);
   RUN_TEST(test_tencent_intraday_success_records_chart_source_without_changing_quote_provider);
   return UNITY_END();
 }
