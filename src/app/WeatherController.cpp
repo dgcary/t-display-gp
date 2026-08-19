@@ -59,7 +59,9 @@ void WeatherController::consumeResults(uint32_t nowMs) {
       cache_ = result.weather;
       hasData_ = true;
       hasSuccessTime_ = true;
-      lastSuccessMs_ = result.completedMs != 0 ? result.completedMs : nowMs;
+      // completedMs is a real uint32_t millis() timestamp. Zero is valid both
+      // at boot and after wraparound, so never treat it as an "unset" sentinel.
+      lastSuccessMs_ = result.completedMs;
       lastError_ = WeatherError::NONE;
     } else {
       lastError_ = result.error;
