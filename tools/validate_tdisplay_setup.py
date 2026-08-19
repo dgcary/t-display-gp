@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Validate the T-Display-S3 TFT, orientation, and native-test wiring contract."""
+"""Validate the T-Display-S3 TFT, orientation, C++17, and native/UI wiring contract."""
 from pathlib import Path
 import sys
 
 text = Path("platformio.ini").read_text(encoding="utf-8")
 required = {
+    "default_envs = lilygo-t-display-s3",
+    "build_unflags =",
+    "-std=gnu++11",
+    "-std=gnu++17",
     "-DUSER_SETUP_LOADED=1",
     "-DST7789_DRIVER=1",
     "-DINIT_SEQUENCE_3=1",
@@ -29,6 +33,10 @@ required = {
     "-DTFT_D7=48",
     "-DTFT_BL=38",
     "-DTFT_BACKLIGHT_ON=HIGH",
+    "-DLOAD_GLCD=1",
+    "-DLOAD_FONT2=1",
+    "-DLOAD_FONT4=1",
+    "-DSMOOTH_FONT=1",
 }
 missing = sorted(flag for flag in required if flag not in text)
 
@@ -46,6 +54,7 @@ required_native_test_wiring = {
     "+<network/TencentProvider.cpp>",
     "+<network/ProvisioningForm.cpp>",
     "+<ui/StockScreen.cpp>",
+    "+<ui/WeatherCatArt.cpp>",
     "+<ui/WeatherVisuals.cpp>",
 }
 missing_native = sorted(item for item in required_native_test_wiring if item not in text)
@@ -57,6 +66,7 @@ device = Path("src/device/DeviceLayer.cpp").read_text(encoding="utf-8")
 screen = Path("src/ui/StockScreen.h").read_text(encoding="utf-8")
 stock_screen_cpp = Path("src/ui/StockScreen.cpp").read_text(encoding="utf-8")
 weather_screen_cpp = Path("src/ui/WeatherScreen.cpp").read_text(encoding="utf-8")
+weather_cat_art_h = Path("src/ui/WeatherCatArt.h").read_text(encoding="utf-8")
 required_landscape = {
     "DeviceLayer.cpp": ["tft_.setRotation(3)"],
     "StockScreen.h": ["SCREEN_WIDTH = 320", "SCREEN_HEIGHT = 170"],
@@ -78,6 +88,12 @@ required_ui_wiring = {
         "font.print(conditionName(day.weatherCode))",
         "renderAnimation",
         "WeatherVisuals::catMood",
+        "WeatherCatArt::pose",
+        "drawWatercolorCat",
+    ],
+    "WeatherCatArt.h": [
+        "HAND_PAINTED_WATERCOLOR",
+        "CatAccessory::",
     ],
 }
 missing_ui = []
@@ -87,10 +103,13 @@ for needle in required_ui_wiring["StockScreen.cpp"]:
 for needle in required_ui_wiring["WeatherScreen.cpp"]:
     if needle not in weather_screen_cpp:
         missing_ui.append(f"WeatherScreen.cpp: {needle}")
+for needle in required_ui_wiring["WeatherCatArt.h"]:
+    if needle not in weather_cat_art_h:
+        missing_ui.append(f"WeatherCatArt.h: {needle}")
 
 if missing or present_forbidden or missing_native or missing_landscape or missing_ui:
     if missing:
-        print("missing TFT contract flags:")
+        print("missing TFT/C++ build contract flags:")
         for flag in missing:
             print(f"  {flag}")
     if missing_native:
@@ -111,4 +130,4 @@ if missing or present_forbidden or missing_native or missing_landscape or missin
             print(f"  {item}")
     sys.exit(1)
 
-print("T-Display-S3 TFT + 320x170 + multi-app native/UI wiring contract: OK")
+print("T-Display-S3 TFT + C++17 + 320x170 + multi-app native/UI wiring contract: OK")
