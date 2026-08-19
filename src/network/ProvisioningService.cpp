@@ -25,14 +25,15 @@ const char SETTINGS_HTML[] PROGMEM = R"html(<!doctype html>
 body{font-family:system-ui,-apple-system,sans-serif;background:#111;color:#eee;margin:0;padding:18px}main{max-width:520px;margin:auto}
 .card{background:#1d1d1d;border-radius:14px;padding:16px;margin-bottom:14px}h1{font-size:22px;margin:0 0 12px}label{display:block;font-size:13px;color:#aaa;margin-top:10px}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}input,select,button{box-sizing:border-box;width:100%;font-size:16px;padding:11px;border-radius:9px;border:1px solid #444;background:#151515;color:#fff}
-button{background:#eee;color:#111;font-weight:700;margin-top:14px}.danger{background:#5b2020;color:#fff}.msg{min-height:20px;color:#8fd18f}small{color:#999}
+.check{display:flex;align-items:center;gap:9px;color:#eee}.check input{width:auto;padding:0}button{background:#eee;color:#111;font-weight:700;margin-top:14px}.danger{background:#5b2020;color:#fff}.msg{min-height:20px;color:#8fd18f}small{color:#999}
 </style></head><body><main><div class="card"><h1>T-Display GP</h1><div id="wifi">读取状态...</div><small id="uptime"></small></div>
-<form id="cfg" class="card"><h1>股票池</h1><div id="rows"></div><label>刷新间隔</label><select name="refresh"><option>3</option><option>4</option><option selected>5</option></select>
-<button type="submit">保存配置</button><div class="msg" id="msg"></div></form>
+<form id="cfg"><div class="card"><h1>股票池</h1><div id="rows"></div><label>刷新间隔</label><select name="refresh"><option>3</option><option>4</option><option selected>5</option></select></div>
+<div class="card"><h1>天气</h1><label class="check"><input type="checkbox" name="weather_enabled" value="1">启用天气</label><label>地点名称</label><input name="location_name" placeholder="昆山"><div class="row"><div><label>纬度</label><input name="latitude" placeholder="31.385000"></div><div><label>经度</label><input name="longitude" placeholder="120.980000"></div></div><label>天气刷新间隔（分钟）</label><input name="weather_refresh" type="number" min="5" max="60" value="15"><small>天气与后续空气质量功能共用这个地点。</small></div>
+<div class="card"><button type="submit">保存配置</button><div class="msg" id="msg"></div></div></form>
 <div class="card"><button class="danger" id="wifiBtn">更换 Wi-Fi</button><small>设备会重启并进入 TDisplay-GP-Setup 配网热点。</small></div></main>
 <script>
 const rows=document.getElementById('rows');for(let i=1;i<=5;i++){rows.insertAdjacentHTML('beforeend',`<label>股票 ${i}</label><div class="row"><input name="stock${i}" placeholder="600519"><input name="name${i}" placeholder="显示名称（可选）"></div>`)}
-async function load(){let s=await (await fetch('/api/status')).json();wifi.textContent=`Wi-Fi: ${s.ip} / RSSI ${s.rssi} dBm`;uptime.textContent=`运行 ${Math.floor(s.uptime_ms/1000)} 秒`;let c=s.config||{};(c.stocks||[]).forEach((x,i)=>{if(i<5){cfg[`stock${i+1}`].value=x.symbol;cfg[`name${i+1}`].value=x.name||''}});if(c.quote_refresh_sec)cfg.refresh.value=String(c.quote_refresh_sec)}
+async function load(){let s=await (await fetch('/api/status')).json();wifi.textContent=`Wi-Fi: ${s.ip} / RSSI ${s.rssi} dBm`;uptime.textContent=`运行 ${Math.floor(s.uptime_ms/1000)} 秒`;let c=s.config||{};(c.stocks||[]).forEach((x,i)=>{if(i<5){cfg[`stock${i+1}`].value=x.symbol;cfg[`name${i+1}`].value=x.name||''}});if(c.quote_refresh_sec)cfg.refresh.value=String(c.quote_refresh_sec);cfg.location_name.value=c.location_name||'';cfg.latitude.value=Number.isFinite(c.latitude_e6)?(c.latitude_e6/1e6).toFixed(6):'';cfg.longitude.value=Number.isFinite(c.longitude_e6)?(c.longitude_e6/1e6).toFixed(6):'';cfg.weather_enabled.checked=!!c.weather_enabled;cfg.weather_refresh.value=String(c.weather_refresh_min||15)}
 cfg.onsubmit=async e=>{e.preventDefault();msg.textContent='保存中...';let r=await fetch('/api/config',{method:'POST',body:new URLSearchParams(new FormData(cfg))});let j=await r.json();msg.textContent=j.message|| (r.ok?'已保存':'保存失败');if(r.ok)load()};
 wifiBtn.onclick=async()=>{if(!confirm('重启并重新配置 Wi-Fi？'))return;await fetch('/api/wifi/reconfigure',{method:'POST'});wifiBtn.textContent='设备正在重启...';wifiBtn.disabled=true};load();
 </script></body></html>)html";
@@ -86,6 +87,15 @@ struct ProvisioningService::Impl {
     }
     const String refresh = server.arg("refresh");
     fields.refresh.assign(refresh.c_str(), refresh.length());
+    const String locationName = server.arg("location_name");
+    const String latitude = server.arg("latitude");
+    const String longitude = server.arg("longitude");
+    const String weatherRefresh = server.arg("weather_refresh");
+    fields.locationName.assign(locationName.c_str(), locationName.length());
+    fields.latitude.assign(latitude.c_str(), latitude.length());
+    fields.longitude.assign(longitude.c_str(), longitude.length());
+    fields.weatherEnabled = server.hasArg("weather_enabled") ? "1" : "0";
+    fields.weatherRefresh.assign(weatherRefresh.c_str(), weatherRefresh.length());
     return fields;
   }
 };
@@ -114,7 +124,7 @@ bool ProvisioningService::ensureConnected(AppConfig& config) {
 
     std::array<std::array<char, 16>, 5> symbolBuffers{};
     std::array<std::array<char, 31>, 5> nameBuffers{};
-    std::array<WiFiManagerParameter*, 11> params{};
+    std::array<WiFiManagerParameter*, 10> params{};
     std::array<std::string, 10> ids;
     std::array<std::string, 10> labels;
     for (size_t i = 0; i < 5; ++i) {
@@ -130,9 +140,29 @@ bool ProvisioningService::ensureConnected(AppConfig& config) {
       wm.addParameter(params[i * 2 + 1]);
     }
     char refreshBuffer[4] = {};
+    char locationBuffer[41] = {};
+    char latitudeBuffer[20] = {};
+    char longitudeBuffer[20] = {};
+    char weatherEnabledBuffer[2] = {};
+    char weatherRefreshBuffer[4] = {};
     std::snprintf(refreshBuffer, sizeof(refreshBuffer), "%s", fields.refresh.c_str());
-    WiFiManagerParameter refreshParam("refresh", "刷新间隔(3/4/5秒)", refreshBuffer, 3);
+    std::snprintf(locationBuffer, sizeof(locationBuffer), "%s", fields.locationName.c_str());
+    std::snprintf(latitudeBuffer, sizeof(latitudeBuffer), "%s", fields.latitude.c_str());
+    std::snprintf(longitudeBuffer, sizeof(longitudeBuffer), "%s", fields.longitude.c_str());
+    std::snprintf(weatherEnabledBuffer, sizeof(weatherEnabledBuffer), "%s", fields.weatherEnabled.c_str());
+    std::snprintf(weatherRefreshBuffer, sizeof(weatherRefreshBuffer), "%s", fields.weatherRefresh.c_str());
+    WiFiManagerParameter refreshParam("refresh", "股票刷新间隔(3/4/5秒)", refreshBuffer, 3);
+    WiFiManagerParameter locationParam("location_name", "天气地点(可选)", locationBuffer, 40);
+    WiFiManagerParameter latitudeParam("latitude", "纬度(-90到90)", latitudeBuffer, 19);
+    WiFiManagerParameter longitudeParam("longitude", "经度(-180到180)", longitudeBuffer, 19);
+    WiFiManagerParameter weatherEnabledParam("weather_enabled", "启用天气(1/0)", weatherEnabledBuffer, 1);
+    WiFiManagerParameter weatherRefreshParam("weather_refresh", "天气刷新分钟(5-60)", weatherRefreshBuffer, 3);
     wm.addParameter(&refreshParam);
+    wm.addParameter(&locationParam);
+    wm.addParameter(&latitudeParam);
+    wm.addParameter(&longitudeParam);
+    wm.addParameter(&weatherEnabledParam);
+    wm.addParameter(&weatherRefreshParam);
 
     // WiFiManager stores the custom-head pointer; keep this string alive until
     // startConfigPortal()/autoConnect() returns.
@@ -182,6 +212,11 @@ bool ProvisioningService::ensureConnected(AppConfig& config) {
         fields.names[i] = params[i * 2 + 1]->getValue();
       }
       fields.refresh = refreshParam.getValue();
+      fields.locationName = locationParam.getValue();
+      fields.latitude = latitudeParam.getValue();
+      fields.longitude = longitudeParam.getValue();
+      fields.weatherEnabled = weatherEnabledParam.getValue();
+      fields.weatherRefresh = weatherRefreshParam.getValue();
     }
     for (auto* param : params) delete param;
 
@@ -275,8 +310,8 @@ void ProvisioningService::beginWebPortal(AppConfig& config) {
       impl_->server.send(500, "application/json", "{\"message\":\"保存失败\"}");
       return;
     }
-    // V1 applies configuration atomically on reboot. Do not partially mutate
-    // the running controller/UI configuration before all modules restart.
+    // Apply configuration atomically on reboot. Do not partially mutate the
+    // running app/controller configuration before all modules restart.
     impl_->server.send(200, "application/json; charset=utf-8", "{\"message\":\"已保存，设备将重启\"}");
     impl_->restartScheduled = true;
     impl_->restartAtMs = millis() + 350;
