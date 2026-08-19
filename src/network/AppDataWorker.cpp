@@ -7,7 +7,6 @@
 
 #include <memory>
 #include <new>
-#include <utility>
 
 #include "HttpTransport.h"
 #include "WeatherProvider.h"
@@ -44,33 +43,31 @@ struct AppDataWorker::Impl {
     static_cast<Impl*>(arg)->run();
   }
 
-  void sendResult(std::unique_ptr<AppDataResult> result) {
-    if (!result || !resultQueue) return;
-    AppDataResult* outgoing = result.release();
-    if (xQueueSend(resultQueue, &outgoing, portMAX_DELAY) != pdTRUE) delete outgoing;
+  void sendResult(const AppDataResult& result) {
+    if (!resultQueue) return;
+    xQueueSend(resultQueue, &result, portMAX_DELAY);
   }
 
   void execute(std::unique_ptr<AppDataRequest> request) {
     if (!request) return;
     const uint32_t startedMs = millis();
     const uint32_t queueWaitMs = static_cast<uint32_t>(startedMs - request->createdMs);
-    std::unique_ptr<AppDataResult> result(new (std::nothrow) AppDataResult());
-    if (!result) return;
+    AppDataResult result;
+    result.requestId = request->requestId;
+    result.type = request->type;
 
-    result->requestId = request->requestId;
-    result->type = request->type;
     if (request->type == AppDataRequestType::WEATHER) {
-      result->error = weather.fetch(request->location, result->weather, &result->diagnostics);
+      result.error = weather.fetch(request->location, result.weather, &result.diagnostics);
       Serial.printf("[appdata] id=%lu type=WEATHER location=%s queue=%lums dur=%lums http=%d native=%d tls=%d bytes=%u/%ld result=%s\n",
                     static_cast<unsigned long>(request->requestId), request->location.displayName.c_str(),
                     static_cast<unsigned long>(queueWaitMs),
-                    static_cast<unsigned long>(result->diagnostics.elapsedMs),
-                    result->diagnostics.httpStatus, result->diagnostics.nativeError,
-                    result->diagnostics.tlsError,
-                    static_cast<unsigned>(result->diagnostics.receivedBytes),
-                    static_cast<long>(result->diagnostics.expectedBytes), errorName(result->error));
+                    static_cast<unsigned long>(result.diagnostics.elapsedMs),
+                    result.diagnostics.httpStatus, result.diagnostics.nativeError,
+                    result.diagnostics.tlsError,
+                    static_cast<unsigned>(result.diagnostics.receivedBytes),
+                    static_cast<long>(result.diagnostics.expectedBytes), errorName(result.error));
     }
-    sendResult(std::move(result));
+    sendResult(result);
   }
 
   void run() {
@@ -84,14 +81,12 @@ struct AppDataWorker::Impl {
 
   void cleanup() {
     AppDataRequest* request = nullptr;
-    AppDataResult* result = nullptr;
     if (requestQueue) {
       while (xQueueReceive(requestQueue, &request, 0) == pdTRUE) delete request;
       vQueueDelete(requestQueue);
       requestQueue = nullptr;
     }
     if (resultQueue) {
-      while (xQueueReceive(resultQueue, &result, 0) == pdTRUE) delete result;
       vQueueDelete(resultQueue);
       resultQueue = nullptr;
     }
@@ -109,7 +104,7 @@ AppDataWorker::~AppDataWorker() {
 bool AppDataWorker::begin() {
   if (impl_->started) return true;
   impl_->requestQueue = xQueueCreate(Impl::REQUEST_QUEUE_DEPTH, sizeof(AppDataRequest*));
-  impl_->resultQueue = xQueueCreate(Impl::RESULT_QUEUE_DEPTH, sizeof(AppDataResult*));
+  impl_->resultQueue = xQueueCreate(Impl::RESULT_QUEUE_DEPTH, sizeof(AppDataResult));
   if (!impl_->requestQueue || !impl_->resultQueue) {
     impl_->cleanup();
     return false;
@@ -140,9 +135,5 @@ bool AppDataWorker::enqueue(const AppDataRequest& request) {
 
 bool AppDataWorker::tryReceive(AppDataResult& result) {
   if (!impl_->started || !impl_->resultQueue) return false;
-  AppDataResult* received = nullptr;
-  if (xQueueReceive(impl_->resultQueue, &received, 0) != pdTRUE || !received) return false;
-  std::unique_ptr<AppDataResult> owner(received);
-  result = std::move(*owner);
-  return true;
+  return xQueueReceive(impl_->resultQueue, &result, 0) == pdTRUE;
 }
