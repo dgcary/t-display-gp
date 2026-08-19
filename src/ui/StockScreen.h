@@ -43,7 +43,19 @@ std::string truncateUtf8(const std::string& text, size_t maxCodepoints);
 }  // namespace StockScreenMath
 
 namespace StockScreenText {
-std::string providerSummary(ProviderId quoteProvider, ProviderId intradayProvider, bool hasIntraday);
+inline const char* providerCode(ProviderId provider) {
+  return provider == ProviderId::EAST_MONEY ? "EM" : "TX";
+}
+
+inline std::string providerSummary(ProviderId quoteProvider, ProviderId intradayProvider, bool hasIntraday) {
+  std::string result = "Q:";
+  result += providerCode(quoteProvider);
+  if (hasIntraday) {
+    result += " I:";
+    result += providerCode(intradayProvider);
+  }
+  return result;
+}
 }  // namespace StockScreenText
 
 class StockScreen {
