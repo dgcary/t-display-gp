@@ -94,6 +94,23 @@ inline bool retryable(ProviderError error, const ProviderDiagnostics& diagnostic
   return diagnostics.httpStatus == 408 || diagnostics.httpStatus >= 500;
 }
 
+inline bool shouldRetryIntraday(const MarketRequest& request, ProviderError error,
+                                const ProviderDiagnostics& diagnostics) {
+  return isIntraday(request) && request.provider == ProviderId::EAST_MONEY &&
+         request.attempt < BuildConfig::INTRADAY_MAX_ATTEMPTS &&
+         retryable(error, diagnostics);
+}
+
+inline bool shouldFallbackIntraday(const MarketRequest& request, ProviderError error,
+                                   const ProviderDiagnostics& diagnostics) {
+  if (!isIntraday(request) || request.provider != ProviderId::EAST_MONEY ||
+      error == ProviderError::NONE || error == ProviderError::CANCELLED ||
+      error == ProviderError::EXPIRED) {
+    return false;
+  }
+  return !shouldRetryIntraday(request, error, diagnostics);
+}
+
 inline uint32_t retryDelayMs(uint8_t nextAttempt, uint32_t requestId) {
   uint32_t base = 0;
   if (nextAttempt == 2) base = BuildConfig::INTRADAY_RETRY_1_MS;
