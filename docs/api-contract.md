@@ -9,7 +9,7 @@ T-Display GP keeps remote payload formats behind Provider abstractions. UI/Contr
 | Capability | Primary | Fallback |
 |---|---|---|
 | A-share quote | EastMoney | Tencent |
-| A-share intraday | EastMoney | none |
+| A-share intraday | EastMoney | Tencent |
 | Weather current + 3-day forecast | Open-Meteo | none |
 
 Public provider contracts may change. Strict parsing and cache preservation are preferred over guessing new payload semantics.
@@ -42,7 +42,7 @@ Consumed fields:
 
 Missing/malformed/mismatched-symbol payloads are rejected and never replace the last valid quote cache.
 
-## EastMoney intraday
+## EastMoney intraday primary
 
 ```text
 GET https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=<secid>&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=1&iscr=0&iscca=0
@@ -57,7 +57,31 @@ Each row uses time, price, volume and average price fields already covered by pa
 GET https://qt.gtimg.cn/q=<market-prefix><code>
 ```
 
-Tencent remains quote-only fallback. No intraday Tencent fallback is introduced by the multi-app change.
+Quote fallback is independent from intraday fallback. Quote health continues to use the existing EastMoney failure window/recovery-probe policy.
+
+## Tencent intraday fallback
+
+```text
+GET https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=<market-prefix><code>
+```
+
+Tencent minute rows are parsed strictly into the existing `IntradaySeries` abstraction. The parser expects provider rows containing:
+
+```text
+HHMM price cumulative_lots cumulative_amount
+```
+
+Rules:
+
+- only 09:30–11:30 and 13:00–15:00 are retained,
+- rows must be strictly increasing by minute,
+- price must be finite and positive,
+- cumulative lots and amount must be valid non-negative numeric fields,
+- average price is derived from cumulative amount / (`lots * 100`) when cumulative volume is non-zero,
+- the retained series remains capped at 242 points,
+- malformed/missing/empty-session payloads are rejected without replacing the previous chart cache.
+
+Tencent intraday is a fallback only. Every new intraday cycle still begins with EastMoney.
 
 ## Market Worker contract
 
@@ -77,11 +101,17 @@ Approved TTLs remain:
 - background quote: 12 s
 - primary probe: 30 s
 - normal intraday: 75 s
-- intraday retry cycle: 15 s from first attempt
+- EastMoney intraday retry cycle: 15 s from first attempt
 
-Intraday transient retry remains max 3 total attempts with approximately 1.5 s then 4 s deferred delays (with existing jitter) and must yield to quote work.
+EastMoney intraday transient retry remains max 3 total attempts with approximately 1.5 s then 4 s deferred delays (with existing jitter) and must yield to quote work.
 
-When StockApp is suspended, MarketDataWorker is paused for new/pending execution. A request that had already begun external HTTP is allowed to finish naturally; suspension does not force-delete a TLS task. Intraday retry installation is suppressed while paused. On StockApp re-entry, worker execution resumes and existing TTL/expiry semantics handle retained pending work.
+After the EastMoney intraday cycle is exhausted, or EastMoney returns a non-retryable intraday Provider error, MarketDataWorker may install a Tencent intraday fallback using the same logical request id. Tencent failure is terminal for that cycle and never recursively creates another fallback.
+
+A complete intraday cycle failure does not immediately reopen a new empty-cache cycle. The controller records explicit request history and waits the normal intraday refresh interval before trying EastMoney again. This avoids retry storms and does not use `millis()==0` as an uninitialized sentinel.
+
+Intraday provider selection is independent from quote provider selection. A quote may be on Tencent while a new intraday cycle still begins on EastMoney; conversely a Tencent intraday success must not change quote failover health.
+
+When StockApp is suspended, MarketDataWorker is paused for new/pending execution. A request that had already begun external HTTP is allowed to finish naturally; suspension does not force-delete a TLS task. Intraday retry/fallback installation is suppressed while paused. On StockApp re-entry, worker execution resumes and existing TTL/expiry semantics handle retained pending work.
 
 # Weather data
 
@@ -186,6 +216,22 @@ Current public-data clients retain the project's pre-existing `WiFiClientSecure:
 [md] id=... type=QUOTE|INTRADAY|PROBE symbol=... provider=EM|TX attempt=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
 ```
 
+When an EastMoney intraday cycle hands off to Tencent, a concise marker is emitted:
+
+```text
+[md] id=... type=INTRADAY symbol=... fallback=EM->TX
+```
+
+The stock footer exposes the actual data sources independently:
+
+```text
+Q:EM
+Q:TX I:EM
+Q:TX I:TX
+```
+
+`I:` appears once a valid intraday cache exists.
+
 ## App data / Weather
 
 ```text
@@ -195,7 +241,7 @@ Current public-data clients retain the project's pre-existing `WiFiClientSecure:
 ## Runtime memory
 
 ```text
-[sys] app=STOCK|MENU|WEATHER heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
+[sys] app=STOCK|MENU|WEATHER|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
 ```
 
 Do not log full provider response bodies by default.
@@ -208,6 +254,7 @@ Examples:
 
 - weather failure cannot change stock quote provider state
 - intraday failure cannot clear quote cache
+- Tencent intraday fallback cannot change quote failover health
 - stock failure cannot clear weather snapshot
 - inactive app network completion cannot redraw the TFT
 
