@@ -4,9 +4,23 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
+#include "NetworkArbiter.h"
 #include "build_config.h"
 
 namespace {
+
+class NetworkRequestGuard {
+ public:
+  explicit NetworkRequestGuard(NetworkArbiter& arbiter) : arbiter_(arbiter), locked_(arbiter_.lock()) {}
+  ~NetworkRequestGuard() {
+    if (locked_) arbiter_.unlock();
+  }
+  bool locked() const { return locked_; }
+
+ private:
+  NetworkArbiter& arbiter_;
+  bool locked_ = false;
+};
 
 class BoundedMemoryStream final : public Stream {
  public:
@@ -60,9 +74,14 @@ HttpResponse makeResponse(HttpTransportError error, int statusCode, std::string 
 
 HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& headers) {
   const uint32_t startedMs = millis();
+  NetworkRequestGuard requestGuard(sharedNetworkArbiter());
+  if (!requestGuard.locked()) {
+    return makeResponse(HttpTransportError::NETWORK, 0, {}, 0, 0, -1, 0, startedMs);
+  }
+
   WiFiClientSecure client;
-  // V1 keeps the existing TLS identity behavior in this stability change.
-  // Bound handshake time explicitly: Arduino-ESP32 2.0.14 defaults to 120 s.
+  // Preserve the existing TLS identity behavior; this change only serializes
+  // external TLS use so market/weather handshakes cannot overlap in memory.
   client.setInsecure();
   client.setHandshakeTimeout(BuildConfig::HTTP_TLS_HANDSHAKE_TIMEOUT_SEC);
 
