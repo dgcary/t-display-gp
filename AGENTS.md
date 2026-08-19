@@ -9,25 +9,25 @@ These instructions apply to Codex and other automated coding/deployment agents.
 - Hardware: **LILYGO T-Display-S3 only**
 - MCU: ESP32-S3
 - Physical TFT: ST7789 170×320, 8-bit parallel
-- Application orientation: **320×170 landscape**
+- Application orientation: **320×170 landscape, rotation 3**
 - Framework: Arduino/C++17 via PlatformIO
 - Primary environment: `lilygo-t-display-s3`
 
-Do not silently retarget to another board, display revision, controller, pinout, or orientation.
+Do not silently retarget hardware, display revision, controller, pinout, or orientation.
 
 ## Source-of-truth rule
 
-Before development or deployment, fetch the requested GitHub branch/commit. Do not treat an old local checkout, binary, or previous chat artifact as authoritative.
+Before development or deployment, fetch the requested GitHub branch/commit. Do not treat an old local checkout, binary, or prior chat artifact as authoritative.
 
-For normal deployment use the latest approved `main`. If the user requests a feature branch or exact SHA, deploy exactly that ref and record it.
+For normal deployment use latest approved `main`. If the user requests a feature branch or exact SHA, deploy exactly that ref and record it.
 
 ## Required pre-deployment sequence
 
 ```bash
-pio test -e native
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
+pio test -e native
 pio run -e lilygo-t-display-s3
 pio run -e lilygo-t-display-s3 -t upload
 pio device monitor -b 115200
@@ -35,110 +35,169 @@ pio device monitor -b 115200
 
 Rules:
 
-1. Do not upload if native tests or firmware build fail.
-2. Do not ignore warnings/errors merely to make CI green.
+1. Do not upload if validators, native tests, or firmware build fail.
+2. Do not exclude production sources or tests merely to make CI green.
 3. Do not claim hardware PASS without physical-board evidence.
-4. Record the exact Git SHA for every hardware acceptance run.
+4. Record exact Git SHA for each hardware acceptance run.
 
-## Hardware invariants
+## Hardware and input invariants
 
 - GPIO15: display power, HIGH before TFT initialization
 - GPIO38: backlight
-- GPIO0: previous stock, pull-up, active low
-- GPIO14: next stock, pull-up, active low
+- GPIO0/GPIO14: INPUT_PULLUP, active low
 - TFT color order: `TFT_RGB`
 - TFT init: `INIT_SEQUENCE_3`
-- Application rotation: 320×170 landscape
+- Application rotation: `tft_.setRotation(3)` / logical 320×170
+- debounce: 40 ms
+- long press: 700 ms
+- long press fires once and suppresses short-on-release
+- no hold auto-repeat in V1
 
-`platformio.ini` must remain aligned with TFT_eSPI `Setup206_LilyGo_T_Display_S3.h`. Run `tools/validate_tdisplay_setup.py` for TFT/build changes.
+Input semantics:
+
+```text
+normal app:
+  GPIO0 short  -> app previous
+  GPIO14 short -> app next
+  GPIO0 long   -> main menu
+  GPIO14 long  -> reserved/no-op
+
+menu:
+  GPIO0 short  -> previous app
+  GPIO14 short -> next app
+  GPIO0 long   -> no-op
+  GPIO14 long  -> enter selected app
+```
+
+Run `tools/validate_tdisplay_setup.py` for TFT/build wiring changes.
+
+## Multi-app architecture invariants
+
+- `main.cpp` owns common boot/provisioning and drives `AppManager`; it must not accumulate app-specific business logic.
+- Each app owns its controller/screen/service boundary and follows enter/exit/input/tick/render semantics.
+- Only the active app receives normal input/tick/render calls.
+- Exiting an app preserves valid cache/state; do not reconstruct an app on every switch.
+- App registry/menu must remain extensible; do not hard-code menu behavior around exactly two apps.
+- Startup defaults to StockApp unless a separately approved configuration feature changes it.
+- Future AirQuality/HomeAssistant/ServiceMonitor apps should use the same shell rather than bypassing AppManager.
+
+## StockApp invariants
+
+- Existing `StockController`, `StockScreen`, `MarketDataWorker`, EastMoney/Tencent behavior remain the stock source of truth.
+- GPIO0/GPIO14 short presses must preserve previous/next-stock behavior.
+- When StockApp exits, pause new MarketDataWorker execution; do not force-kill an in-flight HTTPS request.
+- Returning to StockApp preserves cache and resumes existing QoS/refresh behavior.
 
 ## Market-data architecture invariants
 
-- Main loop must never perform blocking market HTTP.
-- HTTP work belongs in `MarketDataWorker`.
-- UI/Controller depend on Provider abstractions, not raw payload formats.
-- EastMoney remains V1 quote + intraday primary.
-- Tencent remains V1 **quote-only** fallback.
-- Network/provider failure preserves the last valid quote and intraday cache.
-- Quote health and intraday health are independent.
-- Quote traffic has priority over intraday traffic.
-- Waiting intraday work is latest-wins; do not allow old trend requests to build an unbounded queue.
-- Intraday transient retry is bounded and deferred: maximum 3 total attempts; retry must yield to quote traffic.
-- Market TCP connect timeout is 1500 ms, HTTP/read timeout setting is 2500 ms, and TLS handshake timeout is explicitly capped at 5 seconds.
-- Do not pass millisecond timeout constants directly to `WiFiClientSecure::setTimeout()` on Arduino-ESP32 2.0.14; that API is seconds-based.
-- Do not weaken parser validation.
-- Do not add infinite retry, unbounded timeouts, or TLS-security weakening as a stability workaround.
-- Keep `HTTPClient::setReuse(false)` unless a separately approved measurement-driven change says otherwise.
+- Main/UI never performs blocking market HTTP.
+- EastMoney remains quote + intraday primary.
+- Tencent remains quote-only fallback.
+- Quote/intraday failures preserve the last valid caches and have independent health state.
+- Quote traffic outranks intraday.
+- Waiting intraday is latest-wins.
+- Intraday transient retry is bounded/deferred: max 3 total attempts; it must yield to quote traffic.
+- Existing approved request TTLs remain unchanged unless separately designed.
+- Do not weaken parser validation to accept unknown malformed market payloads.
 
-Run `tools/validate_http_transport_contract.py` whenever transport timeout/reuse logic changes.
+## WeatherApp invariants
 
-## Request diagnostics
+- Weather UI/controller depend on `IWeatherProvider`, not raw Open-Meteo JSON.
+- V1 provider is `OpenMeteoProvider`.
+- Default refresh is 15 minutes; configured range is 5–60 minutes.
+- Refresh pacing is anchored to the last request attempt, preventing retry storms after failures.
+- Last successful weather snapshot remains visible on provider/network/parse failure.
+- Weather failure affects WeatherApp only and must not poison stock health.
+- Raw weather JSON is discarded after strict parse into bounded structured state.
+- WeatherApp does not actively schedule when it is not the active app.
 
-Market requests emit concise `[md]` serial completion lines. When diagnosing live failures, preserve at least:
+## Shared network / memory invariants
 
-- request type and stock
-- provider
-- attempt
-- queue wait and request duration
-- HTTP status
-- native HTTPClient error
-- TLS error when available
-- received/expected bytes
-- final provider result
+External HTTP/TLS is serialized through `NetworkArbiter`:
 
-Do not log full market response bodies by default.
+> At most one external HTTP/TLS request executes at a time.
+
+Keep these transport constraints:
+
+- connect timeout = 1500 ms
+- HTTP/read timeout setting = 2500 ms
+- TLS handshake cap = 5 s
+- maximum retained body = 32 KiB
+- `HTTPClient::setReuse(false)`
+- do not pass the millisecond read constant directly to the seconds-based `WiFiClientSecure::setTimeout()` in Arduino-ESP32 2.0.14
+- current public-data clients retain the existing `setInsecure()` behavior; do not extend that trust model to future sensitive credentials without a separate security design
+
+Do not create one FreeRTOS worker per new app. Stock keeps its specialized MarketDataWorker; low-frequency app data uses the shared AppDataWorker path.
+
+Run `tools/validate_http_transport_contract.py` for any transport/arbiter change.
+
+## Configuration invariants
+
+- Current schema is v2.
+- Keep existing NVS namespace `stockticker` in this milestone.
+- v1 config migration must preserve stock symbols, display names, and quote refresh.
+- Weather defaults after v1 migration: disabled, 15-minute refresh.
+- Weather location is shared device location data so future AirQualityApp can reuse it.
+- Captive Portal and LAN Web configuration must use the same `ProvisioningForm` validation path.
+- Configuration updates remain atomic/reboot-applied; do not partially hot-apply only some modules.
+
+## Diagnostics
+
+Market requests: `[md]`
+
+Low-frequency app data: `[appdata]`
+
+Runtime resources every ~60 seconds: `[sys]`, including active app, free/min heap, PSRAM totals/free, and main task stack high-water mark.
+
+When diagnosing a live issue, preserve the relevant request line plus surrounding `[sys]` lines. Do not log full response bodies or credentials by default.
 
 ## UI invariants
 
-- Logical layout is 320×170 landscape.
-- Left side contains price and compact metrics; right side contains the intraday chart.
-- A-share positive change is red and negative change is green.
-- Intraday chart preserves the lunch discontinuity.
-- Chart includes distinct previous-close (`昨收`) and valid today-open (`今开`) reference lines.
-- A single intraday failure with a fresh cached chart must not become a generic page-wide error.
-- Stale quote and stale intraday are reported independently (`报价延迟` / `分时延迟`).
-- Delay badges are active-trading health signals; lunch/closed/non-trading cached data aging must not produce false delay alarms.
+- Logical layout remains 320×170 landscape.
+- Stock positive change = red; negative = green.
+- Stock lunch discontinuity and `昨收`/`今开` references remain.
+- Menu and Weather use bounded text/simple shapes; do not add large bitmap assets without a memory review.
+- Inactive apps must never redraw the TFT after a late network completion.
 
 ## Provider caution
 
-EastMoney/Tencent endpoints are public, unofficial contracts and can change. When a provider fails:
+Public market/weather endpoints may change. For any provider failure:
 
-1. Capture actual device diagnostics/status first.
-2. Add/update a regression fixture or behavior test before changing Provider/Parser behavior.
-3. Change the Provider/transport boundary where possible.
-4. Never relax parsing simply to accept unknown malformed data.
-5. Do not add an intraday fallback Provider without a separate approved design review.
+1. capture real device diagnostics first,
+2. add/update regression data or behavior test before parser/provider changes,
+3. change provider/transport boundary where possible,
+4. never relax strict parsing merely to raise apparent success rate.
 
 See `docs/api-contract.md`.
 
-## First physical acceptance
+## Physical acceptance
 
-At minimum verify:
+At minimum verify on the actual T-Display-S3:
 
-- LCD is landscape and fully visible.
-- Chinese stock names are legible.
-- red/green color direction is correct.
-- GPIO0/GPIO14 each trigger once per press; holds do not auto-repeat.
-- `TDisplay-GP-Setup` provisioning still works.
-- device reaches `[boot] market loop ready`.
-- quotes continue to refresh when an intraday request fails/retries.
-- cached quote/chart remain visible during failures.
-- `昨收` and `今开` chart references render correctly.
-- no watchdog reset or unexpected reboot.
+- correct 320×170 orientation and Chinese text,
+- boot enters StockApp,
+- short stock buttons still work,
+- long GPIO0 enters menu without also switching stock,
+- menu short navigation and GPIO14-long enter work,
+- WeatherApp retrieves configured location data,
+- Stock/Weather caches survive menu transitions and failures,
+- 100 Stock/Menu/Weather transitions with no watchdog/reboot/freeze,
+- `[sys]` heap does not exhibit monotonic leakage.
 
-Use `docs/hardware-acceptance.md` for complete acceptance.
+Use `docs/hardware-acceptance.md` for the full checklist.
 
 ## Scope and safety
 
-Deployment is limited to the connected T-Display-S3 and this repository. Do not modify unrelated servers, routers, DHCP, Wi-Fi infrastructure, or other devices. Never hard-code Wi-Fi passwords, GitHub credentials, API secrets, broker credentials, or personal account data.
+Deployment is limited to the connected T-Display-S3 and this repository. Do not modify unrelated servers, routers, DHCP, Wi-Fi infrastructure, or other devices. Never hard-code Wi-Fi passwords, GitHub credentials, API secrets, broker credentials, Home Assistant tokens, or personal account data.
 
 ## Documentation
 
-When behavior, pins, Provider contracts, build commands, market scheduling, or UI orientation change, update the relevant files in the same PR:
+When app lifecycle, input, configuration, provider contracts, transport, pins, build commands, scheduling, or UI orientation change, keep these aligned in the same PR:
 
 - `README.md`
+- `AGENTS.md`
 - `docs/deployment.md`
 - `docs/api-contract.md`
 - `docs/hardware-acceptance.md`
 
-A change that makes these documents materially wrong is incomplete.
+A change that makes these materially wrong is incomplete.
