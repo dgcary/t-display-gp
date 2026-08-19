@@ -10,9 +10,7 @@ void MenuApp::onEnter() {
   fullRedraw_ = true;
 }
 
-void MenuApp::onExit() {
-  ++exitCount_;
-}
+void MenuApp::onExit() {}
 
 void MenuApp::onButton(InputEvent event) {
   if (items_.empty()) return;
