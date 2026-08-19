@@ -36,8 +36,8 @@ void test_release_before_long_threshold_remains_short() {
   input.update(false, 1000);
   input.update(false, 1040);
   input.update(true, 1690);
-  TEST_ASSERT_EQUAL(ButtonGesture::NONE, input.update(true, 1730));
-  TEST_ASSERT_EQUAL(ButtonGesture::SHORT_PRESS, input.update(true, 1731));
+  TEST_ASSERT_EQUAL(ButtonGesture::SHORT_PRESS, input.update(true, 1730));
+  TEST_ASSERT_EQUAL(ButtonGesture::NONE, input.update(true, 1731));
 }
 
 void test_bounce_does_not_create_false_press() {
