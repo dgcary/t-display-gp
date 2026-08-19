@@ -7,6 +7,7 @@
 #include "AppDataWorker.h"
 #include "AppShell.h"
 #include "ConfigStore.h"
+#include "DeviceInfoApp.h"
 #include "DeviceLayer.h"
 #include "MenuScreen.h"
 #include "NetworkArbiter.h"
@@ -23,8 +24,12 @@ AppDataWorker appDataWorker;
 MenuScreen menuScreen;
 StockApp stockApp(device);
 WeatherApp weatherApp(device, appDataWorker);
-MenuApp menuApp({{AppId::STOCK, "股票"}, {AppId::WEATHER, "天气"}}, menuScreen);
-AppManager appManager(menuApp, {&stockApp, &weatherApp});
+DeviceInfoApp deviceInfoApp(device);
+MenuApp menuApp({{AppId::STOCK, "股票"},
+                 {AppId::WEATHER, "天气"},
+                 {AppId::DEVICE_INFO, "设备信息"}},
+                menuScreen);
+AppManager appManager(menuApp, {&stockApp, &weatherApp, &deviceInfoApp});
 bool appReady = false;
 uint32_t nextResourceLogMs = 0;
 
@@ -37,6 +42,7 @@ const char* appName(AppId id) {
     case AppId::MENU: return "MENU";
     case AppId::STOCK: return "STOCK";
     case AppId::WEATHER: return "WEATHER";
+    case AppId::DEVICE_INFO: return "DEVICE_INFO";
   }
   return "UNKNOWN";
 }
@@ -89,6 +95,10 @@ void setup() {
   }
   if (!weatherApp.begin(appConfig)) {
     Serial.println("Weather app failed to start");
+    return;
+  }
+  if (!deviceInfoApp.begin()) {
+    Serial.println("Device info app failed to start");
     return;
   }
   if (!appManager.begin(AppId::STOCK)) {
