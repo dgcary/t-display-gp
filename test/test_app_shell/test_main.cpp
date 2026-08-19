@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#include "app/AppShell.h"
+#include "AppShell.h"
 
 void setUp() {}
 void tearDown() {}
