@@ -3,6 +3,7 @@
 bool StockApp::begin(const AppConfig& config) {
   if (initialized_) return true;
   if (!worker_.begin()) return false;
+  worker_.setPaused(true);
   controller_.begin(config);
   controller_.setWifiOnline(device_.wifiConnected());
   screen_.begin(device_.display(), device_.unicodeFont());
@@ -12,11 +13,13 @@ bool StockApp::begin(const AppConfig& config) {
 
 void StockApp::onEnter() {
   active_ = true;
+  worker_.setPaused(false);
   forceDirty_ = true;
   forceFullRedraw_ = true;
 }
 
 void StockApp::onExit() {
+  worker_.setPaused(true);
   active_ = false;
 }
 
