@@ -1,26 +1,109 @@
 # T-Display GP
 
-基于 **LILYGO T-Display-S3** 的 A 股实时行情桌面终端。
+基于 **LILYGO T-Display-S3** 的可扩展桌面信息终端。当前包含 **A 股行情** 与 **天气** 两个 App，并通过统一主菜单切换；空气质量、Home Assistant、服务监控可在后续按同一架构继续增加。
 
 > **GitHub `dgcary/t-display-gp` 是项目唯一事实源。** 开发、修复和 Codex 部署都应从 GitHub 指定分支/提交开始。
 
-## V1 功能
+## 当前功能
+
+### 多 App Shell
+
+- 默认开机进入股票 App，保持原使用习惯
+- GPIO0 短按：当前 App 上一项；GPIO14 短按：当前 App 下一项
+- **GPIO0 长按 700 ms：返回主菜单**
+- 主菜单 GPIO0/GPIO14 短按：前后选择 App
+- **主菜单 GPIO14 长按 700 ms：进入选中 App**
+- 长按只触发一次，不在释放时再误触发短按
+- 非前台 App 不绘屏、不主动高频调度，但保留最后有效缓存
+
+### 股票 App
 
 - 沪/深/北 A 股，股票池 3–5 只
 - 报价 3–5 秒刷新可配置
 - 东方财富：报价 + 分时主源
 - 腾讯：报价备用源
-- **320×170 横屏界面**
-- 实体按键切换股票
-- 首次 Captive Portal 配网 + 局域网 Web 配置
-- 网络/Provider 失败时保留最后有效报价和分时图
-- 分时午休断点
-- 分时图同时显示 **昨收** 和 **今开** 参考线
-- 报价与分时健康状态独立，不再因一次分时失败把整页标成“数据异常”
+- 320×170 横屏
+- 网络/Provider 失败保留最后有效报价和分时图
+- 分时午休断点、昨收/今开参考线
+- Quote/Intraday 健康状态独立
+- StockApp 退出到菜单后暂停新的行情 Worker 执行；已经开始的 HTTPS 请求允许自然完成，返回股票时恢复原 QoS/刷新
 
-## 行情稳定性设计
+### 天气 App
 
-行情 HTTP 始终在 `MarketDataWorker` 中执行，主循环不做阻塞网络请求。
+- Open-Meteo Provider，独立于 UI/Controller
+- 地点名称 + 经纬度由 Web/Captive Portal 配置
+- 当前温度、体感、湿度、风速、降雨概率、天气状态
+- 今天/明天/后天高低温
+- 默认 15 分钟刷新，可配置 5–60 分钟
+- 请求失败保留最后有效天气缓存
+- WeatherApp 不在前台时不主动刷新
+- 天气错误不会污染股票状态
+
+## 主菜单
+
+```text
+┌──────────────────────────────────────┐
+│ T-Display GP / 主菜单                │
+│                                      │
+│        ┌──────────────┐              │
+│        │     股票     │              │
+│        └──────────────┘              │
+│      天气        1 / 2               │
+│                                      │
+│ 短按左右选择   长按右键进入           │
+└──────────────────────────────────────┘
+```
+
+启动默认仍进入股票。任意普通 App 中长按 GPIO0 返回主菜单。
+
+## 架构
+
+```text
+AppManager
+├── MenuApp
+├── StockApp
+│   ├── StockController
+│   ├── StockScreen
+│   └── MarketDataWorker
+└── WeatherApp
+    ├── WeatherController
+    ├── WeatherScreen
+    └── AppDataWorker / OpenMeteoProvider
+
+Shared
+├── DeviceLayer / ButtonInput
+├── Provisioning / ConfigStore
+├── NetworkArbiter
+└── HttpTransport
+```
+
+`MarketDataWorker` 保留股票专用 QoS/重试；低频的天气以及未来空气质量/Home Assistant/服务监控统一走共享 App-data 路径，不为每个 App 创建一个 FreeRTOS Worker。
+
+## 网络与内存边界
+
+所有外部 HTTPS 请求经过 `NetworkArbiter` 串行执行：**同一时刻最多一个外部 HTTP/TLS 请求**。这避免股票与天气同时 TLS handshake 时产生不必要的运行时 Heap 峰值。
+
+现有 transport 约束保持：
+
+```text
+TCP/connect: 1500 ms
+TLS handshake: 5 s
+HTTP/read setting: 2500 ms
+HTTPClient reuse: false
+最大保留响应: 32 KiB
+```
+
+串口除股票 `[md]` 外，天气请求使用 `[appdata]`，并每 60 秒输出一次运行时资源：
+
+```text
+[sys] app=STOCK heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
+```
+
+真机长时间切换 App 时应关注 `heap_min` 和 `heap_free` 是否持续单向下降。
+
+## 股票稳定性设计
+
+股票 HTTP 始终在 `MarketDataWorker` 中执行，主循环不做阻塞网络请求。
 
 请求优先级：
 
@@ -28,118 +111,68 @@
 当前股票报价 > 后台报价 > 主源恢复探测 > 分时 > 分时重试
 ```
 
-分时采用 **latest-wins**：尚未执行的旧分时请求不会在快速切股时不断堆积。
+分时采用 latest-wins。可恢复的网络/服务器错误最多 3 次尝试，约在 1.5 秒、4 秒后进行延迟重试，且重试必须让出报价请求。原有 Provider/QoS/TTL/颜色/图表语义没有因多 App 改造而重写。
 
-东财分时发生可恢复的网络/服务器错误时，最多 3 次尝试：
+## 配置 schema
 
-```text
-首次失败 -> 约 1.5s ±20% 后重试
-再次失败 -> 约 4s ±20% 后重试
-仍失败 -> 本轮结束，继续保留旧分时图
-```
+配置升级为 schema v2，仍使用已有 `stockticker` NVS namespace。
 
-重试是延迟任务，必须让出报价请求；不会在 Provider 内连续阻塞重试。
+已有 schema v1 设备升级时：
 
-页面状态：
+- 原 3–5 只股票保留
+- 股票显示名保留
+- 3/4/5 秒刷新周期保留
+- 自动补充天气默认配置（默认关闭、15 分钟）
+- 成功读取后 best-effort 写回 v2 格式
 
-- Wi-Fi 断开：`离线`
-- 尚无有效报价：`等待报价`
-- **交易中**报价超过 15 秒未成功更新：`报价延迟`
-- **交易中**分时超过 180 秒未成功更新：`分时延迟`
-- 单次偶发分时失败且旧图仍新鲜：不显示全局错误
-- 午休、收盘、休市时缓存自然变旧：不误报延迟
-
-## 请求诊断日志
-
-串口 `115200` 会输出一行一个行情请求的 `[md]` 日志，例如：
+Weather 启用后必须配置：
 
 ```text
-[md] id=182 type=INTRADAY symbol=000831 provider=EM attempt=2/3 queue=8ms dur=2680ms http=200 native=-5 tls=-29184 bytes=8192/13824 result=NETWORK
+地点名称
+纬度 -90..90
+经度 -180..180
+刷新周期 5..60 分钟
 ```
 
-可直接区分：
+## 首次使用 / Web 设置
 
-- 哪只股票 / 哪类请求
-- EastMoney / Tencent
-- 第几次尝试
-- 排队时间和请求耗时
-- HTTP 状态
-- HTTPClient 原生错误
-- TLS 错误
-- 实收/期望响应大小
+无有效配置时连接 `TDisplay-GP-Setup`。Captive Portal 与局域网 Web 设置页现在都支持：
 
-不要把 Windows `curl`/Schannel 错误直接等同于 ESP32 错误，应以设备 `[md]` 日志为准。
+1. Wi-Fi
+2. 3–5 个 A 股代码和可选显示名
+3. 3/4/5 秒股票刷新周期
+4. 天气启用状态
+5. 地点名称、纬度、经度
+6. 5–60 分钟天气刷新周期
 
-## HTTP timeout 约束
-
-当前 Arduino-ESP32 2.0.14 transport 明确限制：
-
-```text
-TCP/connect: 1500 ms
-TLS handshake: 5 s
-HTTP/read setting: 2500 ms
-```
-
-Arduino-ESP32 2.0.14 的 secure-client TLS handshake 默认上限可达 120 秒，因此固件显式设置 5 秒握手上限，避免唯一的行情 Worker 被异常握手长期占住。
-
-`WiFiClientSecure::setTimeout()` 在该版本是秒制 API，不能直接传入 2500 这样的毫秒常量；CI 使用 `tools/validate_http_transport_contract.py` 防止该错误回归。
-
-## 横屏界面
-
-物理屏幕仍是 ST7789 170×320，固件旋转为 **320×170 横屏**：
-
-```text
-┌──────────────┬────────────────────────┐
-│ 股票 / 价格   │                        │
-│ 涨跌 / 指标   │       分 时 图          │
-│ 开高低昨      │   昨收 ----            │
-│ 量 / 额       │   今开 · · ·           │
-├──────────────┴────────────────────────┤
-│ 页码 / WiFi / EM|TX / 状态             │
-└───────────────────────────────────────┘
-```
-
-`昨收` 和 `今开` 使用不同线型，不只依赖颜色区分。今开无有效数据时不猜测、不绘制。
+保存后仍采用受控重启，避免运行中部分模块使用新旧配置混合状态。
 
 ## 硬件
 
 - LILYGO T-Display-S3
 - ESP32-S3
 - ST7789 170×320，8-bit parallel
+- 应用逻辑：320×170 landscape，rotation 3
 - GPIO15：屏幕供电
 - GPIO38：背光
-- GPIO0：上一只
-- GPIO14：下一只
+- GPIO0：上一项 / 长按返回菜单
+- GPIO14：下一项 / 菜单长按进入
 - TFT RGB 顺序：`TFT_RGB`
 - `INIT_SEQUENCE_3`
-
-## 首次使用
-
-无有效配置时：
-
-1. 连接热点 `TDisplay-GP-Setup`
-2. 打开 Captive Portal（必要时访问 `192.168.4.1`）
-3. 选择 Wi-Fi
-4. 填入 3–5 个 A 股代码
-5. 选择 3 / 4 / 5 秒报价刷新周期
-6. 保存
-7. 设备受控重启后自动连接 Wi-Fi 并进入行情界面
-
-示例代码：`600519`、`300750.SZ`、`920047.BJ`。代码与后缀冲突会被拒绝。
 
 ## 开发与烧录
 
 ```bash
-pio test -e native
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
+pio test -e native
 pio run -e lilygo-t-display-s3
 pio run -e lilygo-t-display-s3 -t upload
 pio device monitor -b 115200
 ```
 
-测试、合约校验或 firmware build 失败时不得烧录。
+GitHub Actions 同时运行 Ubuntu native + Windows native。任一测试、合同校验或 firmware build 失败时不得烧录。
 
 完整步骤见 [docs/deployment.md](docs/deployment.md)。
 
@@ -148,50 +181,44 @@ pio device monitor -b 115200
 ```text
 AGENTS.md              Codex / 自动化 Agent 规则
 include/               固件常量
-lib/core/              股票代码、配置、交易时钟、故障切换
-lib/providers/         Provider 接口与解析器
-src/app/               StockController
-src/network/           HTTP / MarketDataWorker / 配网
-src/device/            T-Display-S3 硬件层
-src/ui/                横屏 UI / 分时图
+lib/core/              配置、股票代码、交易时钟等纯逻辑
+lib/providers/         行情 Provider 接口/解析器
+src/app/               AppShell / StockApp / WeatherApp / Controller
+src/network/           HTTP、网络互斥、行情/通用 Worker、Provider、配网
+src/device/            T-Display-S3 硬件与输入层
+src/ui/                Menu / Stock / Weather UI
 test/                  PlatformIO native tests
-tools/                 TFT / 配网 / HTTP transport 合约校验
-docs/                  API、部署、真机验收、设计规格
+tools/                 TFT / 配网 / HTTP contract validators
+docs/                  API、部署、真机验收、设计规格/计划
 ```
 
 ## 核心原则
 
-1. 主循环不做行情 HTTP。
-2. Quote/Intraday 通过 Provider 抽象访问，不把原始接口格式写进 UI。
-3. 缓存优先：网络失败不清空最后有效画面。
-4. Parser 严格失败关闭，不为了“提高成功率”接受异常数据。
-5. 不通过无限重试、无限延长 timeout 或降低 TLS 安全性掩盖问题。
-6. 真机 PASS 必须来自实体 T-Display-S3，不以 host test 或 firmware build 代替。
+1. `main.cpp` 只负责公共启动与 AppManager 驱动，不承载具体 App 业务。
+2. App 缓存优先：退出/网络失败不清最后有效数据。
+3. 非前台 App 不获得绘屏权。
+4. 不为每个新 App 创建独立 Worker；低频功能复用 App-data 路径。
+5. 外部 TLS 串行执行，避免并发 TLS 内存峰值。
+6. Parser fail-closed，不通过放宽字段/无限重试掩盖 Provider 问题。
+7. 真机 PASS 必须来自实体 T-Display-S3，host test/firmware build 不能代替。
 
-## Provider 说明
+## Provider 与安全说明
 
-EastMoney/Tencent 使用的是公开但非官方稳定契约的接口，可能发生格式或访问策略变化。详细字段、错误和故障切换约定见 [docs/api-contract.md](docs/api-contract.md)。
+股票 Provider 约定和天气 Provider 字段见 [docs/api-contract.md](docs/api-contract.md)。
 
-当前稳定性改造**不新增分时备用 Provider**。如果真机在有限重试后，30 个以上分时刷新周期成功率仍低于 80%，再单独评审分时备用源。
+当前固件仍延续既有 `WiFiClientSecure::setInsecure()` 行为；多 App 改造没有进一步降低 TLS 安全性。若未来 Home Assistant 接入长期访问 Token，必须单独设计凭据存储和严格 TLS 验证，不能直接照搬当前公开数据源的安全边界。
 
-## 真机稳定性目标
+## 真机验收
 
-最终验收至少包括：
+除了原股票稳定性，还必须验证：
 
-- 5 只股票
-- 100+ 次按键切换
-- 500+ 次报价请求，测试网络下目标成功率 ≥99%
-- 30+ 个分时刷新周期，有限重试后目标成功率 ≥80%
-- 健康报价源下当前报价 P95 更新间隔 ≤7 秒
-- 单次分时失败不应造成 >10 秒报价空档
-- 分时 P95 数据年龄 ≤180 秒
-- 无 watchdog、异常重启、缓存丢失
-- 最终完成一次 09:25–15:10 完整交易日运行
+- 开机默认 StockApp
+- 长按 GPIO0 返回菜单
+- 菜单短按左右切换
+- 长按 GPIO14 进入 Stock/Weather
+- Weather 能获取配置地点实时数据
+- Weather 失败保留缓存
+- Stock ⇄ Menu ⇄ Weather 至少 100 次无 watchdog/reboot/freeze
+- `[sys]` Heap 无持续单向下降
 
 详见 [docs/hardware-acceptance.md](docs/hardware-acceptance.md)。
-
-## TLS 说明
-
-当前 V1 延续既有 `WiFiClientSecure::setInsecure()` 行为；本次行情稳定性修改没有进一步降低 TLS 安全性。5 秒 handshake 上限只是阻塞保护，不改变证书验证策略。
-
-若未来加入账户、Token、交易或其他敏感数据，必须单独恢复严格证书验证。
