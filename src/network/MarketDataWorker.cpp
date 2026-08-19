@@ -30,7 +30,7 @@ const char* providerName(ProviderId provider) {
 }
 
 unsigned maxAttempts(const MarketRequest& request) {
-  return request.type == MarketRequestType::INTRADAY && request.provider == ProviderId::EAST_MONEY
+  return request.type == MarketRequestType::INTRADAY && request.provider == ProviderId::TENCENT
              ? BuildConfig::INTRADAY_MAX_ATTEMPTS
              : 1U;
 }
@@ -157,14 +157,14 @@ struct MarketDataWorker::Impl {
 
     if (MarketRequestPolicy::shouldFallbackIntraday(request, result->error, result->diagnostics)) {
       MarketRequest fallback = request;
-      fallback.provider = ProviderId::TENCENT;
+      fallback.provider = ProviderId::EAST_MONEY;
       fallback.attempt = 1;
       fallback.createdMs = millis();
       fallback.notBeforeMs = fallback.createdMs;
       fallback.cycleStartedMs = fallback.createdMs;
       fallback.priority = MarketRequestPriority::INTRADAY;
       if (installDeferredIntraday(fallback)) {
-        Serial.printf("[md] id=%lu type=INTRADAY symbol=%s fallback=EM->TX\n",
+        Serial.printf("[md] id=%lu type=INTRADAY symbol=%s fallback=TX->EM\n",
                       static_cast<unsigned long>(request.requestId), request.symbol.canonical().c_str());
         return;
       }
