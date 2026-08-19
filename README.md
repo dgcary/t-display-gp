@@ -1,6 +1,6 @@
 # T-Display GP
 
-基于 **LILYGO T-Display-S3** 的可扩展桌面信息终端。当前包含 **A 股行情** 与 **天气** 两个 App，并通过统一主菜单切换；空气质量、Home Assistant、服务监控可在后续按同一架构继续增加。
+基于 **LILYGO T-Display-S3** 的可扩展桌面信息终端。当前包含 **A 股行情、天气、设备信息** 三个 App，并通过统一主菜单切换；空气质量、Home Assistant、服务监控可在后续按同一架构继续增加。
 
 > **GitHub `dgcary/t-display-gp` 是项目唯一事实源。** 开发、修复和 Codex 部署都应从 GitHub 指定分支/提交开始。
 
@@ -21,11 +21,14 @@
 - 沪/深/北 A 股，股票池 3–5 只
 - 报价 3–5 秒刷新可配置
 - 东方财富：报价 + 分时主源
-- 腾讯：报价备用源
+- 腾讯：报价备用源 + 分时备用源
 - 320×170 横屏
 - 网络/Provider 失败保留最后有效报价和分时图
 - 分时午休断点、昨收/今开参考线
-- Quote/Intraday 健康状态独立
+- Quote/Intraday 健康状态与 Provider failover 独立
+- 每个新分时周期先尝试东财；东财有限重试仍失败后自动切腾讯分钟接口
+- 完整分时周期失败后等待正常刷新间隔，不产生 empty-cache retry storm
+- 页脚区分 `Q:` 报价源和 `I:` 分时源，例如 `Q:TX I:TX`
 - StockApp 退出到菜单后暂停新的行情 Worker 执行；已经开始的 HTTPS 请求允许自然完成，返回股票时恢复原 QoS/刷新
 
 ### 天气 App
@@ -33,28 +36,31 @@
 - Open-Meteo Provider，独立于 UI/Controller
 - 地点名称 + 经纬度由 Web/Captive Portal 配置
 - 当前温度、体感、湿度、风速、降雨概率、天气状态
-- 今天/明天/后天高低温
+- 今天/明天/后天高低温与中文天气状态
+- 重点信息按天气/温度着色
+- 右侧轻量天气小猫：晴、多云、雾、雨、雪、雷雨背景及高温/寒冷/雨/雷暴等状态反应
+- 两帧动画约 500 ms 切换；动画只局部刷新右侧宠物区域，避免整屏闪烁
 - 默认 15 分钟刷新，可配置 5–60 分钟
 - 请求失败保留最后有效天气缓存
 - WeatherApp 不在前台时不主动刷新
 - 天气错误不会污染股票状态
 
+### 设备信息 App
+
+- 当前 LAN IP（大号显示）
+- SSID / RSSI / MAC
+- uptime / 当前时间
+- free heap / minimum heap / PSRAM
+- 直接提示 `Web: http://<IP>/`，方便手机或电脑打开现有 Web 配置页
+- 本地只读，不发起外部 HTTP 请求，也不显示 Wi-Fi 密码/API secret
+
 ## 主菜单
 
 ```text
-┌──────────────────────────────────────┐
-│ T-Display GP / 主菜单                │
-│                                      │
-│        ┌──────────────┐              │
-│        │     股票     │              │
-│        └──────────────┘              │
-│      天气        1 / 2               │
-│                                      │
-│ 短按左右选择   长按右键进入           │
-└──────────────────────────────────────┘
+股票 → 天气 → 设备信息
 ```
 
-启动默认仍进入股票。任意普通 App 中长按 GPIO0 返回主菜单。
+启动默认仍进入股票。任意普通 App 中长按 GPIO0 返回主菜单；主菜单短按左右选择，长按 GPIO14 进入。
 
 ## 架构
 
@@ -65,10 +71,12 @@ AppManager
 │   ├── StockController
 │   ├── StockScreen
 │   └── MarketDataWorker
-└── WeatherApp
-    ├── WeatherController
-    ├── WeatherScreen
-    └── AppDataWorker / OpenMeteoProvider
+├── WeatherApp
+│   ├── WeatherController
+│   ├── WeatherScreen / WeatherVisuals
+│   └── AppDataWorker / OpenMeteoProvider
+└── DeviceInfoApp
+    └── DeviceInfoScreen
 
 Shared
 ├── DeviceLayer / ButtonInput
@@ -77,7 +85,7 @@ Shared
 └── HttpTransport
 ```
 
-`MarketDataWorker` 保留股票专用 QoS/重试；低频的天气以及未来空气质量/Home Assistant/服务监控统一走共享 App-data 路径，不为每个 App 创建一个 FreeRTOS Worker。
+`MarketDataWorker` 保留股票专用 QoS/重试；低频天气以及未来空气质量/Home Assistant/服务监控统一走共享 App-data 路径，不为每个 App 创建一个 FreeRTOS Worker。DeviceInfo 只读取本地状态，不占用 AppDataWorker/NetworkArbiter。
 
 ## 网络与内存边界
 
@@ -96,7 +104,7 @@ HTTPClient reuse: false
 串口除股票 `[md]` 外，天气请求使用 `[appdata]`，并每 60 秒输出一次运行时资源：
 
 ```text
-[sys] app=STOCK heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
+[sys] app=STOCK|MENU|WEATHER|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
 ```
 
 真机长时间切换 App 时应关注 `heap_min` 和 `heap_free` 是否持续单向下降。
@@ -111,11 +119,11 @@ HTTPClient reuse: false
 当前股票报价 > 后台报价 > 主源恢复探测 > 分时 > 分时重试
 ```
 
-分时采用 latest-wins。可恢复的网络/服务器错误最多 3 次尝试，约在 1.5 秒、4 秒后进行延迟重试，且重试必须让出报价请求。原有 Provider/QoS/TTL/颜色/图表语义没有因多 App 改造而重写。
+分时采用 latest-wins。东财可恢复网络/服务器错误最多 3 次尝试，约在 1.5 秒、4 秒后延迟重试，且重试必须让出报价请求；东财分时周期最终无法完成时才交给腾讯分钟接口。腾讯分时失败是该周期终点，不递归 fallback。
 
 ## 配置 schema
 
-配置升级为 schema v2，仍使用已有 `stockticker` NVS namespace。
+配置为 schema v2，仍使用已有 `stockticker` NVS namespace。
 
 已有 schema v1 设备升级时：
 
@@ -136,7 +144,7 @@ Weather 启用后必须配置：
 
 ## 首次使用 / Web 设置
 
-无有效配置时连接 `TDisplay-GP-Setup`。Captive Portal 与局域网 Web 设置页现在都支持：
+无有效配置时连接 `TDisplay-GP-Setup`。Captive Portal 与局域网 Web 设置页支持：
 
 1. Wi-Fi
 2. 3–5 个 A 股代码和可选显示名
@@ -145,7 +153,9 @@ Weather 启用后必须配置：
 5. 地点名称、纬度、经度
 6. 5–60 分钟天气刷新周期
 
-保存后仍采用受控重启，避免运行中部分模块使用新旧配置混合状态。
+已经联网时，如忘记设备 IP：进入 **设备信息**，直接查看 `Web: http://<IP>/`。
+
+保存配置后采用受控重启，避免运行中部分模块使用新旧配置混合状态。
 
 ## 硬件
 
@@ -183,10 +193,10 @@ AGENTS.md              Codex / 自动化 Agent 规则
 include/               固件常量
 lib/core/              配置、股票代码、交易时钟等纯逻辑
 lib/providers/         行情 Provider 接口/解析器
-src/app/               AppShell / StockApp / WeatherApp / Controller
+src/app/               AppShell / StockApp / WeatherApp / DeviceInfoApp / Controller
 src/network/           HTTP、网络互斥、行情/通用 Worker、Provider、配网
 src/device/            T-Display-S3 硬件与输入层
-src/ui/                Menu / Stock / Weather UI
+src/ui/                Menu / Stock / Weather / DeviceInfo UI
 test/                  PlatformIO native tests
 tools/                 TFT / 配网 / HTTP contract validators
 docs/                  API、部署、真机验收、设计规格/计划
@@ -199,8 +209,9 @@ docs/                  API、部署、真机验收、设计规格/计划
 3. 非前台 App 不获得绘屏权。
 4. 不为每个新 App 创建独立 Worker；低频功能复用 App-data 路径。
 5. 外部 TLS 串行执行，避免并发 TLS 内存峰值。
-6. Parser fail-closed，不通过放宽字段/无限重试掩盖 Provider 问题。
-7. 真机 PASS 必须来自实体 T-Display-S3，host test/firmware build 不能代替。
+6. Quote/Intraday Provider 健康独立，分时 fallback 不能污染报价 failover。
+7. Parser fail-closed，不通过放宽字段/无限重试掩盖 Provider 问题。
+8. 真机 PASS 必须来自实体 T-Display-S3，host test/firmware build 不能代替。
 
 ## Provider 与安全说明
 
@@ -214,11 +225,14 @@ docs/                  API、部署、真机验收、设计规格/计划
 
 - 开机默认 StockApp
 - 长按 GPIO0 返回菜单
-- 菜单短按左右切换
-- 长按 GPIO14 进入 Stock/Weather
-- Weather 能获取配置地点实时数据
-- Weather 失败保留缓存
-- Stock ⇄ Menu ⇄ Weather 至少 100 次无 watchdog/reboot/freeze
+- 菜单可进入 Stock / Weather / DeviceInfo
+- DeviceInfo 显示真实 IP 且 Web 配置页可访问
+- Weather 能获取实时数据，中文三日预报正常
+- 天气小猫动画/天气反应正常且无整屏闪烁
+- EastMoney 分时失败时能出现 `fallback=EM->TX`，腾讯成功后分时图刷新且 footer `I:TX`
+- Quote 继续独立正常更新
+- Weather/Stock 失败均保留各自缓存
+- Stock ⇄ Menu ⇄ Weather ⇄ DeviceInfo 至少 100 次无 watchdog/reboot/freeze
 - `[sys]` Heap 无持续单向下降
 
 详见 [docs/hardware-acceptance.md](docs/hardware-acceptance.md)。
