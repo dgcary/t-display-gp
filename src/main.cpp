@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <time.h>
 
 #include "AppConfig.h"
@@ -24,9 +26,28 @@ WeatherApp weatherApp(device, appDataWorker);
 MenuApp menuApp({{AppId::STOCK, "股票"}, {AppId::WEATHER, "天气"}}, menuScreen);
 AppManager appManager(menuApp, {&stockApp, &weatherApp});
 bool appReady = false;
+uint32_t nextResourceLogMs = 0;
 
 void startChinaTimeSync() {
   configTzTime("CST-8", "ntp.aliyun.com", "pool.ntp.org", "time.nist.gov");
+}
+
+const char* appName(AppId id) {
+  switch (id) {
+    case AppId::MENU: return "MENU";
+    case AppId::STOCK: return "STOCK";
+    case AppId::WEATHER: return "WEATHER";
+  }
+  return "UNKNOWN";
+}
+
+void logResourceSnapshot(uint32_t nowMs) {
+  Serial.printf("[sys] app=%s heap_free=%u heap_min=%u psram_free=%u psram_total=%u main_stack_hwm=%u\n",
+                appName(appManager.activeAppId()), static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(ESP.getMinFreeHeap()), static_cast<unsigned>(ESP.getFreePsram()),
+                static_cast<unsigned>(ESP.getPsramSize()),
+                static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+  nextResourceLogMs = nowMs + 60000U;
 }
 }  // namespace
 
@@ -77,6 +98,7 @@ void setup() {
 
   appReady = true;
   Serial.println("[boot] multi-app loop ready");
+  logResourceSnapshot(millis());
 }
 
 void loop() {
@@ -90,6 +112,10 @@ void loop() {
   appManager.onInput(device.pollButtons(nowMs));
   appManager.tick(nowMs);
   appManager.render();
+
+  if (static_cast<int32_t>(nowMs - nextResourceLogMs) >= 0) {
+    logResourceSnapshot(nowMs);
+  }
 
   delay(1);
 }
