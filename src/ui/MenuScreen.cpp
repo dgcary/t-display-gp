@@ -38,12 +38,10 @@ void MenuScreen::render(const MenuViewModel& view, bool) {
   display_->drawRoundRect(84, 39, 152, 82, 10, UiTheme::CHART);
   display_->drawRoundRect(87, 42, 146, 76, 8, UiTheme::GRID);
 
-  unicodeFont_->setFont(u8g2_font_wqy16_t_gb2312);
   unicodeFont_->setForegroundColor(UiTheme::TEXT);
-  unicodeFont_->setCursor(126, 82);
+  unicodeFont_->setCursor(143, 76);
   unicodeFont_->print(view.items[selected].name);
 
-  unicodeFont_->setFont(u8g2_font_wqy12_t_gb2312);
   unicodeFont_->setForegroundColor(UiTheme::MUTED);
   unicodeFont_->setCursor(8, 79);
   unicodeFont_->print(view.items[previous].name);
