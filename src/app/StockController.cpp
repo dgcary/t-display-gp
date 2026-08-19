@@ -105,7 +105,7 @@ void StockController::tick(uint32_t nowMs, const LocalDateTime& local) {
     const bool due = !current.hasQuote || current.quoteHealth.lastAttemptMs == 0 ||
                      elapsed(nowMs, current.quoteHealth.lastAttemptMs) >= interval;
     if (due) scheduleTradingCycle(nowMs);
-    if (!current.hasIntraday || current.intradayHealth.lastAttemptMs == 0 ||
+    if (!current.intradayHealth.hasAttempt ||
         elapsed(nowMs, current.intradayHealth.lastAttemptMs) >= BuildConfig::INTRADAY_REFRESH_MS) {
       // Intraday provider health is independent of quote failover. Each new
       // cycle starts with EastMoney; MarketDataWorker falls back to Tencent
@@ -205,8 +205,13 @@ bool StockController::enqueueRequest(size_t stockIndex, MarketRequestType type, 
 
   outstanding_.push_back({request.requestId, type, symbol, provider, priority});
   auto& cache = caches_[stockIndex];
-  if (type == MarketRequestType::INTRADAY) cache.intradayHealth.lastAttemptMs = nowMs;
-  else if (type == MarketRequestType::QUOTE) cache.quoteHealth.lastAttemptMs = nowMs;
+  if (type == MarketRequestType::INTRADAY) {
+    cache.intradayHealth.lastAttemptMs = nowMs;
+    cache.intradayHealth.hasAttempt = true;
+  } else if (type == MarketRequestType::QUOTE) {
+    cache.quoteHealth.lastAttemptMs = nowMs;
+    cache.quoteHealth.hasAttempt = true;
+  }
   return true;
 }
 
