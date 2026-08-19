@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the T-Display-S3 TFT and logical-orientation contract."""
+"""Validate the T-Display-S3 TFT, orientation, and native-test wiring contract."""
 from pathlib import Path
 import sys
 
@@ -38,8 +38,11 @@ required_native_test_wiring = {
     "-Isrc/network",
     "-Isrc/device",
     "-Isrc/ui",
+    "+<app/AppShell.cpp>",
     "+<app/StockController.cpp>",
+    "+<app/WeatherController.cpp>",
     "+<network/EastMoneyProvider.cpp>",
+    "+<network/OpenMeteoProvider.cpp>",
     "+<network/TencentProvider.cpp>",
     "+<network/ProvisioningForm.cpp>",
     "+<ui/StockScreen.cpp>",
@@ -82,4 +85,4 @@ if missing or present_forbidden or missing_native or missing_landscape:
             print(f"  {item}")
     sys.exit(1)
 
-print("T-Display-S3 TFT + 320x170 landscape contract: OK")
+print("T-Display-S3 TFT + 320x170 + multi-app native wiring contract: OK")
