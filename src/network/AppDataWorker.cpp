@@ -58,6 +58,7 @@ struct AppDataWorker::Impl {
 
     if (request->type == AppDataRequestType::WEATHER) {
       result.error = weather.fetch(request->location, result.weather, &result.diagnostics);
+      result.completedMs = millis();
       Serial.printf("[appdata] id=%lu type=WEATHER location=%s queue=%lums dur=%lums http=%d native=%d tls=%d bytes=%u/%ld result=%s\n",
                     static_cast<unsigned long>(request->requestId), request->location.displayName.c_str(),
                     static_cast<unsigned long>(queueWaitMs),
@@ -66,6 +67,8 @@ struct AppDataWorker::Impl {
                     result.diagnostics.tlsError,
                     static_cast<unsigned>(result.diagnostics.receivedBytes),
                     static_cast<long>(result.diagnostics.expectedBytes), errorName(result.error));
+    } else {
+      result.completedMs = millis();
     }
     sendResult(result);
   }
