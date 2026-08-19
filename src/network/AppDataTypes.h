@@ -22,6 +22,7 @@ struct AppDataResult {
   WeatherError error = WeatherError::NONE;
   WeatherSnapshot weather;
   WeatherDiagnostics diagnostics;
+  uint32_t completedMs = 0;
 };
 
 class IAppDataQueue {
