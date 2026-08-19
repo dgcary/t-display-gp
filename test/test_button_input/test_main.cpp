@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "device/ButtonInput.h"
+#include "ButtonInput.h"
 
 void setUp() {}
 void tearDown() {}
