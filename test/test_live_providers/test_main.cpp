@@ -36,6 +36,9 @@ const char* kEastMoneyIntraday =
 const char* kTencentQuote =
     "v_sh600519=\"1~贵州茅台~600519~1410.25~1400.00~1401.00~123456~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~~20260811151008~10.25~0.73~1421.00~1398.00~x~123456~174321~\";";
 
+const char* kTencentIntraday =
+    R"json({"code":0,"data":{"sh600519":{"data":{"data":["0930 1400.00 12 1680000.00","0931 1401.00 20 2801000.00"]}}}})json";
+
 }  // namespace
 
 void setUp() {}
@@ -113,18 +116,32 @@ void test_provider_maps_transport_failures_without_parsing() {
                     provider.fetchQuote(StockSymbol::parse("600519"), quote));
 }
 
-void test_tencent_uses_exact_url_and_intraday_is_unsupported() {
+void test_tencent_quote_uses_exact_url() {
   FakeTransport transport;
   transport.response = {HttpTransportError::NONE, 200, kTencentQuote};
   TencentProvider provider(transport);
   QuoteSnapshot quote;
-  IntradaySeries intraday;
 
   TEST_ASSERT_EQUAL(ProviderError::NONE, provider.fetchQuote(StockSymbol::parse("600519"), quote));
   TEST_ASSERT_EQUAL_STRING("https://qt.gtimg.cn/q=sh600519", transport.lastUrl.c_str());
   TEST_ASSERT_EQUAL(ProviderId::TENCENT, quote.provider);
-  TEST_ASSERT_EQUAL(ProviderError::UNSUPPORTED,
-                    provider.fetchIntraday(StockSymbol::parse("600519"), intraday));
+}
+
+void test_tencent_intraday_uses_minute_endpoint() {
+  FakeTransport transport;
+  transport.response = {HttpTransportError::NONE, 200, kTencentIntraday};
+  TencentProvider provider(transport);
+  IntradaySeries intraday;
+  ProviderDiagnostics diagnostics;
+
+  TEST_ASSERT_EQUAL(ProviderError::NONE,
+                    provider.fetchIntraday(StockSymbol::parse("600519"), intraday, &diagnostics));
+  TEST_ASSERT_EQUAL_STRING(
+      "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh600519",
+      transport.lastUrl.c_str());
+  TEST_ASSERT_EQUAL_UINT32(2, intraday.size());
+  TEST_ASSERT_EQUAL_UINT16(9 * 60 + 31, intraday.back().minuteOfDay);
+  TEST_ASSERT_EQUAL(200, diagnostics.httpStatus);
 }
 
 int main() {
@@ -134,6 +151,7 @@ int main() {
   RUN_TEST(test_eastmoney_quote_uses_exact_url_and_referer);
   RUN_TEST(test_eastmoney_intraday_uses_exact_url);
   RUN_TEST(test_provider_maps_transport_failures_without_parsing);
-  RUN_TEST(test_tencent_uses_exact_url_and_intraday_is_unsupported);
+  RUN_TEST(test_tencent_quote_uses_exact_url);
+  RUN_TEST(test_tencent_intraday_uses_minute_endpoint);
   return UNITY_END();
 }
