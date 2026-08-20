@@ -1,7 +1,7 @@
 # AGENTS.md — T-Display GP
 
 This repository is the source of truth for the T-Display GP firmware.
-These instructions apply to Codex and other automated coding/deployment agents.
+These instructions apply to ChatGPT, Codex and other automated development/deployment agents.
 
 ## Target
 
@@ -17,11 +17,28 @@ Do not silently retarget hardware, display revision, controller, pinout, or orie
 
 ## Source-of-truth rule
 
-Before development or deployment, fetch the requested GitHub branch/commit. Do not treat an old local checkout, binary, or prior chat artifact as authoritative.
+GitHub is the source of truth. Do not treat an old local checkout, binary, or prior chat artifact as authoritative.
 
 For normal deployment use latest approved `main`. If the user requests a feature branch or exact SHA, deploy exactly that ref and record it.
 
-## Required pre-deployment sequence
+## Fixed development / deployment workflow
+
+This project uses a strict split of responsibilities.
+
+### Web ChatGPT / development side
+
+Web ChatGPT owns:
+
+1. fetch/inspect the latest GitHub source,
+2. requirements/design,
+3. source-code changes,
+4. regression tests and review,
+5. GitHub commits/PR updates,
+6. PlatformIO validators/native tests,
+7. real ESP32-S3 firmware compilation,
+8. publishing a verified prebuilt firmware artifact.
+
+Required development verification:
 
 ```bash
 python tools/validate_tdisplay_setup.py
@@ -29,16 +46,52 @@ python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 pio test -e native
 pio run -e lilygo-t-display-s3
-pio run -e lilygo-t-display-s3 -t upload
-pio device monitor -b 115200
 ```
+
+The CI build must publish a GitHub Actions artifact named:
+
+```text
+tdisplay-gp-firmware-<SOURCE_SHA>
+```
+
+containing at least:
+
+```text
+firmware.bin
+partitions.bin
+bootloader.bin
+firmware-manifest.txt
+```
+
+The manifest records the exact source SHA, firmware offset and SHA256 hashes.
+
+### Codex / local hardware side
+
+Codex is **not** the normal development/compiler for this project.
+
+Codex only owns:
+
+1. download the prebuilt artifact for the exact approved SHA,
+2. verify the manifest/source SHA and firmware SHA256,
+3. identify the connected T-Display-S3 port,
+4. flash the already-built `firmware.bin`,
+5. serial monitoring,
+6. physical UI/input/network/soak testing,
+7. report physical evidence back to Web ChatGPT.
+
+Codex must **not** run `pio run` or perform normal compile/debug work as a deployment gate. A local Windows PlatformIO build failure is not a reason to rebuild/fix locally when a verified prebuilt artifact exists.
+
+For the current unchanged partition layout, hardware deployment writes only the application image at the manifest-provided offset (currently `0x10000`), preserving bootloader/partition/NVS data. Do not erase flash or NVS unless a separately approved test explicitly requires it.
+
+If physical testing finds a bug, Codex reports reproduction/logs/screenshots; Web ChatGPT changes the code, recompiles, republishes a new artifact, and Codex flashes that new exact SHA.
 
 Rules:
 
-1. Do not upload if validators, native tests, or firmware build fail.
-2. Do not exclude production sources or tests merely to make CI green.
+1. Never flash an artifact whose manifest `source_sha` differs from the approved Git SHA.
+2. Verify `firmware.bin` SHA256 against the manifest before flashing.
 3. Do not claim hardware PASS without physical-board evidence.
-4. Record exact Git SHA for each hardware acceptance run.
+4. Record exact source SHA, Actions run/artifact, port and test result for each hardware acceptance run.
+5. Do not modify source code, tests, PR state, or `main` during Codex hardware execution.
 
 ## Hardware and input invariants
 
@@ -69,7 +122,7 @@ menu:
   GPIO14 long  -> enter selected app
 ```
 
-Run `tools/validate_tdisplay_setup.py` for TFT/build/UI wiring changes.
+Run `tools/validate_tdisplay_setup.py` for TFT/build/UI/artifact-contract changes.
 
 ## Multi-app architecture invariants
 
@@ -223,7 +276,7 @@ Deployment is limited to the connected T-Display-S3 and this repository. Do not 
 
 ## Documentation
 
-When app lifecycle, input, configuration, provider contracts, transport, pins, build commands, scheduling, or UI orientation change, keep these aligned in the same PR:
+When app lifecycle, input, configuration, provider contracts, transport, pins, build commands, artifact/deployment flow, scheduling, or UI orientation change, keep these aligned in the same PR:
 
 - `README.md`
 - `AGENTS.md`
