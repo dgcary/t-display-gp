@@ -1,140 +1,73 @@
 # Home Assistant + Crypto Suite Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Goal:** Extend the T-Display GP shell with a secure read-only Home Assistant dashboard and a low-frequency cryptocurrency dashboard while preserving Stock, Weather, Nixie and DeviceInfo behavior.
 
-**Goal:** Extend the existing T-Display GP multi-app shell with a secure read-only Home Assistant dashboard and a low-frequency Crypto market dashboard, keeping Stock/Weather/Nixie/DeviceInfo behavior intact.
+**Final architecture:** Weather, Home Assistant and Crypto reuse the **single** `AppDataWorker`. Requests share one worker task and external TLS remains serialized through `NetworkArbiter`; results are separated by `AppDataRequestType` so one app cannot consume another app's delayed result. Local-only Nixie/DeviceInfo remain outside the worker.
 
-**Architecture:** Both remote apps reuse the single shared `AppDataWorker`; no new FreeRTOS worker is created. `AppDataWorker` gains typed result queues so late results for Weather/Home Assistant/Crypto cannot be consumed and discarded by another app. Crypto uses the existing public `HttpTransport`/`NetworkArbiter`; Home Assistant uses a dedicated strict-TLS transport with a configured CA certificate and Bearer token, never `setInsecure()`.
+## Final scope
 
-**Tech Stack:** Arduino/C++17, PlatformIO, ESP32-S3, TFT_eSPI, U8g2_for_TFT_eSPI, ArduinoJson 6.21.6, Home Assistant REST API, CoinGecko keyless public REST API.
+- Hardware remains LILYGO T-Display-S3, 320×170 landscape rotation 3.
+- Startup remains StockApp; existing GPIO semantics are unchanged.
+- Menu: Stock / Weather / Nixie / Home Assistant / Crypto / DeviceInfo.
+- No additional per-app FreeRTOS worker.
+- Last valid data survives request failure and app transitions.
+- Home Assistant and Crypto schedule only while active.
+- PR stays Draft until real-board acceptance.
 
-**Spec:** This plan is the implementation spec for the stacked feature branch based on `feature/nixie-clock`.
+## Home Assistant V1
 
-## Global Constraints
+- Read-only only; no `/api/services` writes or control actions.
+- 1–4 configured entities with optional display labels.
+- Refresh 30–300 seconds, default 30 seconds.
+- Sequential `GET <base_url>/api/states/<entity_id>` requests.
+- `Authorization: Bearer <long-lived access token>`.
+- Device→HA TLS is strict: configured CA PEM is passed to `WiFiClientSecure::setCACert`; `setInsecure()` is forbidden for this credentialed path.
+- Token and CA are stored in a dedicated `ha_config` NVS blob under the existing namespace and are not added to AppConfig schema v2.
+- The existing AppConfig schema therefore remains **v2**; no stock/weather migration change is required.
+- HA has a separate LAN configuration portal at `http://<device-ip>:8081/`.
+- That local portal is plain HTTP and must be used only on a trusted LAN. It never returns Token/CA contents; status exposes only `ha_token_set` / `ha_ca_set` booleans.
+- Blank Token/CA fields preserve existing secrets; save validates atomically and reboots.
 
-- Hardware remains LILYGO T-Display-S3, 320x170 landscape rotation 3.
-- Startup remains StockApp.
-- Existing GPIO0/GPIO14 short/long semantics remain unchanged.
-- No additional FreeRTOS worker per app.
-- At most one external HTTP/TLS operation at once through `NetworkArbiter`.
-- Existing market transport timeouts and TLS diagnostics remain unchanged.
-- Home Assistant credentials must never be logged or returned by `/api/status`.
-- Home Assistant V1 is read-only and requires HTTPS plus a configured CA certificate; no `setInsecure()` with Bearer credentials.
-- Crypto V1 displays Bitcoin, Ethereum and Solana in USD with 24h change; refresh default 60 seconds.
-- Home Assistant V1 supports 1-4 configured entity IDs with optional display labels; refresh default 30 seconds.
-- Both network apps preserve their last valid cache on failure and do not schedule while inactive.
-- PR remains Draft until physical T-Display-S3 acceptance.
+## Crypto V1
 
----
+The original CoinGecko idea was dropped after current documentation verification showed Demo/Pro API keys are now required.
 
-### Task 1: Typed shared app-data routing
+Final provider: Binance's dedicated market-data-only host:
 
-**Files:**
-- Modify: `src/network/AppDataTypes.h`
-- Modify: `src/network/AppDataWorker.h`
-- Modify: `src/network/AppDataWorker.cpp`
-- Modify: `src/app/WeatherController.cpp`
-- Modify: `test/test_weather_controller/test_main.cpp`
+```text
+GET https://data-api.binance.vision/api/v3/ticker/24hr
+    ?symbols=["BTCUSDT","ETHUSDT","SOLUSDT"]
+```
 
-**Interfaces:**
-- `IAppDataQueue::tryReceive(AppDataRequestType type, AppDataResult& result)` returns only results for the requested app-data type.
-- One worker task executes all Weather/Home Assistant/Crypto requests.
+The request is URL-encoded in firmware. Binance documents `data-api.binance.vision` as public market-data-only and requiring no authentication/API key.
 
-- [ ] Write failing routing contract/tests.
-- [ ] Verify RED.
-- [ ] Implement per-type result queues without adding workers.
-- [ ] Update WeatherController and its fake queue.
-- [ ] Verify existing Weather behavior stays GREEN.
+- Assets: BTC, ETH, SOL versus USDT.
+- One request obtains all three 24h tickers.
+- Display: latest price + 24h percent change.
+- Refresh default/fixed V1 cadence: 60 seconds.
+- Strict parser maps symbols independent of response order, rejects duplicates/missing/malformed values, and updates cache only after the whole three-symbol response validates.
 
-### Task 2: Configuration schema v3 and secure provisioning
+## Shared worker/result routing
 
-**Files:**
-- Modify: `lib/core/AppConfig.h`
-- Modify: `lib/core/AppConfig.cpp`
-- Modify: `src/network/ProvisioningForm.h`
-- Modify: `src/network/ProvisioningForm.cpp`
-- Modify: `src/network/ProvisioningService.cpp`
-- Modify tests: `test/test_app_config/test_main.cpp`, `test/test_provisioning_form/test_main.cpp`
+- One request queue executes WEATHER / HOME_ASSISTANT / CRYPTO.
+- Typed result queues prevent cross-app result loss.
+- FreeRTOS queues store pointers to C++ request/result objects; do not byte-copy non-trivial objects containing `std::string`.
+- An external request already executing may finish after app exit, but inactive apps do not schedule follow-up work. Typed late results wait until that app is active again.
 
-**Interfaces:**
-- `HomeAssistantConfig`: enabled, HTTPS base URL, 30-300 s refresh, bearer token, CA PEM, 1-4 entity configs.
-- Existing schema v1/v2 decodes migrate to schema v3 with HA disabled.
-- `/api/status` returns a redacted config view: never token/CA contents.
-- LAN web form uses password/textarea inputs and preserves existing secrets when left blank.
+## TDD / verification checklist
 
-- [ ] Add failing schema/security tests.
-- [ ] Verify RED.
-- [ ] Implement v3 encode/decode/validation/migration.
-- [ ] Extend provisioning validation and web UI.
-- [ ] Add redacted status encoding.
-- [ ] Verify secrets never appear in status JSON.
-
-### Task 3: Crypto provider/controller/UI
-
-**Files:**
-- Create: `src/network/CryptoProvider.h/.cpp`
-- Create: `src/app/CryptoController.h/.cpp`
-- Create: `src/app/CryptoApp.h/.cpp`
-- Create: `src/ui/CryptoScreen.h/.cpp`
-- Modify: `src/network/AppDataTypes.h`
-- Modify: `src/network/AppDataWorker.cpp`
-- Modify: `src/app/AppShell.h`
-- Modify: `src/main.cpp`
-- Create tests: `test/test_crypto_provider/test_main.cpp`, `test/test_crypto_controller/test_main.cpp`
-
-**Interfaces:**
-- One CoinGecko request fetches `bitcoin,ethereum,solana` USD price, 24h change and last update.
-- Provider parses fail-closed into bounded `CryptoSnapshot`.
-- Controller refreshes only while active+online, default every 60 s, preserves cache on error.
-
-- [ ] Write provider/controller failing tests.
-- [ ] Verify RED.
-- [ ] Implement strict bounded parser/provider.
-- [ ] Implement active-only controller and three-row UI.
-- [ ] Register `AppId::CRYPTO` and menu entry `加密货币`.
-- [ ] Verify GREEN.
-
-### Task 4: Home Assistant secure read-only dashboard
-
-**Files:**
-- Create: `src/network/HomeAssistantProvider.h/.cpp`
-- Create: `src/app/HomeAssistantController.h/.cpp`
-- Create: `src/app/HomeAssistantApp.h/.cpp`
-- Create: `src/ui/HomeAssistantScreen.h/.cpp`
-- Modify: `src/network/AppDataTypes.h`
-- Modify: `src/network/AppDataWorker.cpp`
-- Modify: `src/app/AppShell.h`
-- Modify: `src/main.cpp`
-- Create tests: `test/test_home_assistant_provider/test_main.cpp`, `test/test_home_assistant_controller/test_main.cpp`
-
-**Interfaces:**
-- Fetches `GET <base_url>/api/states/<entity_id>` with `Authorization: Bearer <token>`.
-- TLS uses configured CA through `WiFiClientSecure::setCACert`; no insecure mode.
-- One entity request at a time; controller walks 1-4 entities sequentially and keeps per-entity last valid values.
-- No write/service endpoints in V1.
-
-- [ ] Write provider/controller failing tests.
-- [ ] Verify RED.
-- [ ] Implement secure transport/provider with bounded body.
-- [ ] Implement sequential active-only controller and compact state UI.
-- [ ] Register `AppId::HOME_ASSISTANT` and menu entry `智能家居`.
-- [ ] Verify no token is logged or included in status responses.
-
-### Task 5: Contracts, docs, full verification and artifact
-
-**Files:**
-- Create: `tools/validate_dashboard_apps_contract.py`
-- Modify: `.github/workflows/ci.yml`
-- Modify: `AGENTS.md`
-- Modify: `README.md`
-- Modify: `docs/api-contract.md`
-- Modify: `docs/deployment.md`
-- Modify: `docs/hardware-acceptance.md`
-
-- [ ] Add contract checks for app registration, shared-worker usage, active-only scheduling, CoinGecko endpoint, HA strict TLS/redaction.
-- [ ] Run all validators and native tests.
-- [ ] Run `pio run -e lilygo-t-display-s3`.
-- [ ] Verify RAM/Flash remain within board limits.
-- [ ] Verify exact-head GitHub Actions Ubuntu/Windows jobs.
-- [ ] Download artifact, recompute ZIP/firmware/partition/bootloader SHA256, and compare with manifest.
-- [ ] Keep PR Draft and prepare one Codex flash/physical acceptance instruction for the combined firmware.
+- [x] RED dashboard integration contract verified before implementation.
+- [x] Typed app-data routing implemented; Weather adapted.
+- [x] Home Assistant configuration validation/codec/store implemented.
+- [x] Home Assistant strict-TLS provider implemented.
+- [x] Home Assistant controller/app/UI/config portal implemented.
+- [x] Crypto provider/controller/app/UI implemented.
+- [x] CoinGecko replaced with Binance market-data-only endpoint after current-doc verification.
+- [x] Provider/controller/config native tests added.
+- [x] HA ArduinoJson string regression reproduced and fixed.
+- [ ] Final documentation alignment.
+- [ ] Exact-head Ubuntu native PASS.
+- [ ] Exact-head Windows native PASS.
+- [ ] Exact-head ESP32-S3 firmware build PASS.
+- [ ] Exact-head artifact hashes independently verified.
+- [ ] Physical T-Display-S3 acceptance by Codex/user.
