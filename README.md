@@ -1,287 +1,296 @@
 # T-Display GP
 
-基于 **LILYGO T-Display-S3** 的可扩展桌面信息终端。当前包含 **A 股行情、天气、辉光时钟、设备信息** 四个 App，并通过统一主菜单切换；Home Assistant、Crypto、空气质量、服务监控可在后续按同一架构继续增加。
-
-> **GitHub `dgcary/t-display-gp` 是项目唯一事实源。** 开发、修复和 Codex 部署都应从 GitHub 指定分支/提交开始。
-
-## 当前功能
-
-### 多 App Shell
-
-- 默认开机进入股票 App，保持原使用习惯
-- GPIO0 短按：当前 App 上一项；GPIO14 短按：当前 App 下一项
-- **GPIO0 长按 700 ms：返回主菜单**
-- 主菜单 GPIO0/GPIO14 短按：前后选择 App
-- **主菜单 GPIO14 长按 700 ms：进入选中 App**
-- 长按只触发一次，不在释放时再误触发短按
-- 非前台 App 不绘屏、不主动高频调度，但保留最后有效缓存/状态
-
-### 股票 App
-
-- 沪/深/北 A 股，股票池 3–5 只
-- 报价 3–5 秒刷新可配置
-- **腾讯：报价 + 分时主源**
-- **东方财富：报价 + 分时备用源**
-- 320×170 横屏
-- 网络/Provider 失败保留最后有效报价和分时图
-- 分时午休断点、昨收/今开参考线
-- Quote/Intraday 健康状态与 Provider failover 独立
-- 每个新分时周期先尝试腾讯；腾讯有限重试仍失败后自动切东方财富分时接口
-- 完整分时周期失败后等待正常刷新间隔，不产生 empty-cache retry storm
-- 页脚区分 `Q:` 报价源和 `I:` 分时源，例如常态 `Q:TX I:TX`
-- StockApp 退出到菜单后暂停新的行情 Worker 执行；已经开始的 HTTPS 请求允许自然完成，返回股票时恢复原 QoS/刷新
-
-### 天气 App
-
-- Open-Meteo Provider，独立于 UI/Controller
-- 地点名称 + 经纬度由 Web/Captive Portal 配置
-- 当前温度、体感、湿度、风速、降雨概率、天气状态
-- 今天/明天/后天高低温与中文天气状态
-- 重点信息按天气/温度着色
-- 右侧天气角色采用 **手绘水彩风奶油/暖棕小猫**，用多层低饱和“水彩晕染”绘制，不依赖 GIF/大位图
-- 晴/多云/雾/雨/雪/雷雨背景，以及高温汗滴、雨伞、低温围巾、睡眠符号、雷暴闪电等反应
-- 两帧动画约 500 ms 切换；动画只局部刷新右侧宠物区域，避免整屏闪烁
-- 默认 15 分钟刷新，可配置 5–60 分钟
-- 请求失败保留最后有效天气缓存
-- WeatherApp 不在前台时不主动刷新
-- 天气错误不会污染股票状态
-
-### 辉光时钟 App
-
-- 作为现有 `AppManager` 的正式独立 App，菜单名称为 **辉光时钟**
-- 复用设备已有 NTP/本地时间状态，不增加独立时间服务
-- **本地只读，不发起 HTTP/TLS，不使用 AppDataWorker/NetworkArbiter**
-- 四位 `HH:MM` 辉光管风格显示，暗色玻璃管 + 暖橙色多层辉光
-- 日期、星期和秒数同时显示
-- 未完成时间同步时显示“等待时间同步”，不会使用无效时间
-- 本地时间每 1 秒采样一次；冒号以约 500 ms 相位闪烁
-- 正常刷新只重绘变化的数字槽、冒号或页脚，不做 500 ms 整屏 `fillScreen()`
-- GPIO0/GPIO14 短按当前无功能；GPIO0 长按仍由 AppManager 统一返回主菜单
-- 本版本仅提供独立 App；自动 Screensaver 后续单独设计
-
-### 设备信息 App
-
-- 当前 LAN IP（大号显示）
-- SSID / RSSI / MAC
-- uptime / 当前时间
-- free heap / minimum heap / PSRAM
-- 直接提示 `Web: http://<IP>/`，方便手机或电脑打开现有 Web 配置页
-- 本地只读，不发起外部 HTTP 请求，也不显示 Wi-Fi 密码/API secret
-
-## 主菜单
+基于 **LILYGO T-Display-S3** 的 320×170 多应用桌面信息终端。当前固件包含：
 
 ```text
-股票 → 天气 → 辉光时钟 → 设备信息
+股票 → 天气 → 辉光时钟 → 智能家居 → 加密货币 → 设备信息
 ```
 
-启动默认仍进入股票。任意普通 App 中长按 GPIO0 返回主菜单；主菜单短按左右选择，长按 GPIO14 进入。
+> GitHub `dgcary/t-display-gp` 是项目唯一事实源。开发、编译、Artifact 和 Codex 真机部署都必须对应明确的 Git SHA。
 
-## 架构
+## 启动与待机
+
+- **开机默认进入辉光时钟。**
+- `股票`：不触发自动待机，停留多久都保持股票页面。
+- `辉光时钟`：待机目标，本身不重复触发。
+- `主菜单 / 天气 / 智能家居 / 加密货币 / 设备信息`：连续 **30 秒没有任何有效按键事件**，自动切回辉光时钟。
+- GPIO0/GPIO14 的有效短按或长按都会重新开始 30 秒计时；网络刷新、行情变化、HA/Crypto 数据返回不算用户操作。
+- idle 逻辑集中由 `AppManager` 管理，并使用 wrap-safe `millis()` 差值。
+
+## 按键
+
+普通 App：
+
+```text
+GPIO0 短按  -> 当前 App 上一项
+GPIO14 短按 -> 当前 App 下一项
+GPIO0 长按  -> 主菜单
+GPIO14 长按 -> 保留 / no-op
+```
+
+主菜单：
+
+```text
+GPIO0 短按  -> 上一个 App
+GPIO14 短按 -> 下一个 App
+GPIO0 长按  -> no-op
+GPIO14 长按 -> 进入选中 App
+```
+
+Debounce 40 ms；长按阈值 700 ms；长按触发后释放不会再产生一次短按。
+
+## 股票 App
+
+- 沪/深/北 A 股，股票池 3–5 只。
+- 腾讯：报价 + 分时主源。
+- 东方财富：报价 + 分时备用源。
+- Quote / Intraday 健康与 fallback 独立。
+- 报价优先级高于分时；等待分时 latest-wins。
+- 腾讯分时 transient retry 有界，最终失败才切东方财富；完整分时周期失败后等待正常刷新间隔。
+- 连续 3 次腾讯报价失败切东方财富；备用期间探测腾讯，连续 2 次恢复探测成功后回腾讯。
+- 网络失败保留最后有效报价/分时缓存。
+- **股票页不受 30 秒自动回时钟影响。**
+
+## 天气 App
+
+- Open-Meteo 当前天气 + 3 日预报。
+- 地点名称、经纬度、刷新周期通过现有 Web/Captive Portal 配置。
+- 默认 15 分钟刷新，可配置 5–60 分钟。
+- 失败保留最后有效缓存，不 tight retry。
+- 仅前台主动调度。
+- 右侧使用轻量程序化手绘水彩风小猫与两帧天气动画。
+
+## 辉光时钟 App
+
+- **默认启动 App，也是系统 30 秒 idle destination。**
+- 使用公共 NTP 同步后的 ESP32 本地系统时间；不创建独立 NTP worker。
+- `HH:MM` 辉光管、日期、星期、秒数。
+- 时间未同步时 fail-closed 显示等待状态。
+- 每秒采样时间，冒号约 500 ms 相位动画。
+- 动画/数字变化做局部刷新，不以 500 ms 周期整屏清屏。
+- 完全 local-only：不使用 `HttpTransport`、`AppDataWorker` 或 `NetworkArbiter`。
+
+## Home Assistant / 智能家居 App
+
+### 角色
+
+**Home Assistant 是你现有的服务器；T-Display-S3 只是 REST API 客户端。**
+
+设备不会运行第二套 Home Assistant。运行时的数据流是：
+
+```text
+T-Display-S3
+    -> GET /api/states/<entity_id>
+    -> 你现有的 Home Assistant Server
+```
+
+V1 是 **只读 Dashboard**，不调用 `/api/services`，不会控制灯、门锁、空调等实体。
+
+### 支持能力
+
+- 配置 1–4 个 HA entity ID，可选自定义显示名称。
+- 顺序读取实体，默认 30 秒刷新，可配置 30–300 秒。
+- 单实体失败保留该实体最后有效状态。
+- 只在 Home Assistant App 位于前台时启动新的刷新周期。
+- 使用 `Authorization: Bearer <Long-Lived Access Token>`。
+
+### HTTP / HTTPS
+
+兼容 Home Assistant 常见的局域网默认地址：
+
+```text
+http://homeassistant.local:8123
+http://192.168.x.x:8123
+```
+
+HTTP 模式无需 CA，但 **Bearer Token 在局域网上是明文传输**，只应在可信 LAN 使用。
+
+如果你的 HA 已启用 HTTPS：
+
+```text
+https://ha.example.com
+```
+
+则必须提供 CA PEM；设备使用 `WiFiClientSecure::setCACert()` 严格校验证书，**HA 凭据路径禁止 `setInsecure()`**。
+
+### HA 配置页
+
+设备联网后打开：
+
+```text
+http://<T-Display-IP>:8081/
+```
+
+这里填写：
+
+1. HA Base URL
+2. Long-Lived Access Token
+3. 1–4 个 entity ID
+4. 可选显示名称
+5. HTTPS 模式下的 CA PEM
+6. 30–300 秒刷新周期
+
+`:8081` 是 **T-Display 自己的局域网配置页**，不是 HA Server。它本身也是 HTTP，因此只在可信 LAN 使用。
+
+配置状态接口只返回 `ha_token_set` / `ha_ca_set` 布尔值，不回显 Token 或 CA 内容；串口日志也不记录 Token。
+
+## Crypto / 加密货币 App
+
+- BTC / ETH / SOL 对 USDT。
+- 使用 Binance 专用只读市场数据域名 `data-api.binance.vision`。
+- 一次 `/api/v3/ticker/24hr` 请求取得 BTCUSDT / ETHUSDT / SOLUSDT 三个 ticker。
+- 不需要 Binance API Key。
+- 显示最新价 + 24h 涨跌幅。
+- 60 秒刷新；仅前台主动调度。
+- 响应顺序不可信，按 symbol 映射；缺失、重复、非法数值 fail-closed。
+- 请求失败保留上次完整三币缓存。
+
+## 设备信息 App
+
+- LAN IP、SSID、RSSI、MAC。
+- uptime / 当前时间。
+- free heap / minimum heap / PSRAM。
+- 显示现有配置页 `Web: http://<IP>/`。
+- local-only，不产生外部 HTTP 请求，也不显示 Wi-Fi 密码或 Token。
+
+## App / Worker 架构
 
 ```text
 AppManager
 ├── MenuApp
 ├── StockApp
-│   ├── StockController
-│   ├── StockScreen
+│   ├── StockController / StockScreen
 │   └── MarketDataWorker
 ├── WeatherApp
-│   ├── WeatherController
-│   ├── WeatherScreen / WeatherVisuals / WeatherCatArt
-│   └── AppDataWorker / OpenMeteoProvider
+│   └── WeatherController / OpenMeteoProvider
 ├── NixieClockApp
-│   ├── NixieClockModel
-│   └── NixieClockScreen
+│   └── NixieClockModel / NixieClockScreen
+├── HomeAssistantApp
+│   └── HomeAssistantController / HomeAssistantProvider
+├── CryptoApp
+│   └── CryptoController / CryptoProvider
 └── DeviceInfoApp
-    └── DeviceInfoScreen
 
-Shared
-├── DeviceLayer / ButtonInput / localDateTime
-├── Provisioning / ConfigStore
-├── NetworkArbiter
-└── HttpTransport
+Shared low-frequency path
+└── AppDataWorker
+    ├── WEATHER result queue
+    ├── HOME_ASSISTANT result queue
+    └── CRYPTO result queue
+
+External network execution
+└── NetworkArbiter
 ```
 
-`MarketDataWorker` 保留股票专用 QoS/重试；低频天气以及未来空气质量/Home Assistant/服务监控统一走共享 App-data 路径，不为每个 App 创建一个 FreeRTOS Worker。NixieClock 与 DeviceInfo 都只读取本地状态，不占用 AppDataWorker/NetworkArbiter。
+Stock 保留专用 `MarketDataWorker` 以维持行情 QoS。Weather / Home Assistant / Crypto 共用 **一个** `AppDataWorker`，不为每个 App 新建 FreeRTOS worker。
 
-## 网络与内存边界
+结果按 `AppDataRequestType` 分队列，避免一个 App 把另一个 App 的迟到结果取走。FreeRTOS 队列传递 C++ request/result 指针，不直接 byte-copy 含 `std::string` 的非平凡对象。
 
-所有外部 HTTPS 请求经过 `NetworkArbiter` 串行执行：**同一时刻最多一个外部 HTTP/TLS 请求**。这避免股票与天气同时 TLS handshake 时产生不必要的运行时 Heap 峰值。辉光时钟完全不进入该路径。
+所有实际外部 HTTP/TLS 操作继续经过 `NetworkArbiter`，同一时刻最多执行一个外部请求。
 
-现有 transport 约束保持：
+## 网络边界
+
+公共行情、天气、Crypto 继续使用现有 `HttpTransport`：
 
 ```text
-TCP/connect: 1500 ms
-TLS handshake: 5 s
+connect timeout: 1500 ms
 HTTP/read setting: 2500 ms
+TLS handshake cap: 5 s
 HTTPClient reuse: false
-最大保留响应: 32 KiB
+最大保留 body: 32 KiB
 ```
 
-串口除股票 `[md]` 外，天气请求使用 `[appdata]`，并每 60 秒输出一次运行时资源：
+Home Assistant 的 credentialed transport 单独处理：
+
+- `http://` -> 普通 `WiFiClient`，明确属于可信 LAN 明文模式。
+- `https://` -> `WiFiClientSecure + setCACert`，不得使用 insecure TLS。
+- HA 单实体 retained body 上限 4 KiB。
+- 两种 HA 模式都经过 `NetworkArbiter`。
+
+## 配置
+
+股票/天气公共配置仍是 **AppConfig schema v2**，NVS namespace 保持 `stockticker`。旧 v1 自动迁移时保留股票配置并补天气默认值。
+
+Home Assistant 不改变 AppConfig schema；使用独立 `ha_config` NVS blob 存储。正常升级只写 application firmware，不擦 NVS。
+
+## Diagnostics
 
 ```text
-[sys] app=STOCK|MENU|WEATHER|NIXIE_CLOCK|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
+[md]      股票 MarketDataWorker
+[appdata] WEATHER / HOME_ASSISTANT / CRYPTO
+[net]     实际 HTTP/TLS 网络阶段；HA mode=HA_HTTP 或 HA_CA
+[sys]     当前 App + heap/PSRAM/stack 资源
 ```
 
-真机长时间切换 App 时应关注 `heap_min` 和 `heap_free` 是否持续单向下降。
-
-## 股票稳定性设计
-
-股票 HTTP 始终在 `MarketDataWorker` 中执行，主循环不做阻塞网络请求。
-
-请求优先级：
+`[sys] app=` 可为：
 
 ```text
-当前股票报价 > 后台报价 > 主源恢复探测 > 分时 > 分时重试
+MENU | STOCK | WEATHER | NIXIE_CLOCK | HOME_ASSISTANT | CRYPTO | DEVICE_INFO
 ```
 
-分时采用 latest-wins。腾讯可恢复网络/服务器错误最多 3 次尝试，约在 1.5 秒、4 秒后延迟重试，且重试必须让出报价请求；腾讯分时周期最终无法完成时才交给东方财富。东方财富作为二级分时源失败后，该周期结束，不递归 fallback。
-
-报价默认同样使用腾讯。连续 3 次腾讯主报价失败进入东方财富备用，备用期间按 120 秒节奏探测腾讯；连续 2 次腾讯探测成功恢复主源。
-
-## 配置 schema
-
-配置为 schema v2，仍使用已有 `stockticker` NVS namespace。
-
-已有 schema v1 设备升级时：
-
-- 原 3–5 只股票保留
-- 股票显示名保留
-- 3/4/5 秒刷新周期保留
-- 自动补充天气默认配置（默认关闭、15 分钟）
-- 成功读取后 best-effort 写回 v2 格式
-
-Weather 启用后必须配置：
-
-```text
-地点名称
-纬度 -90..90
-经度 -180..180
-刷新周期 5..60 分钟
-```
-
-辉光时钟没有新增配置字段；直接使用设备本地时间。
-
-## 首次使用 / Web 设置
-
-无有效配置时连接 `TDisplay-GP-Setup`。Captive Portal 与局域网 Web 设置页支持：
-
-1. Wi-Fi
-2. 3–5 个 A 股代码和可选显示名
-3. 3/4/5 秒股票刷新周期
-4. 天气启用状态
-5. 地点名称、纬度、经度
-6. 5–60 分钟天气刷新周期
-
-已经联网时，如忘记设备 IP：进入 **设备信息**，直接查看 `Web: http://<IP>/`。
-
-保存配置后采用受控重启，避免运行中部分模块使用新旧配置混合状态。
+任何日志都不得输出 HA Token、Wi-Fi 密码等 secret。
 
 ## 硬件
 
 - LILYGO T-Display-S3
 - ESP32-S3
 - ST7789 170×320，8-bit parallel
-- 应用逻辑：320×170 landscape，rotation 3
+- 逻辑方向 320×170，rotation 3
 - GPIO15：屏幕供电
 - GPIO38：背光
-- GPIO0：上一项 / 长按返回菜单
-- GPIO14：下一项 / 菜单长按进入
-- TFT RGB 顺序：`TFT_RGB`
-- `INIT_SEQUENCE_3`
+- GPIO0 / GPIO14：按键
 
-## 固定开发 / 烧录工作流
-
-### 网页版 ChatGPT：开发 + 编译
+## 开发侧验证
 
 ```bash
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 python tools/validate_nixie_clock_contract.py
+python tools/validate_dashboard_apps_contract.py
 pio test -e native
 pio run -e lilygo-t-display-s3
 ```
 
-GitHub Actions 同时运行 Ubuntu native + Windows native，并在 firmware build 成功后上传：
+GitHub Actions 同时执行 Ubuntu native 和 Windows native，并在 ESP32-S3 build 成功后上传：
 
 ```text
 tdisplay-gp-firmware-<SOURCE_SHA>
 ```
 
-Artifact 包含 `firmware.bin`、`partitions.bin`、`bootloader.bin` 和 `firmware-manifest.txt`。
-
-### Codex：只烧录 + 真机测试
-
-Codex 不再承担本地常规编译/编译排错。它只：
+Artifact 包含：
 
 ```text
-下载 exact-SHA verified Artifact
--> 校验 manifest / firmware SHA256
--> 确认串口
--> 用 esptool 将 firmware.bin 写入 manifest 指定 app offset
+firmware.bin
+partitions.bin
+bootloader.bin
+firmware-manifest.txt
+```
+
+## Codex 部署原则
+
+Codex 只负责：
+
+```text
+exact-SHA Artifact 下载
+-> manifest/SHA256 校验
+-> firmware.bin 按 manifest offset 烧录
 -> 串口监控
--> 真机功能测试
--> 把问题证据反馈给网页版 ChatGPT
+-> 真机 UI/网络/待机/稳定性测试
+-> 回传证据
 ```
 
-真机问题由网页版 ChatGPT 修改代码并重新 PlatformIO 编译，再生成新的 exact-SHA Artifact 交给 Codex。
+Codex 不承担常规源码修改和本地编译排错。正常升级不 erase flash/NVS，不重写 bootloader/partition table。
 
-完整步骤见 [docs/deployment.md](docs/deployment.md)。
-
-## 目录
-
-```text
-AGENTS.md              ChatGPT / Codex / 自动化 Agent 规则
-include/               固件常量
-lib/core/              配置、股票代码、交易时钟等纯逻辑
-lib/providers/         行情 Provider 接口/解析器
-src/app/               AppShell / StockApp / WeatherApp / NixieClockApp / DeviceInfoApp / Controller
-src/network/           HTTP、网络互斥、行情/通用 Worker、Provider、配网
-src/device/            T-Display-S3 硬件与输入层
-src/ui/                Menu / Stock / Weather / NixieClock / DeviceInfo UI
-test/                  PlatformIO native tests
-tools/                 TFT / 配网 / HTTP / Nixie contract validators
-docs/                  API、部署、真机验收、设计规格/计划
-```
+完整步骤见 `docs/deployment.md`，真机验收见 `docs/hardware-acceptance.md`，Provider 契约见 `docs/api-contract.md`。
 
 ## 核心原则
 
-1. `main.cpp` 只负责公共启动与 AppManager 驱动，不承载具体 App 业务。
-2. App 缓存优先：退出/网络失败不清最后有效数据。
-3. 非前台 App 不获得绘屏权。
-4. 不为每个新 App 创建独立 Worker；低频联网功能复用 App-data 路径，本地 App 不进入网络路径。
-5. 外部 TLS 串行执行，避免并发 TLS 内存峰值。
-6. Quote/Intraday Provider 健康独立，分时 fallback 不能污染报价 failover。
-7. Parser fail-closed，不通过放宽字段/无限重试掩盖 Provider 问题。
-8. 真机 PASS 必须来自实体 T-Display-S3，host test/firmware build 不能代替。
-9. Codex 不重复承担开发侧 PlatformIO 编译；部署使用 Web/CI 已验证的 exact-SHA firmware Artifact。
-
-## Provider 与安全说明
-
-股票 Provider 约定和天气 Provider 字段见 [docs/api-contract.md](docs/api-contract.md)。辉光时钟没有远程 Provider/API。
-
-当前固件仍延续既有 `WiFiClientSecure::setInsecure()` 行为；多 App 改造没有进一步降低 TLS 安全性。若未来 Home Assistant 接入长期访问 Token，必须单独设计凭据存储和严格 TLS 验证，不能直接照搬当前公开数据源的安全边界。
-
-## 真机验收
-
-除了原股票稳定性，还必须验证：
-
-- 开机默认 StockApp
-- 长按 GPIO0 返回菜单
-- 菜单可进入 Stock / Weather / 辉光时钟 / DeviceInfo
-- 辉光时钟显示真实本地 `HH:MM`、日期、星期和秒数；冒号轻微闪烁且无整屏闪屏
-- 未同步时间时辉光时钟显示“等待时间同步”，同步后自动正常显示
-- NixieClock 不产生 `[md]`/`[appdata]` 请求，不占 NetworkArbiter
-- DeviceInfo 显示真实 IP 且 Web 配置页可访问
-- Weather 能获取实时数据，中文三日预报正常
-- 手绘水彩小猫动画/天气反应正常且无整屏闪烁
-- 常态行情优先看到 `Q:TX I:TX`
-- Tencent 分时最终失败时能出现 `fallback=TX->EM`，东方财富成功后 footer `I:EM`
-- Quote 继续独立正常更新
-- Weather/Stock 失败均保留各自缓存
-- Stock ⇄ Menu ⇄ Weather ⇄ NixieClock ⇄ DeviceInfo 至少 100 次无 watchdog/reboot/freeze
-- `[sys]` Heap 无持续单向下降
-
-详见 [docs/hardware-acceptance.md](docs/hardware-acceptance.md)。
+1. GitHub exact SHA 是事实源。
+2. 默认启动 Nixie；非 Stock/Nixie App 30 秒无按键回 Nixie。
+3. Stock 的行情 QoS/failover 独立保持。
+4. 本地 App 不占网络 worker。
+5. Weather/HA/Crypto 共用单一 AppDataWorker；结果按类型隔离。
+6. 外部请求由 NetworkArbiter 串行执行。
+7. Parser fail-closed，错误保留最后有效缓存。
+8. HA 是客户端；HTTP 是显式可信 LAN 模式，HTTPS 必须 CA 校验。
+9. 真机 PASS 只能来自实际 T-Display-S3 证据。
