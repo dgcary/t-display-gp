@@ -9,7 +9,7 @@
 
 namespace {
 constexpr char CRYPTO_URL[] =
-    "https://api.binance.com/api/v3/ticker/24hr?symbols=%5B%22BTCUSDT%22,%22ETHUSDT%22,%22SOLUSDT%22%5D";
+    "https://data-api.binance.vision/api/v3/ticker/24hr?symbols=%5B%22BTCUSDT%22,%22ETHUSDT%22,%22SOLUSDT%22%5D";
 constexpr const char* SYMBOLS[] = {"BTCUSDT", "ETHUSDT", "SOLUSDT"};
 
 void fillDiagnostics(const HttpResponse& response, CryptoDiagnostics* diagnostics) {
@@ -68,12 +68,15 @@ CryptoError CryptoProvider::fetch(CryptoSnapshot& out, CryptoDiagnostics* diagno
   CryptoSnapshot parsed;
   bool seen[3] = {false, false, false};
   for (JsonObjectConst row : rows) {
-    const char* symbol = row["symbol"] | nullptr;
+    if (!row["symbol"].is<const char*>() || !row["lastPrice"].is<const char*>() ||
+        !row["priceChangePercent"].is<const char*>() || !row["closeTime"].is<uint64_t>()) {
+      return CryptoError::MISSING_FIELD;
+    }
+    const char* symbol = row["symbol"].as<const char*>();
     const int index = symbolIndex(symbol);
     if (index < 0 || seen[index]) return CryptoError::PARSE;
-    const char* lastPrice = row["lastPrice"] | nullptr;
-    const char* changePercent = row["priceChangePercent"] | nullptr;
-    if (!lastPrice || !changePercent || !row["closeTime"].is<uint64_t>()) return CryptoError::MISSING_FIELD;
+    const char* lastPrice = row["lastPrice"].as<const char*>();
+    const char* changePercent = row["priceChangePercent"].as<const char*>();
     double price = 0.0;
     double change = 0.0;
     if (!parseNumber(lastPrice, price) || !parseNumber(changePercent, change) || price <= 0.0 ||
@@ -85,7 +88,9 @@ CryptoError CryptoProvider::fetch(CryptoSnapshot& out, CryptoDiagnostics* diagno
     parsed.quotes[index] = {price, change, closeTimeMs / 1000ULL};
     seen[index] = true;
   }
-  for (bool value : seen) if (!value) return CryptoError::MISSING_FIELD;
+  for (bool value : seen) {
+    if (!value) return CryptoError::MISSING_FIELD;
+  }
   out = parsed;
   return CryptoError::NONE;
 }
