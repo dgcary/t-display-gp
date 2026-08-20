@@ -106,7 +106,7 @@ void setup() {
   if (!homeAssistantApp.begin(homeAssistantConfig)) { Serial.println("Home Assistant app failed to start"); return; }
   if (!cryptoApp.begin()) { Serial.println("Crypto app failed to start"); return; }
   if (!deviceInfoApp.begin()) { Serial.println("Device info app failed to start"); return; }
-  if (!appManager.begin(AppId::STOCK)) { Serial.println("App manager failed to start"); return; }
+  if (!appManager.begin(AppId::NIXIE_CLOCK)) { Serial.println("App manager failed to start"); return; }
   appReady = true;
   Serial.println("[boot] multi-app loop ready");
   logResourceSnapshot(millis());
