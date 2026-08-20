@@ -72,15 +72,27 @@ class MenuApp final : public IApp {
 class AppManager {
  public:
   AppManager(MenuApp& menu, std::initializer_list<IApp*> apps);
-  bool begin(AppId startupApp = AppId::STOCK);
+  bool begin(AppId startupApp = AppId::NIXIE_CLOCK);
   void onInput(InputEvent event);
   void tick(uint32_t nowMs);
   void render();
   AppId activeAppId() const;
+
  private:
+  static constexpr uint32_t IDLE_TO_NIXIE_MS = 30000U;
+  static uint32_t elapsed(uint32_t nowMs, uint32_t thenMs) {
+    return static_cast<uint32_t>(nowMs - thenMs);
+  }
+  static bool autoIdleEnabled(AppId id) {
+    return id != AppId::STOCK && id != AppId::NIXIE_CLOCK;
+  }
+
   IApp* findApp(AppId id) const;
   bool switchTo(AppId id);
   MenuApp& menu_;
   std::vector<IApp*> apps_;
   IApp* active_ = nullptr;
+  uint32_t lastUserActivityMs_ = 0;
+  bool activityClockValid_ = false;
+  bool userActivityPending_ = false;
 };
