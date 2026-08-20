@@ -1,152 +1,160 @@
 # T-Display GP
 
-基于 **LILYGO T-Display-S3** 的 320×170 多应用桌面信息终端。当前固件包含：
+基于 **LILYGO T-Display-S3** 的 320×170 多应用桌面信息终端。
+
+当前菜单：
 
 ```text
 股票 → 天气 → 辉光时钟 → 智能家居 → 加密货币 → 设备信息
 ```
 
-> GitHub `dgcary/t-display-gp` 是项目唯一事实源。开发、编译、Artifact 和 Codex 真机部署都必须对应明确的 Git SHA。
+> GitHub `dgcary/t-display-gp` 是项目唯一事实源。开发、编译、Artifact 和 Codex 真机部署都必须对应明确 Git SHA。
 
-## 启动与待机
+## 启动 / 待机
 
 - **开机默认进入辉光时钟。**
-- `股票`：不触发自动待机，停留多久都保持股票页面。
-- `辉光时钟`：待机目标，本身不重复触发。
-- `主菜单 / 天气 / 智能家居 / 加密货币 / 设备信息`：连续 **30 秒没有任何有效按键事件**，自动切回辉光时钟。
-- GPIO0/GPIO14 的有效短按或长按都会重新开始 30 秒计时；网络刷新、行情变化、HA/Crypto 数据返回不算用户操作。
-- idle 逻辑集中由 `AppManager` 管理，并使用 wrap-safe `millis()` 差值。
+- Stock 和 NixieClock 永久豁免自动待机。
+- Menu / Weather / Home Assistant / Crypto / DeviceInfo 连续 **30 秒无有效按键**自动进入 NixieClock。
+- 任意有效 GPIO0/GPIO14 short/long 重新计时；网络刷新/数据返回不算用户活动。
+- idle 由 `AppManager` 统一实现，使用 wrap-safe `millis()`。
 
 ## 按键
 
-普通 App：
-
 ```text
-GPIO0 短按  -> 当前 App 上一项
-GPIO14 短按 -> 当前 App 下一项
-GPIO0 长按  -> 主菜单
-GPIO14 长按 -> 保留 / no-op
+普通 App:
+GPIO0 short  previous
+GPIO14 short next
+GPIO0 long   menu
+GPIO14 long  reserved/no-op
+
+Menu:
+GPIO0 short  previous app
+GPIO14 short next app
+GPIO0 long   no-op
+GPIO14 long  enter
 ```
 
-主菜单：GPIO0/GPIO14 短按前后选择，GPIO14 长按进入，GPIO0 长按 no-op。Debounce 40 ms；长按 700 ms；长按释放不再产生短按。
+40 ms debounce，700 ms long，长按释放不再触发 short。
 
-## 股票 App
+## Stock
 
-- 沪/深/北 A 股，3–5 只。
-- 腾讯报价+分时主源，东方财富备用。
-- Quote / Intraday 健康与 fallback 独立。
-- Quote 优先于 intraday；等待分时 latest-wins。
-- 腾讯分时有限重试，完整失败等待正常刷新。
-- 3 次腾讯 quote failure 切 EastMoney；备用期间 probe Tencent，连续 2 次成功恢复。
-- 网络失败保留最后有效缓存。
-- **股票页不受 30 秒 idle 影响。**
+- 腾讯 quote + intraday primary，EastMoney fallback。
+- Quote/Intraday health 独立。
+- Quote 优先于 intraday；waiting intraday latest-wins。
+- Tencent intraday 有界 deferred retry，完整失败等待 normal refresh。
+- quote 连续失败阈值触发 EastMoney；备用期间 probe Tencent，2 次连续 probe success 恢复。
+- error 保留 last-valid cache。
+- **Stock 不受 30 秒 idle 影响。**
 
-## 天气 App
+## Weather
 
-Open-Meteo 当前天气 + 3 日预报。地点/经纬度/刷新通过现有 Web/Captive Portal 配置。默认 15 min，可配置 5–60 min；active-only；失败保留 cache；右侧为轻量程序化手绘水彩风小猫动画。
+Open-Meteo 当前天气 + 3 日预报。地点/经纬度/刷新通过现有 Web/Captive Portal 配置。默认 15 min，5–60 min；active-only；failure 保留 cache；手绘水彩风小猫轻量动画。
 
-## 辉光时钟 App
+## Nixie Clock
 
-- **默认启动 App，也是 30 秒 idle destination。**
-- 复用公共 NTP 后的 ESP32 local system time，不新增 NTP worker。
-- `HH:MM`、日期、星期、秒数；未同步 fail-closed。
-- 每秒采样；冒号约 500 ms；局部刷新，无周期整屏清屏。
-- local-only，不使用 `HttpTransport` / `AppDataWorker` / `NetworkArbiter`。
+- **默认启动 + global idle destination。**
+- 使用公共 NTP 后的 ESP32 local system clock，不新增 NTP worker。
+- HH:MM、日期、星期、秒数；未同步 fail-closed。
+- 1 s sample，约 500 ms colon animation；局部刷新。
+- local-only，不使用 HttpTransport/AppDataWorker/NetworkArbiter。
 
-## Home Assistant / 智能家居 App
+## Home Assistant
 
-### 角色非常明确
+### 角色
 
-**你现有的 Home Assistant 是服务器；T-Display-S3 只是 REST API 客户端。**
+**用户现有的 Home Assistant 是服务器；T-Display-S3 只是 REST API 客户端。**
 
-固件不会在 LILYGO 上运行第二套 Home Assistant，也不会要求替换现有服务器。数据流：
+LILYGO 上不会再运行第二套 Home Assistant。V1 只读：
 
 ```text
-T-Display-S3
-  -> GET /api/states/<entity_id>
-  -> 你现有的 Home Assistant Server
+T-Display -> GET <HA>/api/states/<entity_id> -> existing HA Server
 ```
 
-V1 是 **只读 Dashboard**，不调用 `/api/services`，不执行灯/门锁/空调控制。
+不调用 `/api/services`，不做灯/门锁/空调写控制。
 
-### 能力
+### Dashboard
 
-- 1–4 个 entity ID，可选显示名。
-- 顺序读取，默认 30 s，配置范围 30–300 s。
+- 1–4 entities，可选 labels。
+- sequential fetch。
+- refresh 30–300 s，default 30 s。
 - per-entity last-valid cache。
-- active-only 调度。
-- `Authorization: Bearer <Long-Lived Access Token>`。
+- active-only。
+- Bearer Long-Lived Access Token。
 
 ### HTTP / HTTPS
 
-兼容常见已有 HA LAN 地址：
+兼容现有 LAN HA：
 
 ```text
 http://homeassistant.local:8123
 http://192.168.x.x:8123
 ```
 
-HTTP 不需要 CA，但 Bearer Token 在 LAN 明文传输，因此只适合可信局域网。
+HTTP 无需 CA，但 Token 在 LAN 明文传输，只适合可信 LAN。
 
-若现有 HA 已启用 HTTPS，则配置 `https://...` 和 CA PEM。固件使用 `WiFiClientSecure::setCACert()` 严格验证，**HA HTTPS 禁止 `setInsecure()`**。
+HTTPS：
 
-### T-Display HA 客户端配置页
+```text
+https://ha.example.com
+```
+
+必须提供 CA PEM；使用 `WiFiClientSecure::setCACert()`，**HA HTTPS 禁止 `setInsecure()`**。
+
+### T-Display HA 配置页
 
 ```text
 http://<T-Display-IP>:8081/
 ```
 
-这里填写已有 HA Server URL、Token、1–4 个 entity ID、label、refresh，以及 HTTPS 时的 CA。
+填写 existing HA Server URL、Token、1–4 entity IDs、labels、refresh 和 HTTPS CA。
 
-**`:8081` 只是 T-Display 自己的配置页面，不是 Home Assistant Server。** 页面本身为局域网 HTTP，只在可信 LAN 使用。
+**`:8081` 是 T-Display 自己的配置页，不是 HA Server。** `/api/ha/status` 只返回 `ha_token_set` / `ha_ca_set`，不回显 secrets；serial 也不记录 Token。
 
-`/api/ha/status` 只返回 `ha_token_set` / `ha_ca_set` 布尔状态，不回显 Token 或 CA；串口也不记录 Token。
+## Crypto
 
-## Crypto / 加密货币 App
-
-- BTC / ETH / SOL 对 USDT。
-- Binance 专用只读市场数据域 `data-api.binance.vision`。
-- 一次 `/api/v3/ticker/24hr` 取得三个 symbol。
+- BTC / ETH / SOL vs USDT。
+- Binance market-data-only `data-api.binance.vision`。
+- 一次 `/api/v3/ticker/24hr` 获取 BTCUSDT/ETHUSDT/SOLUSDT。
 - 无 Binance API Key。
-- 最新价 + 24h change；60 s refresh；active-only。
-- parser 按 symbol 映射，重复/缺失/非法 fail-closed；失败保留最后完整 snapshot。
+- price + 24h change；60 s；active-only。
+- parser 按 symbol 映射；duplicate/missing/malformed fail-closed；failure 保留 last complete snapshot。
 
-## 设备信息 App
+## DeviceInfo
 
-LAN IP、SSID/RSSI/MAC、uptime/local time、heap/min heap、PSRAM、`Web: http://<IP>/`。local-only，不显示 secret。
+LAN IP、SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM、`Web: http://<IP>/`。local-only，不显示 secret。
 
-## 架构
+## Architecture
 
 ```text
 AppManager
-├── StockApp -> MarketDataWorker
+├── StockApp -> dedicated MarketDataWorker
 ├── WeatherApp ┐
-├── HomeAssistantApp ├-> single shared AppDataWorker
+├── HomeAssistantApp ├-> one shared AppDataWorker
 ├── CryptoApp ┘       -> typed result queues
 ├── NixieClockApp (local-only)
 └── DeviceInfoApp (local-only)
 
-actual external network -> NetworkArbiter -> at most one operation at once
+all actual external HTTP/TLS -> NetworkArbiter -> max one operation
 ```
 
-Weather / HA / Crypto 共用 **一个** AppDataWorker，结果按 `AppDataRequestType` 分队列，避免互相消费迟到结果。FreeRTOS 队列传 C++ 对象指针，不 byte-copy 含 `std::string` 的非平凡对象。
+Weather/HA/Crypto 共享一个 worker；typed result queues 防止 cross-app late-result loss。FreeRTOS queue 传 C++ object pointers，不 raw-copy 含 `std::string` 的对象。
 
-## 网络安全/Transport
+## Transport / security
 
-公共行情、Weather、Crypto 继续现有 `HttpTransport`：connect 1500 ms、read setting 2500 ms、TLS handshake 5 s、body max 32 KiB、reuse false。
+Public Stock/Weather/Crypto `HttpTransport`：connect 1500 ms，read setting 2500 ms，TLS handshake cap 5 s，body max 32 KiB，reuse false。
 
-HA credentialed transport：
+HA credential path：
 
 ```text
-http://  -> WiFiClient；可信 LAN 明文模式
-https:// -> WiFiClientSecure + setCACert；禁止 insecure TLS
+http://  -> WiFiClient / trusted-LAN cleartext
+https:// -> WiFiClientSecure + setCACert / no insecure fallback
 ```
 
-HA 单实体 body max 4 KiB；两种 HA 模式都经过 NetworkArbiter。
+HA response body max 4 KiB；两种 HA mode 都经过 NetworkArbiter。
 
-## 配置
+## Config
 
-股票/天气 AppConfig 保持 **schema v2** 和 `stockticker` NVS namespace。HA 使用单独 `ha_config` NVS blob；正常 application firmware 升级不擦 NVS。
+Stock/Weather AppConfig 保持 schema v2 + `stockticker` namespace。HA 使用独立 `ha_config` NVS blob；normal app-only firmware upgrade 不擦 NVS。
 
 ## Diagnostics
 
@@ -157,9 +165,9 @@ HA 单实体 body max 4 KiB；两种 HA 模式都经过 NetworkArbiter。
 [sys]     MENU/STOCK/WEATHER/NIXIE_CLOCK/HOME_ASSISTANT/CRYPTO/DEVICE_INFO
 ```
 
-不得记录 HA Token、Wi-Fi password 等 secret。
+不得记录 HA Token/Wi-Fi password 等 secret。
 
-## 开发侧强制验证
+## Required verification
 
 ```bash
 python tools/validate_tdisplay_setup.py
@@ -171,10 +179,10 @@ pio test -e native
 pio run -e lilygo-t-display-s3
 ```
 
-CI 同时跑 Ubuntu/Windows native，ESP build 成功后上传 `tdisplay-gp-firmware-<SOURCE_SHA>`，含 firmware/partitions/bootloader/manifest。
+CI 同时跑 Ubuntu/Windows native；ESP build 成功后上传 exact-SHA Artifact，包含 firmware/partitions/bootloader/manifest。
 
 ## Codex
 
-Codex 只负责 exact-SHA artifact 下载、manifest/hash 校验、烧 `firmware.bin` 到 manifest app offset、115200 serial、真机 UI/网络/idle/soak 测试并回传证据。正常不编译、不改源、不 erase NVS、不重写 partition/bootloader。
+Codex 只负责 exact-SHA Artifact 下载/hash 校验、按 manifest offset 烧 `firmware.bin`、115200 serial、真机 UI/network/idle/soak 测试并回传证据。正常不编译、不改源码、不 erase NVS、不重写 partition/bootloader。
 
-完整部署见 `docs/deployment.md`；Provider 契约见 `docs/api-contract.md`；真机验收见 `docs/hardware-acceptance.md`。
+详细：`docs/deployment.md`、`docs/api-contract.md`、`docs/hardware-acceptance.md`。
