@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Nixie Clock app integration contract."""
+"""Validate the Nixie Clock app integration, startup, and idle contract."""
 from pathlib import Path
 import sys
 
@@ -13,11 +13,17 @@ required_files = {
 missing_files = sorted(path for path in required_files if not Path(path).exists())
 
 checks = {
-    "src/app/AppShell.h": ["NIXIE_CLOCK"],
+    "src/app/AppShell.h": [
+        "NIXIE_CLOCK",
+        "IDLE_TO_NIXIE_MS = 30000U",
+        "id != AppId::STOCK",
+        "id != AppId::NIXIE_CLOCK",
+    ],
     "src/main.cpp": [
         "NixieClockApp",
         "AppId::NIXIE_CLOCK",
         '"辉光时钟"',
+        "appManager.begin(AppId::NIXIE_CLOCK)",
     ],
     "src/app/NixieClockModel.h": [
         "struct NixieClockViewModel",
@@ -70,7 +76,7 @@ if missing_files or missing_contract or network_violations:
         for item in missing_files:
             print(f"  {item}")
     if missing_contract:
-        print("missing Nixie Clock integration contract:")
+        print("missing Nixie Clock integration/startup/idle contract:")
         for item in missing_contract:
             print(f"  {item}")
     if network_violations:
@@ -79,4 +85,4 @@ if missing_files or missing_contract or network_violations:
             print(f"  {item}")
     sys.exit(1)
 
-print("Nixie Clock local-only app + menu integration contract: OK")
+print("Nixie Clock local-only + default-start + 30s idle-destination contract: OK")
