@@ -50,17 +50,13 @@ bool WeatherController::refreshDue(uint32_t nowMs) const {
 
 void WeatherController::consumeResults(uint32_t nowMs) {
   AppDataResult result;
-  while (queue_.tryReceive(result)) {
-    if (result.type != AppDataRequestType::WEATHER || result.requestId != outstandingRequestId_) {
-      continue;
-    }
+  while (queue_.tryReceive(AppDataRequestType::WEATHER, result)) {
+    if (result.requestId != outstandingRequestId_) continue;
     outstandingRequestId_ = 0;
     if (result.error == WeatherError::NONE) {
       cache_ = result.weather;
       hasData_ = true;
       hasSuccessTime_ = true;
-      // completedMs is a real uint32_t millis() timestamp. Zero is valid both
-      // at boot and after wraparound, so never treat it as an "unset" sentinel.
       lastSuccessMs_ = result.completedMs;
       lastError_ = WeatherError::NONE;
     } else {

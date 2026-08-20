@@ -13,7 +13,7 @@ class AppDataWorker final : public IAppDataQueue {
 
   bool begin();
   bool enqueue(const AppDataRequest& request) override;
-  bool tryReceive(AppDataResult& result) override;
+  bool tryReceive(AppDataRequestType type, AppDataResult& result) override;
 
  private:
   struct Impl;
