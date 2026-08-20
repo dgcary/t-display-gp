@@ -11,8 +11,8 @@ constexpr uint16_t PANEL = 0x1082;
 constexpr uint16_t BORDER = 0x39E7;
 constexpr uint16_t TEXT = 0xFFFF;
 constexpr uint16_t MUTED = 0x9CF3;
-constexpr uint16_t OK = 0x07E0;
-constexpr uint16_t BAD = 0xF800;
+constexpr uint16_t STATUS_OK_COLOR = 0x07E0;
+constexpr uint16_t STATUS_BAD_COLOR = 0xF800;
 }
 
 void HomeAssistantScreen::begin(TFT_eSPI& display, U8g2_for_TFT_eSPI& unicodeFont) {
@@ -29,7 +29,7 @@ void HomeAssistantScreen::render(const HomeAssistantViewModel& view, const std::
   display_->setTextColor(TEXT, BG);
   display_->drawString("HOME ASSISTANT", 10, 7);
   display_->setTextDatum(TR_DATUM);
-  display_->setTextColor(view.configured ? OK : MUTED, BG);
+  display_->setTextColor(view.configured ? STATUS_OK_COLOR : MUTED, BG);
   display_->drawString(view.configured ? "READ ONLY" : "SETUP", 310, 7);
   display_->drawFastHLine(8, 25, 304, BORDER);
 
@@ -63,7 +63,7 @@ void HomeAssistantScreen::render(const HomeAssistantViewModel& view, const std::
         if (value.size() > 26) value.resize(26);
         display_->drawString(value.c_str(), 303, y + 12);
       } else {
-        display_->setTextColor(entity.error == HomeAssistantError::NONE ? MUTED : BAD, PANEL);
+        display_->setTextColor(entity.error == HomeAssistantError::NONE ? MUTED : STATUS_BAD_COLOR, PANEL);
         display_->drawString(entity.error == HomeAssistantError::NONE ? "--" : "ERR", 303, y + 12);
       }
     }
