@@ -173,7 +173,9 @@ Weather 启用后必须配置：
 - TFT RGB 顺序：`TFT_RGB`
 - `INIT_SEQUENCE_3`
 
-## 开发与烧录
+## 固定开发 / 烧录工作流
+
+### 网页版 ChatGPT：开发 + 编译
 
 ```bash
 python tools/validate_tdisplay_setup.py
@@ -181,18 +183,38 @@ python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 pio test -e native
 pio run -e lilygo-t-display-s3
-pio run -e lilygo-t-display-s3 -t upload
-pio device monitor -b 115200
 ```
 
-GitHub Actions 同时运行 Ubuntu native + Windows native。任一测试、合同校验或 firmware build 失败时不得烧录。
+GitHub Actions 同时运行 Ubuntu native + Windows native，并在 firmware build 成功后上传：
+
+```text
+tdisplay-gp-firmware-<SOURCE_SHA>
+```
+
+Artifact 包含 `firmware.bin`、`partitions.bin`、`bootloader.bin` 和 `firmware-manifest.txt`。
+
+### Codex：只烧录 + 真机测试
+
+Codex 不再承担本地常规编译/编译排错。它只：
+
+```text
+下载 exact-SHA verified Artifact
+-> 校验 manifest / firmware SHA256
+-> 确认串口
+-> 用 esptool 将 firmware.bin 写入 manifest 指定 app offset
+-> 串口监控
+-> 真机功能测试
+-> 把问题证据反馈给网页版 ChatGPT
+```
+
+真机问题由网页版 ChatGPT 修改代码并重新 PlatformIO 编译，再生成新的 exact-SHA Artifact 交给 Codex。
 
 完整步骤见 [docs/deployment.md](docs/deployment.md)。
 
 ## 目录
 
 ```text
-AGENTS.md              Codex / 自动化 Agent 规则
+AGENTS.md              ChatGPT / Codex / 自动化 Agent 规则
 include/               固件常量
 lib/core/              配置、股票代码、交易时钟等纯逻辑
 lib/providers/         行情 Provider 接口/解析器
@@ -215,6 +237,7 @@ docs/                  API、部署、真机验收、设计规格/计划
 6. Quote/Intraday Provider 健康独立，分时 fallback 不能污染报价 failover。
 7. Parser fail-closed，不通过放宽字段/无限重试掩盖 Provider 问题。
 8. 真机 PASS 必须来自实体 T-Display-S3，host test/firmware build 不能代替。
+9. Codex 不重复承担开发侧 PlatformIO 编译；部署使用 Web/CI 已验证的 exact-SHA firmware Artifact。
 
 ## Provider 与安全说明
 
