@@ -28,7 +28,7 @@ void test_crypto_fetches_three_binance_symbols_in_one_request() {
   CryptoSnapshot out;
   CryptoDiagnostics diagnostics;
   TEST_ASSERT_EQUAL(CryptoError::NONE, provider.fetch(out, &diagnostics));
-  TEST_ASSERT_NOT_EQUAL(std::string::npos, transport.lastUrl.find("api.binance.com/api/v3/ticker/24hr"));
+  TEST_ASSERT_NOT_EQUAL(std::string::npos, transport.lastUrl.find("data-api.binance.vision/api/v3/ticker/24hr"));
   TEST_ASSERT_NOT_EQUAL(std::string::npos, transport.lastUrl.find("BTCUSDT"));
   TEST_ASSERT_NOT_EQUAL(std::string::npos, transport.lastUrl.find("ETHUSDT"));
   TEST_ASSERT_NOT_EQUAL(std::string::npos, transport.lastUrl.find("SOLUSDT"));
