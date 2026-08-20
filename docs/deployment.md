@@ -42,6 +42,7 @@ Codex
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
+python tools/validate_nixie_clock_contract.py
 pio test -e native
 pio run -e lilygo-t-display-s3
 ```
@@ -179,6 +180,8 @@ reboot
 
 新天气配置默认关闭、15 分钟刷新。读取旧配置成功后固件会 best-effort 写回 v2。
 
+辉光时钟不新增配置字段，直接复用设备已有本地时间/NTP 状态。
+
 升级前后都不要主动擦除 NVS，除非测试目标明确要求“首次配网”。
 
 ## 9. 首次配网 / Web 设置
@@ -214,6 +217,8 @@ GPIO0 长按  -> 返回主菜单
 GPIO14 长按 -> 保留/无动作
 ```
 
+辉光时钟当前没有短按子功能，因此 GPIO0/GPIO14 短按均不改变时钟页面；GPIO0 长按仍统一返回主菜单。
+
 ### 主菜单
 
 ```text
@@ -223,7 +228,7 @@ GPIO0 长按  -> 无动作
 GPIO14 长按 -> 进入选中 App
 ```
 
-当前菜单至少包含：`股票`、`天气`、`设备信息`。设备开机默认进入 StockApp。
+当前菜单至少包含：`股票`、`天气`、`辉光时钟`、`设备信息`。设备开机默认进入 StockApp。
 
 ## 11. 串口日志
 
@@ -245,12 +250,14 @@ GPIO14 长按 -> 进入选中 App
 [appdata] id=... type=WEATHER location=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
 ```
 
+辉光时钟为 local-only，不应因为进入/停留在该 App 而新增 `[md]` 或 `[appdata]` 请求。
+
 ### 系统资源
 
 约每 60 秒：
 
 ```text
-[sys] app=STOCK|MENU|WEATHER|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
+[sys] app=STOCK|MENU|WEATHER|NIXIE_CLOCK|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
 ```
 
 ## 12. 多 App Smoke Test
@@ -261,14 +268,17 @@ GPIO14 长按 -> 进入选中 App
 2. 开机默认出现股票页面
 3. GPIO0/GPIO14 短按仍只切一只股票
 4. 长按 GPIO0 返回主菜单，释放时不额外触发股票切换
-5. 菜单能在 `股票 / 天气 / 设备信息` 之间循环
+5. 菜单能在 `股票 / 天气 / 辉光时钟 / 设备信息` 之间循环
 6. 长按 GPIO14 能进入选中 App
-7. DeviceInfo 显示真实 IP、SSID、RSSI、MAC、Heap、uptime
-8. `Web: http://<IP>/` 能从同一 LAN 访问
-9. Weather 显示地点、当前天气、三日高低温和中文天气状态
-10. 右侧**手绘水彩风小猫**持续两帧轻动画，无整屏闪烁/花屏
-11. 返回股票后旧股票缓存立即可见
-12. 串口无 watchdog / Guru Meditation / 异常 reboot
+7. 辉光时钟显示本地 `HH:MM`、日期、星期、秒数；未同步时明确显示“等待时间同步”
+8. 辉光时钟冒号约 500 ms 相位闪烁，数字变化时局部刷新，无 500 ms 整屏黑闪/花屏
+9. 辉光时钟 GPIO0 长按可返回主菜单，停留时不产生额外 HTTP/TLS 流量
+10. DeviceInfo 显示真实 IP、SSID、RSSI、MAC、Heap、uptime
+11. `Web: http://<IP>/` 能从同一 LAN 访问
+12. Weather 显示地点、当前天气、三日高低温和中文天气状态
+13. 右侧**手绘水彩风小猫**持续两帧轻动画，无整屏闪烁/花屏
+14. 返回股票后旧股票缓存立即可见
+15. 串口无 watchdog / Guru Meditation / 异常 reboot
 
 ## 13. 股票 Provider / 分时 fallback 检查
 
@@ -308,17 +318,19 @@ Tencent intraday
 - 已经执行中的股票 HTTPS 可以自然结束
 - Weather 失败不得改变股票 Provider/健康状态
 - Weather 失败后不得形成连续快速请求
+- NixieClock 不发起外部网络请求、不占用 AppDataWorker/NetworkArbiter
 - DeviceInfo 不发起外部网络请求
 
 ## 15. 稳定性验收
 
 ```text
-Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock 循环 >=100 次
+Stock -> Menu -> Weather -> Menu -> NixieClock -> Menu -> DeviceInfo -> Menu -> Stock 循环 >=100 次
 short-after-long 误触发 = 0
 watchdog = 0
 unexpected reboot = 0
 freeze = 0
 cache loss = 0
+Nixie 全屏周期性闪烁 = 0
 明显持续 Heap 泄漏 = 0
 ```
 
@@ -333,6 +345,7 @@ WINDOWS NATIVE PASS
 FIRMWARE BUILD PASS
 VERIFIED ARTIFACT PASS
 FLASH PASS
+NIXIE CLOCK UI PASS
 DEVICE INFO PASS
 WEATHER LIVE/UI PASS
 TENCENT PRIMARY PASS
@@ -348,6 +361,10 @@ FULL HARDWARE ACCEPTANCE PASS
 ### Codex 本地 `pio run` 卡住
 
 按固定工作流，Codex 不应依赖本地 `pio run`。只要网页版 ChatGPT 已给出 exact-SHA verified artifact，直接下载、校验并用 esptool 烧录。
+
+### 辉光时钟显示“等待时间同步”
+
+这是本地时间尚未有效的 fail-closed 状态。保持设备联网，确认公共 NTP 同步后应自动出现正常本地时间；不要为此新增独立 NTP 线程或网络请求。
 
 ### 天气显示“未配置”
 

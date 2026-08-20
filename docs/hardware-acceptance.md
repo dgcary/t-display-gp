@@ -8,7 +8,7 @@
 - Windows native：GitHub Actions 验证
 - ESP32-S3 firmware build：网页版 ChatGPT + GitHub Actions 验证
 - verified firmware Artifact：GitHub Actions 生成并由网页版 ChatGPT确认
-- 实体 flash / DeviceInfo / Weather watercolor pet / Tencent-primary market path / App 切换稳定性：**PENDING，必须在真机完成**
+- 实体 flash / NixieClock / DeviceInfo / Weather watercolor pet / Tencent-primary market path / App 切换稳定性：**PENDING，必须在真机完成**
 
 每次真机验收记录：branch、完整 source SHA、Actions run/artifact、日期、Wi-Fi 环境、端口和结果。
 
@@ -22,6 +22,7 @@
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
+python tools/validate_nixie_clock_contract.py
 pio test -e native
 pio run -e lilygo-t-display-s3
 ```
@@ -101,7 +102,7 @@ pio device monitor --port <PORT> -b 115200
 
 - 方向正确，无裁切/花屏
 - 中文文本可读
-- 主菜单、股票、天气、设备信息都在完整 320×170 区域内
+- 主菜单、股票、天气、辉光时钟、设备信息都在完整 320×170 区域内
 - 无明显残影/跨 App 旧 UI 未清除
 
 ## 3. 按键与菜单
@@ -112,6 +113,13 @@ pio device monitor --port <PORT> -b 115200
 
 - GPIO0 短按：上一只股票
 - GPIO14 短按：下一只股票
+- GPIO0 长按：返回主菜单
+- GPIO14 长按：无动作
+
+### NixieClockApp
+
+- GPIO0 短按：当前无动作
+- GPIO14 短按：当前无动作
 - GPIO0 长按：返回主菜单
 - GPIO14 长按：无动作
 
@@ -127,6 +135,7 @@ pio device monitor --port <PORT> -b 115200
 ```text
 股票
 天气
+辉光时钟
 设备信息
 ```
 
@@ -144,7 +153,7 @@ pio device monitor --port <PORT> -b 115200
 执行：
 
 ```text
-Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
+Stock -> Menu -> Weather -> Menu -> NixieClock -> Menu -> DeviceInfo -> Menu -> Stock
 ```
 
 要求：
@@ -152,8 +161,9 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 - 每次进入 App 都能立即绘制
 - 返回股票时最后有效股票缓存仍存在
 - 返回天气时最后有效天气缓存仍存在
+- NixieClock 重新进入时读取当前本地时间，不保留冻结的旧秒数
 - 非前台 App 不抢 TFT 绘制
-- DeviceInfo 不触发外部网络请求
+- NixieClock / DeviceInfo 不触发外部网络请求
 - 切换不触发 Wi-Fi 重连
 
 ## 5. 配置 schema v1 -> v2 迁移
@@ -168,10 +178,51 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 - 天气默认关闭
 - Web `/api/status` 可看到 v2 字段
 - 无需重新输入股票
+- NixieClock 不增加配置字段、不要求重新配网
 
 迁移失败时保存串口日志和旧配置证据，不要直接擦 NVS 掩盖问题。
 
-## 6. DeviceInfo / Web 配置入口
+## 6. Nixie Clock / 辉光时钟验收
+
+进入“辉光时钟”。
+
+时间已同步时应看到：
+
+- 四位 `HH:MM` 本地时间
+- 日期 `YYYY-MM-DD`
+- 英文星期缩写 `SUN..SAT`
+- 当前秒数 `SEC xx`
+- 暗色玻璃管/内腔效果
+- 暖橙/琥珀色多层数字辉光
+- 冒号约 500 ms 相位明灭
+
+视觉/刷新要求：
+
+- 时间必须与 DeviceInfo/同一时区的可信时钟一致，允许正常刷新边界的约 1 秒误差
+- 每分钟变更时只更新必要数字区域，不应整屏黑闪
+- 冒号闪烁时不得每 500 ms 清空整屏
+- 日期/秒数区域无明显残影
+- 长时间停留无花屏、数字错位或边框逐渐破坏
+- GPIO0 长按可以正常返回主菜单
+- GPIO0/GPIO14 短按不会误切换 App 或制造无意义状态变化
+
+未同步时间时：
+
+```text
+等待时间同步
+```
+
+应明确可见，不得显示 `1970-01-01`、`00:00` 等伪有效时间。完成系统时间同步后，无需重启即可自动进入正常显示。
+
+网络隔离：
+
+- 进入/停留/退出 NixieClock 不得直接产生新的 `[md]` / `[appdata]` 请求
+- 不得占用 `AppDataWorker` / `NetworkArbiter`
+- `[sys]` 在该页应显示 `app=NIXIE_CLOCK`
+
+当前版本**不验收自动 Screensaver**；Screensaver 尚未实现。
+
+## 7. DeviceInfo / Web 配置入口
 
 进入“设备信息”：
 
@@ -193,7 +244,7 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 - IP 与设备信息页一致
 - DeviceInfo 页面不显示 Wi-Fi 密码或其他 secret
 
-## 7. Weather 配置
+## 8. Weather 配置
 
 局域网 Web 或首次 Captive Portal：
 
@@ -214,7 +265,7 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 
 都必须被拒绝，不写入部分配置。
 
-## 8. Weather live + UI 验收
+## 9. Weather live + UI 验收
 
 进入 WeatherApp：
 
@@ -251,7 +302,7 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 [appdata] id=... type=WEATHER location=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
 ```
 
-## 9. Weather 失败与缓存
+## 10. Weather 失败与缓存
 
 先获得一份有效天气，再制造安全的网络中断/离线场景。
 
@@ -265,25 +316,26 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 - 恢复网络后按正常刷新周期自动恢复
 - Weather 失败不改变股票报价/分时 Provider 状态
 
-## 10. TLS 串行化
+## 11. TLS 串行化
 
-股票和天气外部 HTTPS 共享 NetworkArbiter。
+股票和天气外部 HTTPS 共享 NetworkArbiter；NixieClock / DeviceInfo 不进入该路径。
 
-快速 Stock/Menu/Weather/DeviceInfo 切换并观察：
+快速 Stock/Menu/Weather/NixieClock/DeviceInfo 切换并观察：
 
 - 同一时刻不应出现多个外部 TLS 导致的明显 Heap 崩落
 - StockApp 退出后 pending 行情不继续执行
 - 已经开始的股票 HTTPS 可自然完成
 - in-flight 完成不得让后台 StockApp 重新绘屏
 - Weather 请求可在共享网络资源可用后正常执行
+- NixieClock 不应占用 NetworkArbiter
 - DeviceInfo 不应占用 NetworkArbiter
 
-## 11. `[sys]` 资源验收
+## 12. `[sys]` 资源验收
 
 约每 60 秒记录：
 
 ```text
-[sys] app=STOCK|MENU|WEATHER|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
+[sys] app=STOCK|MENU|WEATHER|NIXIE_CLOCK|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
 ```
 
 至少收集：
@@ -291,6 +343,7 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 - 开机后稳定值
 - Stock 运行 10 分钟
 - Weather 成功请求并持续动画后
+- NixieClock 页面至少 5 分钟
 - DeviceInfo 页面
 - 100 次 App 切换后
 - Wi-Fi 中断/恢复后
@@ -302,7 +355,7 @@ Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock
 - `main_stack_hwm` 不应持续下降到接近 0
 - 无分配失败、panic、watchdog
 
-## 12. 股票回归 / 正常腾讯主链路
+## 13. 股票回归 / 正常腾讯主链路
 
 多 App 版本仍必须通过原股票 Smoke，并验证腾讯已经成为默认主源：
 
@@ -326,7 +379,7 @@ Q:TX I:TX
 
 `Q:` 是当前报价来源，`I:` 是当前有效分时缓存来源。若尚无分时缓存，可只显示 `Q:TX`。
 
-## 13. Quote failover：Tencent -> EastMoney
+## 14. Quote failover：Tencent -> EastMoney
 
 只有在腾讯报价真实失败时测试；不要为触发 fallback 修改源码或破坏外部网络基础设施。
 
@@ -346,7 +399,7 @@ Q:TX I:TX
 QUOTE FALLBACK TX->EM: NOT TRIGGERED
 ```
 
-## 14. Intraday fallback：Tencent -> EastMoney
+## 15. Intraday fallback：Tencent -> EastMoney
 
 新的正常路径为 Tencent minute first。
 
@@ -374,7 +427,7 @@ QUOTE FALLBACK TX->EM: NOT TRIGGERED
 
 主要真机成功标准是 `Q:TX I:TX` 能持续工作。`TX->EM` fallback 只有在 Tencent 自然故障时完整物理验证；未触发时写 `NOT TRIGGERED`。
 
-## 15. 股票请求日志
+## 16. 股票请求日志
 
 ```text
 [md] id=... type=QUOTE|INTRADAY|PROBE symbol=... provider=EM|TX attempt=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
@@ -382,34 +435,36 @@ QUOTE FALLBACK TX->EM: NOT TRIGGERED
 
 保留失败前后至少 30 秒日志，并结合同时期 `[sys]` 判断。
 
-## 16. Wi-Fi 中断
+## 17. Wi-Fi 中断
 
 加载有效股票和天气后断 Wi-Fi 至少 2 分钟：
 
 - 当前 App 仍可操作
 - 已有股票/天气缓存保留
-- 菜单/DeviceInfo 仍响应
+- 菜单/NixieClock/DeviceInfo 仍响应
+- NixieClock 使用已有系统时间继续正常走时（不把断 Wi-Fi 当作立即无效时间）
 - UI 不等待 HTTP 卡死
 - Wi-Fi 恢复后无需人工重启即可继续后续请求
 
-## 17. 多 App 稳定性量化
+## 18. 多 App 稳定性量化
 
 至少：
 
 ```text
-Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock 循环 >=100 次
+Stock -> Menu -> Weather -> Menu -> NixieClock -> Menu -> DeviceInfo -> Menu -> Stock 循环 >=100 次
 button short-after-long = 0
 watchdog = 0
 unexpected reboot = 0
 freeze = 0
 stock cache loss = 0
 weather cache loss = 0
+Nixie 500ms full-screen flicker = 0
 monotonic heap leak = 0
 ```
 
 建议同时混入股票短按切换，使输入状态机覆盖真实使用。
 
-## 18. 股票交易时段量化
+## 19. 股票交易时段量化
 
 目标：
 
@@ -429,9 +484,9 @@ cache loss = 0
 
 若腾讯 primary 本身在测试网络中持续低于目标，应先基于真实 `[md]` 证据重新评估 Provider；不要无限重试或放宽 parser。
 
-## 19. 完整交易日
+## 20. 完整交易日
 
-最终仍建议至少运行一次 **09:25–15:10**，期间穿插进入 Weather/Menu/DeviceInfo：
+最终仍建议至少运行一次 **09:25–15:10**，期间穿插进入 Weather/Menu/NixieClock/DeviceInfo：
 
 - 开盘前
 - 上午盘
@@ -462,6 +517,8 @@ Firmware build:
 Artifact verification:
 Flash:
 Menu/Input:
+Nixie Clock UI/local-time:
+Nixie local-only/network isolation:
 DeviceInfo/IP:
 Weather live:
 Weather watercolor pet/UI:

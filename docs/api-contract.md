@@ -1,8 +1,8 @@
 # Data Provider / HTTP API Contract
 
-Status date: 2026-08-19
+Status date: 2026-08-20
 
-T-Display GP keeps remote payload formats behind Provider abstractions. UI/Controller code consumes structured data and must not parse raw provider bodies directly.
+T-Display GP keeps remote payload formats behind Provider abstractions. UI/Controller code consumes structured data and must not parse raw provider bodies directly. Local-only apps such as NixieClock must remain outside the remote Provider/HTTP path.
 
 ## Provider matrix
 
@@ -11,6 +11,7 @@ T-Display GP keeps remote payload formats behind Provider abstractions. UI/Contr
 | A-share quote | Tencent | EastMoney |
 | A-share intraday | Tencent | EastMoney |
 | Weather current + 3-day forecast | Open-Meteo | none |
+| Nixie local clock | Device local time / common NTP state | none; no HTTP provider |
 
 Public provider contracts may change. Strict parsing and cache preservation are preferred over guessing new payload semantics.
 
@@ -195,9 +196,34 @@ Provider parses into a temporary object and assigns output only after full valid
 
 Weather has no V1 provider fallback and no rapid retry loop.
 
+# Nixie Clock local-time contract
+
+NixieClockApp has **no remote data provider**. It must not call `HttpTransport`, `HTTPClient`, `WiFiClientSecure`, `AppDataWorker`, or `NetworkArbiter`.
+
+Its time source is the same device-local time path already maintained by the firmware:
+
+```text
+common boot NTP configuration
+        -> ESP32 system clock
+        -> DeviceLayer::localDateTime()
+        -> NixieClockModel
+        -> NixieClockScreen
+```
+
+Contract:
+
+- no new NTP task/client is created for NixieClock,
+- `LocalDateTime` is sampled at approximately 1-second cadence while NixieClock is active,
+- year/month/day/hour/minute/second/day-of-week are range-validated before display,
+- unsynchronized/invalid time fails closed and displays a waiting state,
+- the colon may use a local `millis()`-based 500 ms visual phase; this does not alter the authoritative wall-clock source,
+- NixieClock adds no config schema/API fields,
+- entering or leaving NixieClock must not create `[md]` or `[appdata]` traffic,
+- `tools/validate_nixie_clock_contract.py` guards the local-only/menu integration boundary.
+
 # Shared HTTP/TLS transport
 
-Market and app-data Providers use the same `HttpTransport` implementation.
+Market and app-data Providers use the same `HttpTransport` implementation. NixieClock does not use this implementation.
 
 ## NetworkArbiter
 
@@ -256,17 +282,27 @@ Q:EM I:TX
 [appdata] id=... type=WEATHER location=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
 ```
 
+## Nixie Clock
+
+No Nixie-specific network log is expected. While active, system resource logging identifies it through:
+
+```text
+[sys] app=NIXIE_CLOCK ...
+```
+
+Unexpected `[md]`/`[appdata]` work that is directly caused by NixieClock entry is a contract failure.
+
 ## Runtime memory
 
 ```text
-[sys] app=STOCK|MENU|WEATHER|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
+[sys] app=STOCK|MENU|WEATHER|NIXIE_CLOCK|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
 ```
 
 Do not log full provider response bodies by default.
 
 # Cache / error isolation
 
-Stock quote, stock intraday, and weather each maintain independent cache/health semantics.
+Stock quote, stock intraday, and weather each maintain independent cache/health semantics. NixieClock only consumes local clock state and has no provider health/cache coupling.
 
 Examples:
 
@@ -274,6 +310,7 @@ Examples:
 - intraday failure cannot clear quote cache
 - intraday fallback cannot change quote failover health
 - stock failure cannot clear weather snapshot
+- entering NixieClock cannot change provider health or enqueue external network work
 - inactive app network completion cannot redraw the TFT
 
 # Validation policy
@@ -285,3 +322,5 @@ When a provider changes/fails:
 3. change Provider/transport boundary rather than UI where possible,
 4. never weaken parser simply to accept unknown malformed data,
 5. do not add infinite retry or unbounded timeout as a workaround.
+
+For NixieClock changes, validate the local-time/model/render contract instead of inventing a remote Provider.

@@ -44,6 +44,7 @@ Required development verification:
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
+python tools/validate_nixie_clock_contract.py
 pio test -e native
 pio run -e lilygo-t-display-s3
 ```
@@ -132,8 +133,8 @@ Run `tools/validate_tdisplay_setup.py` for TFT/build/UI/artifact-contract change
 - Exiting an app preserves valid cache/state; do not reconstruct an app on every switch.
 - App registry/menu must remain extensible; do not hard-code menu behavior around an exact app count.
 - Startup defaults to StockApp unless a separately approved configuration feature changes it.
-- Current shell includes StockApp, WeatherApp and DeviceInfoApp.
-- Future AirQuality/HomeAssistant/ServiceMonitor apps should use the same shell rather than bypassing AppManager.
+- Current shell includes StockApp, WeatherApp, NixieClockApp and DeviceInfoApp.
+- Future HomeAssistant/Crypto/AirQuality/ServiceMonitor apps should use the same shell rather than bypassing AppManager.
 
 ## DeviceInfoApp invariants
 
@@ -141,6 +142,20 @@ Run `tools/validate_tdisplay_setup.py` for TFT/build/UI/artifact-contract change
 - It exposes the current LAN IP prominently so the user can reach the existing Web configuration page.
 - It may show SSID, RSSI, MAC, uptime, local time, free/min heap and PSRAM state.
 - Device diagnostics must never display Wi-Fi passwords, API tokens, Home Assistant tokens, or other secrets.
+
+## NixieClockApp invariants
+
+- NixieClockApp is local-only and must not create HTTP/TLS requests or depend on `AppDataWorker`/`NetworkArbiter`.
+- It reuses `DeviceLayer::localDateTime()` and the firmware's existing common NTP synchronization; do not add a separate NTP client/task.
+- The display remains 320×170 landscape and uses lightweight procedural TFT primitives; do not add large bitmap/GIF assets for the tube effect.
+- Display current local `HH:MM` plus date, weekday and seconds when time is valid.
+- Invalid/unsynchronized time must fail closed with an explicit waiting state rather than rendering a bogus date/time.
+- Sample local time at approximately 1-second cadence; the colon may animate at approximately 500 ms.
+- Animation-only updates must not clear/redraw the entire TFT every 500 ms. Redraw only changed digit/colon/footer regions.
+- NixieClock short presses are currently no-op; global GPIO0-long return-to-menu behavior remains owned by `AppManager`.
+- Automatic screensaver/idle activation is out of the current Nixie App scope unless separately designed and approved.
+- `[sys]` must identify the active app as `NIXIE_CLOCK`.
+- Run `tools/validate_nixie_clock_contract.py` for Nixie menu/local-only integration changes.
 
 ## StockApp invariants
 
@@ -198,7 +213,7 @@ Keep these transport constraints:
 - do not pass the millisecond read constant directly to the seconds-based `WiFiClientSecure::setTimeout()` in Arduino-ESP32 2.0.14
 - current public-data clients retain the existing `setInsecure()` behavior; do not extend that trust model to future sensitive credentials without a separate security design
 
-Do not create one FreeRTOS worker per new app. Stock keeps its specialized MarketDataWorker; low-frequency app data uses the shared AppDataWorker path.
+Do not create one FreeRTOS worker per new app. Stock keeps its specialized MarketDataWorker; low-frequency app data uses the shared AppDataWorker path. Local-only apps such as NixieClock and DeviceInfo do not use either network worker.
 
 Run `tools/validate_http_transport_contract.py` for any transport/arbiter change.
 
@@ -209,6 +224,7 @@ Run `tools/validate_http_transport_contract.py` for any transport/arbiter change
 - v1 config migration must preserve stock symbols, display names, and quote refresh.
 - Weather defaults after v1 migration: disabled, 15-minute refresh.
 - Weather location is shared device location data so future AirQualityApp can reuse it.
+- NixieClock adds no configuration fields in its current version.
 - Captive Portal and LAN Web configuration must use the same `ProvisioningForm` validation path.
 - Configuration updates remain atomic/reboot-applied; do not partially hot-apply only some modules.
 
@@ -218,7 +234,7 @@ Market requests: `[md]`
 
 Low-frequency app data: `[appdata]`
 
-Runtime resources every ~60 seconds: `[sys]`, including active app, free/min heap, PSRAM totals/free, and main task stack high-water mark.
+Runtime resources every ~60 seconds: `[sys]`, including active app (`STOCK`, `MENU`, `WEATHER`, `NIXIE_CLOCK`, `DEVICE_INFO`), free/min heap, PSRAM totals/free, and main task stack high-water mark.
 
 Intraday fallback should emit:
 
@@ -234,8 +250,9 @@ When diagnosing a live issue, preserve the relevant request line plus surroundin
 - Stock positive change = red; negative = green.
 - Stock lunch discontinuity and `昨收`/`今开` references remain.
 - Stock footer distinguishes quote (`Q`) and intraday (`I`) source when intraday data exists.
-- Menu/Weather/DeviceInfo use bounded text/simple shapes; do not add large bitmap/GIF assets without a memory review.
+- Menu/Weather/NixieClock/DeviceInfo use bounded text/simple shapes; do not add large bitmap/GIF assets without a memory review.
 - Weather companion uses the approved hand-painted watercolor look through layered low-saturation primitives; do not regress to the old single-color geometric orange cat.
+- NixieClock uses a dark glass/tube look with warm amber/orange glow and bounded partial redraws.
 - Inactive apps must never redraw the TFT after a late network completion.
 
 ## Provider caution
@@ -258,6 +275,10 @@ At minimum verify on the actual T-Display-S3:
 - short stock buttons still work,
 - long GPIO0 enters menu without also switching stock,
 - menu short navigation and GPIO14-long enter work,
+- menu can enter Stock / Weather / NixieClock / DeviceInfo,
+- NixieClock shows the real local `HH:MM`, date, weekday and seconds after time sync,
+- NixieClock colon animation is visible without full-screen flicker/corruption and does not generate HTTP/TLS requests,
+- GPIO0-long exits NixieClock back to the menu,
 - DeviceInfo shows the real LAN IP and `http://<IP>/` is reachable from the LAN,
 - WeatherApp retrieves configured location data,
 - weather colors, three-day Chinese condition text and two-frame hand-painted watercolor cat animation render without visible corruption/flicker,
@@ -265,7 +286,7 @@ At minimum verify on the actual T-Display-S3:
 - with Tencent intraday unavailable, `[md] fallback=TX->EM` appears and EastMoney can populate/refresh the chart when healthy,
 - footer reflects the actual quote/intraday source (for example `Q:TX I:TX` or fallback `Q:TX I:EM`),
 - Stock/Weather caches survive menu transitions and failures,
-- 100 Stock/Menu/Weather/DeviceInfo transitions with no watchdog/reboot/freeze,
+- 100 Stock/Menu/Weather/NixieClock/DeviceInfo transitions with no watchdog/reboot/freeze,
 - `[sys]` heap does not exhibit monotonic leakage.
 
 Use `docs/hardware-acceptance.md` for the full checklist.

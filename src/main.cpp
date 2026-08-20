@@ -11,6 +11,7 @@
 #include "DeviceLayer.h"
 #include "MenuScreen.h"
 #include "NetworkArbiter.h"
+#include "NixieClockApp.h"
 #include "ProvisioningService.h"
 #include "StockApp.h"
 #include "WeatherApp.h"
@@ -24,12 +25,14 @@ AppDataWorker appDataWorker;
 MenuScreen menuScreen;
 StockApp stockApp(device);
 WeatherApp weatherApp(device, appDataWorker);
+NixieClockApp nixieClockApp(device);
 DeviceInfoApp deviceInfoApp(device);
 MenuApp menuApp({{AppId::STOCK, "股票"},
                  {AppId::WEATHER, "天气"},
+                 {AppId::NIXIE_CLOCK, "辉光时钟"},
                  {AppId::DEVICE_INFO, "设备信息"}},
                 menuScreen);
-AppManager appManager(menuApp, {&stockApp, &weatherApp, &deviceInfoApp});
+AppManager appManager(menuApp, {&stockApp, &weatherApp, &nixieClockApp, &deviceInfoApp});
 bool appReady = false;
 uint32_t nextResourceLogMs = 0;
 
@@ -42,6 +45,7 @@ const char* appName(AppId id) {
     case AppId::MENU: return "MENU";
     case AppId::STOCK: return "STOCK";
     case AppId::WEATHER: return "WEATHER";
+    case AppId::NIXIE_CLOCK: return "NIXIE_CLOCK";
     case AppId::DEVICE_INFO: return "DEVICE_INFO";
   }
   return "UNKNOWN";
@@ -95,6 +99,10 @@ void setup() {
   }
   if (!weatherApp.begin(appConfig)) {
     Serial.println("Weather app failed to start");
+    return;
+  }
+  if (!nixieClockApp.begin()) {
+    Serial.println("Nixie clock app failed to start");
     return;
   }
   if (!deviceInfoApp.begin()) {
