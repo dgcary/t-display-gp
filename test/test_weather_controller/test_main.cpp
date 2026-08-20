@@ -14,11 +14,14 @@ class FakeAppDataQueue final : public IAppDataQueue {
     requests.push_back(request);
     return true;
   }
-  bool tryReceive(AppDataResult& result) override {
-    if (results.empty()) return false;
-    result = results.front();
-    results.pop_front();
-    return true;
+  bool tryReceive(AppDataRequestType type, AppDataResult& result) override {
+    for (auto it = results.begin(); it != results.end(); ++it) {
+      if (it->type != type) continue;
+      result = *it;
+      results.erase(it);
+      return true;
+    }
+    return false;
   }
   bool acceptEnqueue = true;
   std::deque<AppDataRequest> requests;
@@ -62,7 +65,6 @@ void test_first_active_online_tick_enqueues_weather_request() {
   controller.setWifiOnline(true);
   controller.setActive(true);
   controller.tick(100);
-
   TEST_ASSERT_EQUAL_UINT32(1, queue.requests.size());
   TEST_ASSERT_EQUAL(AppDataRequestType::WEATHER, queue.requests.front().type);
   TEST_ASSERT_EQUAL_STRING("昆山", queue.requests.front().location.displayName.c_str());
@@ -77,7 +79,6 @@ void test_success_updates_cache_and_waits_for_refresh_interval() {
   controller.setActive(true);
   controller.tick(100);
   const uint32_t id = queue.requests.back().requestId;
-
   AppDataResult result;
   result.requestId = id;
   result.type = AppDataRequestType::WEATHER;
@@ -86,12 +87,10 @@ void test_success_updates_cache_and_waits_for_refresh_interval() {
   result.completedMs = 200;
   queue.results.push_back(result);
   controller.tick(200);
-
   TEST_ASSERT_TRUE(controller.viewModel().hasData);
   TEST_ASSERT_FALSE(controller.viewModel().requestInFlight);
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 31.2f, controller.viewModel().weather.currentTemp);
   TEST_ASSERT_EQUAL(WeatherError::NONE, controller.viewModel().error);
-
   controller.tick(100 + 15u * 60u * 1000u - 1u);
   TEST_ASSERT_EQUAL_UINT32(1, queue.requests.size());
   controller.tick(100 + 15u * 60u * 1000u);
@@ -105,7 +104,6 @@ void test_failed_refresh_preserves_last_valid_cache_and_does_not_retry_immediate
   controller.setWifiOnline(true);
   controller.setActive(true);
   controller.tick(10);
-
   AppDataResult ok;
   ok.requestId = queue.requests.back().requestId;
   ok.type = AppDataRequestType::WEATHER;
@@ -114,11 +112,9 @@ void test_failed_refresh_preserves_last_valid_cache_and_does_not_retry_immediate
   ok.completedMs = 20;
   queue.results.push_back(ok);
   controller.tick(20);
-
   const uint32_t refreshAt = 10 + 15u * 60u * 1000u;
   controller.tick(refreshAt);
   TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
-
   AppDataResult failed;
   failed.requestId = queue.requests.back().requestId;
   failed.type = AppDataRequestType::WEATHER;
@@ -126,12 +122,10 @@ void test_failed_refresh_preserves_last_valid_cache_and_does_not_retry_immediate
   failed.completedMs = refreshAt + 1;
   queue.results.push_back(failed);
   controller.tick(refreshAt + 1);
-
   TEST_ASSERT_TRUE(controller.viewModel().hasData);
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 30.0f, controller.viewModel().weather.currentTemp);
   TEST_ASSERT_EQUAL(WeatherError::NETWORK, controller.viewModel().error);
   TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
-
   controller.tick(refreshAt + 1000);
   TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
   controller.tick(refreshAt + 15u * 60u * 1000u);
@@ -146,7 +140,6 @@ void test_offline_or_inactive_does_not_schedule() {
   controller.setWifiOnline(false);
   controller.tick(100);
   TEST_ASSERT_TRUE(queue.requests.empty());
-
   controller.setWifiOnline(true);
   controller.setActive(false);
   controller.tick(200);
@@ -163,7 +156,6 @@ void test_disabled_weather_reports_not_configured_and_does_not_schedule() {
   controller.setWifiOnline(true);
   controller.setActive(true);
   controller.tick(100);
-
   TEST_ASSERT_FALSE(controller.viewModel().configured);
   TEST_ASSERT_TRUE(queue.requests.empty());
 }
@@ -176,7 +168,6 @@ void test_stale_flag_uses_last_success_and_wrap_safe_elapsed() {
   controller.setActive(true);
   const uint32_t start = 0xFFF00000u;
   controller.tick(start);
-
   AppDataResult ok;
   ok.requestId = queue.requests.back().requestId;
   ok.type = AppDataRequestType::WEATHER;
@@ -185,7 +176,6 @@ void test_stale_flag_uses_last_success_and_wrap_safe_elapsed() {
   ok.completedMs = start + 1u;
   queue.results.push_back(ok);
   controller.tick(start + 1u);
-
   controller.tick(start + 30u * 60u * 1000u + 2u);
   TEST_ASSERT_TRUE(controller.viewModel().stale);
 }
@@ -198,7 +188,6 @@ void test_delayed_result_consumption_preserves_real_cache_age() {
   controller.setActive(true);
   const uint32_t start = 1000u;
   controller.tick(start);
-
   AppDataResult ok;
   ok.requestId = queue.requests.back().requestId;
   ok.type = AppDataRequestType::WEATHER;
@@ -206,7 +195,6 @@ void test_delayed_result_consumption_preserves_real_cache_age() {
   ok.weather = snapshot(27.0f);
   ok.completedMs = start + 100u;
   queue.results.push_back(ok);
-
   controller.tick(start + 31u * 60u * 1000u);
   TEST_ASSERT_TRUE(controller.viewModel().hasData);
   TEST_ASSERT_TRUE(controller.viewModel().stale);
@@ -220,7 +208,6 @@ void test_completed_millis_zero_is_valid_wrap_timestamp() {
   controller.setActive(true);
   const uint32_t requestAt = 0xFFFFFF00u;
   controller.tick(requestAt);
-
   AppDataResult ok;
   ok.requestId = queue.requests.back().requestId;
   ok.type = AppDataRequestType::WEATHER;
@@ -228,7 +215,6 @@ void test_completed_millis_zero_is_valid_wrap_timestamp() {
   ok.weather = snapshot(26.0f);
   ok.completedMs = 0;
   queue.results.push_back(ok);
-
   controller.tick(31u * 60u * 1000u);
   TEST_ASSERT_TRUE(controller.viewModel().hasData);
   TEST_ASSERT_TRUE(controller.viewModel().stale);
