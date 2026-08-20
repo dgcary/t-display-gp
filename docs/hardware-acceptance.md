@@ -4,14 +4,19 @@
 
 ## 当前状态
 
-- 自动化 native tests：GitHub Actions 验证
+- 自动化 validators / native tests：网页版 ChatGPT + GitHub Actions 验证
 - Windows native：GitHub Actions 验证
-- ESP32-S3 firmware build：GitHub Actions 验证
+- ESP32-S3 firmware build：网页版 ChatGPT + GitHub Actions 验证
+- verified firmware Artifact：GitHub Actions 生成并由网页版 ChatGPT确认
 - 实体 flash / DeviceInfo / Weather watercolor pet / Tencent-primary market path / App 切换稳定性：**PENDING，必须在真机完成**
 
-每次真机验收记录：branch、完整 commit SHA、日期、Wi-Fi 环境、端口和结果。
+每次真机验收记录：branch、完整 source SHA、Actions run/artifact、日期、Wi-Fi 环境、端口和结果。
 
-## 1. Build / Flash
+## 1. Artifact / Flash
+
+### 开发侧（网页版 ChatGPT）
+
+以下已经在交给 Codex 前完成：
 
 ```bash
 python tools/validate_tdisplay_setup.py
@@ -19,9 +24,62 @@ python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 pio test -e native
 pio run -e lilygo-t-display-s3
-pio run -e lilygo-t-display-s3 -t upload --upload-port <PORT>
+```
+
+CI 必须生成：
+
+```text
+tdisplay-gp-firmware-<SOURCE_SHA>
+```
+
+其中包含：
+
+```text
+firmware.bin
+partitions.bin
+bootloader.bin
+firmware-manifest.txt
+```
+
+### Codex 本地
+
+Codex **不再运行 `pio run` 做本地编译门禁**。
+
+下载 exact-SHA Artifact 后检查：
+
+```powershell
+Get-Content .\firmware-artifact\firmware-manifest.txt
+(Get-FileHash .\firmware-artifact\firmware.bin -Algorithm SHA256).Hash.ToLower()
+```
+
+必须满足：
+
+```text
+manifest source_sha == approved exact SHA
+actual firmware SHA256 == manifest firmware_sha256
+```
+
+然后确认串口：
+
+```bash
+pio device list
+```
+
+使用 PlatformIO 已安装的 esptool，只写应用 image 到 manifest 的 `firmware_offset`（当前 `0x10000`）：
+
+```powershell
+$pioPython = "$env:USERPROFILE\.platformio\penv\Scripts\python.exe"
+$esptool = "$env:USERPROFILE\.platformio\packages\tool-esptoolpy\esptool.py"
+& $pioPython $esptool --chip esp32s3 --port <PORT> --baud 460800 write_flash 0x10000 .\firmware-artifact\firmware.bin
+```
+
+随后：
+
+```bash
 pio device monitor --port <PORT> -b 115200
 ```
+
+正常升级禁止 erase flash/NVS，也不重写 bootloader/partition table。
 
 要求：无启动循环、panic、watchdog、NetworkArbiter/MarketDataWorker/AppDataWorker 启动失败。
 
@@ -288,8 +346,6 @@ Q:TX I:TX
 QUOTE FALLBACK TX->EM: NOT TRIGGERED
 ```
 
-不要人为把正常链路判成未通过。
-
 ## 14. Intraday fallback：Tencent -> EastMoney
 
 新的正常路径为 Tencent minute first。
@@ -316,7 +372,7 @@ QUOTE FALLBACK TX->EM: NOT TRIGGERED
    - 旧有效分时缓存保留；
    - 完整失败后等待正常分时刷新间隔再从 Tencent 开新周期。
 
-由于用户现场已经观察到 Tencent 行情链路稳定而 EastMoney TLS 经常失败，**主要真机成功标准是 `Q:TX I:TX` 能持续工作**。`TX->EM` fallback 只有在 Tencent 自然出现故障时才能完整物理验证；未触发时写 `NOT TRIGGERED`。
+主要真机成功标准是 `Q:TX I:TX` 能持续工作。`TX->EM` fallback 只有在 Tencent 自然故障时完整物理验证；未触发时写 `NOT TRIGGERED`。
 
 ## 15. 股票请求日志
 
@@ -390,15 +446,20 @@ cache loss = 0
 ```text
 Repository: dgcary/t-display-gp
 Branch:
-Commit SHA:
+Source SHA:
+Actions run:
+Artifact name/id:
+Artifact source_sha:
+Firmware SHA256 verified:
 Board: LILYGO T-Display-S3
 Port:
 Wi-Fi:
 Date:
-Validators:
+Web/CI validators:
 Ubuntu native:
 Windows native:
 Firmware build:
+Artifact verification:
 Flash:
 Menu/Input:
 DeviceInfo/IP:
