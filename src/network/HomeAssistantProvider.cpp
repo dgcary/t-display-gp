@@ -36,22 +36,30 @@ HomeAssistantError HomeAssistantProvider::fetch(const HomeAssistantConfig& confi
   fillDiagnostics(response, diagnostics);
   const HomeAssistantError transportError = mapTransportError(response);
   if (transportError != HomeAssistantError::NONE) return transportError;
+
   DynamicJsonDocument doc(4096);
   const DeserializationError parseError = deserializeJson(doc, response.body);
   if (parseError) return HomeAssistantError::PARSE;
-  const char* entityId = doc["entity_id"] | nullptr;
-  const char* state = doc["state"] | nullptr;
+
+  if (!doc["entity_id"].is<const char*>() || !doc["state"].is<const char*>()) {
+    return HomeAssistantError::MISSING_FIELD;
+  }
+  const char* entityId = doc["entity_id"].as<const char*>();
+  const char* state = doc["state"].as<const char*>();
   if (!entityId || !state) return HomeAssistantError::MISSING_FIELD;
   if (entity.entityId != entityId) return HomeAssistantError::ENTITY_MISMATCH;
+
   HomeAssistantEntitySnapshot parsed;
   parsed.entityId = entityId;
   parsed.state = state;
   if (parsed.state.size() > 64) return HomeAssistantError::PARSE;
-  const char* friendly = doc["attributes"]["friendly_name"] | "";
-  const char* unit = doc["attributes"]["unit_of_measurement"] | "";
-  parsed.friendlyName = friendly;
-  parsed.unit = unit;
+
+  const char* friendly = doc["attributes"]["friendly_name"].as<const char*>();
+  const char* unit = doc["attributes"]["unit_of_measurement"].as<const char*>();
+  parsed.friendlyName = friendly ? friendly : "";
+  parsed.unit = unit ? unit : "";
   if (parsed.friendlyName.size() > 80 || parsed.unit.size() > 24) return HomeAssistantError::PARSE;
+
   out = std::move(parsed);
   return HomeAssistantError::NONE;
 }
