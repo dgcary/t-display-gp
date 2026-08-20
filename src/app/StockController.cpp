@@ -105,10 +105,12 @@ void StockController::tick(uint32_t nowMs, const LocalDateTime& local) {
     const bool due = !current.hasQuote || current.quoteHealth.lastAttemptMs == 0 ||
                      elapsed(nowMs, current.quoteHealth.lastAttemptMs) >= interval;
     if (due) scheduleTradingCycle(nowMs);
-    if (failover_.activeProvider(nowMs) == ProviderId::EAST_MONEY &&
-        (!current.hasIntraday || current.intradayHealth.lastAttemptMs == 0 ||
-         elapsed(nowMs, current.intradayHealth.lastAttemptMs) >= BuildConfig::INTRADAY_REFRESH_MS)) {
-      enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::EAST_MONEY, nowMs);
+    if (!current.intradayHealth.hasAttempt ||
+        elapsed(nowMs, current.intradayHealth.lastAttemptMs) >= BuildConfig::INTRADAY_REFRESH_MS) {
+      // Intraday health is independent of quote failover. Each new cycle starts
+      // with Tencent; MarketDataWorker falls back to EastMoney only if the
+      // Tencent minute request cannot complete successfully.
+      enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::TENCENT, nowMs);
     }
   } else {
     const uint32_t interval = marketClock_.recommendedQuoteIntervalMs(marketStatus_);
@@ -145,8 +147,8 @@ void StockController::scheduleForCurrent(uint32_t nowMs, bool forceStaleOnly) {
   if (!forceStaleOnly || quoteStale) {
     enqueueRequest(currentIndex_, MarketRequestType::QUOTE, failover_.activeProvider(nowMs), nowMs);
   }
-  if (failover_.activeProvider(nowMs) == ProviderId::EAST_MONEY && (!forceStaleOnly || intradayStale)) {
-    enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::EAST_MONEY, nowMs);
+  if (!forceStaleOnly || intradayStale) {
+    enqueueRequest(currentIndex_, MarketRequestType::INTRADAY, ProviderId::TENCENT, nowMs);
   }
 }
 
@@ -203,8 +205,13 @@ bool StockController::enqueueRequest(size_t stockIndex, MarketRequestType type, 
 
   outstanding_.push_back({request.requestId, type, symbol, provider, priority});
   auto& cache = caches_[stockIndex];
-  if (type == MarketRequestType::INTRADAY) cache.intradayHealth.lastAttemptMs = nowMs;
-  else if (type == MarketRequestType::QUOTE) cache.quoteHealth.lastAttemptMs = nowMs;
+  if (type == MarketRequestType::INTRADAY) {
+    cache.intradayHealth.lastAttemptMs = nowMs;
+    cache.intradayHealth.hasAttempt = true;
+  } else if (type == MarketRequestType::QUOTE) {
+    cache.quoteHealth.lastAttemptMs = nowMs;
+    cache.quoteHealth.hasAttempt = true;
+  }
   return true;
 }
 
@@ -248,8 +255,8 @@ void StockController::consumeMarketResults() {
     }
 
     if (context.type == MarketRequestType::PRIMARY_PROBE) {
-      failover_.recordSuccess(ProviderId::EAST_MONEY, lastNowMs_);
-      if (failover_.activeProvider(lastNowMs_) != ProviderId::EAST_MONEY) continue;
+      failover_.recordSuccess(context.provider, lastNowMs_);
+      if (failover_.activeProvider(lastNowMs_) != ProviderId::TENCENT) continue;
     } else if (context.type == MarketRequestType::QUOTE) {
       failover_.recordSuccess(context.provider, lastNowMs_);
     }
@@ -257,6 +264,7 @@ void StockController::consumeMarketResults() {
     if (context.type == MarketRequestType::INTRADAY) {
       cache.intraday = std::move(result.intraday);
       cache.hasIntraday = true;
+      cache.intradayProvider = result.provider;
       cache.intradayUpdatedMs = lastNowMs_;
       cache.intradayHealth.lastSuccessMs = lastNowMs_;
       cache.intradayHealth.lastError = ProviderError::NONE;
@@ -283,11 +291,11 @@ void StockController::consumeMarketResults() {
 }
 
 void StockController::maybeProbePrimary(uint32_t nowMs) {
-  if (config_.stocks.empty() || failover_.activeProvider(nowMs) != ProviderId::TENCENT ||
+  if (config_.stocks.empty() || failover_.activeProvider(nowMs) != ProviderId::EAST_MONEY ||
       !failover_.shouldProbePrimary(nowMs)) {
     return;
   }
-  if (enqueueRequest(currentIndex_, MarketRequestType::PRIMARY_PROBE, ProviderId::EAST_MONEY, nowMs)) {
+  if (enqueueRequest(currentIndex_, MarketRequestType::PRIMARY_PROBE, ProviderId::TENCENT, nowMs)) {
     failover_.recordPrimaryProbeAttempt(nowMs);
   }
 }
@@ -307,6 +315,7 @@ void StockController::publishView() {
     next.hasIntraday = cache.hasIntraday;
     next.quote = cache.hasQuote ? &cache.quote : nullptr;
     next.intraday = cache.hasIntraday ? &cache.intraday : nullptr;
+    next.intradayProvider = cache.intradayProvider;
     next.displayName = !config_.stocks[currentIndex_].displayName.empty()
                            ? config_.stocks[currentIndex_].displayName
                            : cache.hasQuote ? cache.quote.name : next.symbol.canonical();

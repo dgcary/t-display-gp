@@ -1,20 +1,67 @@
-# Market Data API Contract
+# Data Provider / HTTP API Contract
 
-Status date: 2026-08-18
+Status date: 2026-08-19
 
-T-Display GP uses public, unauthenticated, unofficial market endpoints. Provider and parser boundaries remain replaceable because formats/access policy may change.
+T-Display GP keeps remote payload formats behind Provider abstractions. UI/Controller code consumes structured data and must not parse raw provider bodies directly.
 
 ## Provider matrix
 
-| Capability | EastMoney | Tencent |
+| Capability | Primary | Fallback |
 |---|---|---|
-| Quote | Primary | Fallback |
-| Intraday trend | Primary | Not used in V1 |
-| SSE | `1.<code>` | `sh<code>` |
-| SZSE | `0.<code>` | `sz<code>` |
-| BSE | `0.<code>` | `bj<code>` candidate; physical validation required |
+| A-share quote | Tencent | EastMoney |
+| A-share intraday | Tencent | EastMoney |
+| Weather current + 3-day forecast | Open-Meteo | none |
 
-## EastMoney quote
+Public provider contracts may change. Strict parsing and cache preservation are preferred over guessing new payload semantics.
+
+# Market data
+
+## Tencent quote primary
+
+```text
+GET https://qt.gtimg.cn/q=<market-prefix><code>
+```
+
+Tencent is the normal quote source. Quote provider health is independent from intraday health.
+
+Primary quote failover policy:
+
+- startup/default provider: Tencent,
+- 3 Tencent quote failures inside the existing 60-second failure window switch quote traffic to EastMoney,
+- while EastMoney is active, Tencent is probed at the existing 120-second probe interval,
+- 2 successful Tencent recovery probes restore Tencent as primary,
+- a failed Tencent recovery probe resets the consecutive recovery-success count,
+- EastMoney failure does not create an unbounded provider chain; the last valid quote cache is preserved.
+
+Tencent quote parsing remains strict: mismatched symbol or malformed fields are rejected and never replace the last valid quote cache.
+
+## Tencent intraday primary
+
+```text
+GET https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=<market-prefix><code>
+```
+
+Every new intraday cycle starts with Tencent, independent from the current quote provider.
+
+Tencent minute rows are parsed strictly into the existing `IntradaySeries` abstraction. The parser expects provider rows containing:
+
+```text
+HHMM price cumulative_lots cumulative_amount
+```
+
+Rules:
+
+- only 09:30–11:30 and 13:00–15:00 are retained,
+- rows must be strictly increasing by minute,
+- price must be finite and positive,
+- cumulative lots and amount must be valid non-negative numeric fields,
+- average price is derived from cumulative amount / (`lots * 100`) when cumulative volume is non-zero,
+- the retained series remains capped at 242 points,
+- malformed/missing/empty-session payloads are rejected without replacing the previous chart cache.
+
+Tencent transient intraday errors use the existing bounded/deferred retry policy before EastMoney fallback is considered.
+
+## EastMoney quote fallback
 
 ```text
 GET https://push2.eastmoney.com/api/qt/stock/get?secid=<secid>&fields=f57,f58,f43,f44,f45,f46,f47,f48,f60,f86,f169,f170
@@ -38,157 +85,203 @@ Consumed fields:
 | `f169` | change |
 | `f170` | change percent |
 
-Integer-like price/change values use the existing ÷100 scaling rule; decimal values are used directly. Missing, malformed, mismatched-symbol or structurally invalid payloads are rejected and do not replace cache.
+Missing/malformed/mismatched-symbol payloads are rejected and never replace the last valid quote cache.
 
-## EastMoney intraday
+EastMoney is a quote fallback only in the current provider policy; it is not the normal startup source.
+
+## EastMoney intraday fallback
 
 ```text
 GET https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=<secid>&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=1&iscr=0&iscca=0
 Referer: https://quote.eastmoney.com/
 ```
 
-Each trend row uses column 0 time, 1 price, 5 volume and 7 average price. Only 09:30–11:30 and 13:00–15:00 are retained. Duplicate/out-of-order minutes are skipped; series is capped at 242 points.
+Each row uses the existing time/price/volume/average-price parser contract. Only 09:30–11:30 and 13:00–15:00 are retained; the series remains capped at 242 points.
 
-Parser strictness is unchanged by the stability work. Unknown malformed payloads are not accepted merely to improve apparent success rate.
+EastMoney intraday is installed only after the Tencent intraday cycle is exhausted or Tencent returns a non-retryable intraday Provider error. EastMoney failure is terminal for that logical cycle and never recursively creates another fallback.
 
-## Tencent quote fallback
+## Market Worker contract
 
-```text
-GET https://qt.gtimg.cn/q=<market-prefix><code>
-```
-
-Important zero-based fields:
-
-| Index | Meaning |
-|---:|---|
-| 1 | name |
-| 2 | code |
-| 3 | last |
-| 4 | previous close |
-| 5 | open |
-| 6 | volume |
-| 30 | China-local `YYYYMMDDhhmmss` timestamp |
-| 31 | change |
-| 32 | change percent |
-| 33 | high |
-| 34 | low |
-| 37 | amount (V1 converts ten-thousand units to base units) |
-
-Tencent remains quote-only fallback. No intraday fallback is added in this change.
-
-## HTTP transport contract
-
-- HTTP 200 is required for successful Provider parsing.
-- TCP/connect timeout: 1500 ms.
-- TLS handshake timeout: **5 seconds**. Arduino-ESP32 2.0.14 otherwise defaults the secure-client handshake loop to 120 seconds.
-- HTTP/read timeout setting: 2500 ms. `HTTPClient` applies the corresponding rounded Stream/socket timeout after connection; transport code must not pass this millisecond value directly to `WiFiClientSecure::setTimeout()`, whose 2.0.14 API is seconds-based.
-- Maximum retained response body: 32 KiB.
-- Declared/streamed oversize responses are rejected.
-- Content-Length mismatch after an otherwise successful read is classified as truncated transport failure.
-- `HTTPClient::setReuse(false)` remains unchanged for this stability release.
-- Current V1 keeps its existing `WiFiClientSecure::setInsecure()` behavior; certificate-verification hardening is a separate security task.
-- All market HTTP executes in `MarketDataWorker`; UI/main loop does not perform blocking market HTTP.
-
-Transport diagnostics preserve:
-
-- HTTP status
-- native HTTPClient error code
-- TLS last error when available
-- expected Content-Length
-- received byte count
-- elapsed time
-
-The timeout/source contract is guarded by `tools/validate_http_transport_contract.py` in CI.
-
-## Worker scheduling contract
-
-Request priority:
+Request priority remains:
 
 1. latest current-page quote
 2. background quote
-3. EastMoney recovery probe
+3. Tencent primary-recovery probe
 4. intraday
 5. intraday retry
 
-Waiting intraday uses latest-wins semantics: only one not-yet-started intraday item is retained. A newer current-stock trend request replaces an older pending trend request; the replaced request produces an explicit cancellation result so Controller outstanding state is released.
+Waiting intraday remains latest-wins.
 
-TTL values follow the approved design spec exactly:
+Approved TTLs remain:
 
-- current-page quote: **8 s** from request creation
-- background quote: **12 s** from request creation
-- EastMoney primary probe: **30 s** from request creation
-- normal intraday: **75 s** from request creation
-- intraday retry cycle: **15 s from the first attempt of that refresh cycle**, not 15 s per retry attempt
+- current quote: 8 s
+- background quote: 12 s
+- primary probe: 30 s
+- normal intraday: 75 s
+- Tencent intraday retry cycle: 15 s from first attempt
 
-Expired accepted requests produce an explicit expiry result rather than silently disappearing. Retry attempts retain the first attempt's cycle timestamp while their per-attempt `createdMs` is refreshed for queue-wait diagnostics.
+Tencent intraday transient retry remains max 3 total attempts with approximately 1.5 s then 4 s deferred delays (with existing jitter) and must yield to quote work.
 
-## Intraday retry contract
+After the Tencent intraday cycle is exhausted, or Tencent returns a non-retryable intraday Provider error, `MarketDataWorker` may install an EastMoney intraday fallback using the same logical request id. EastMoney failure is terminal for that cycle.
 
-Only transient failures are eligible:
+A complete intraday cycle failure does not immediately reopen a new empty-cache cycle. The controller records explicit request history and waits the normal intraday refresh interval before trying Tencent again. This avoids retry storms and does not use `millis()==0` as an uninitialized sentinel.
 
-- transport/network failure, including connection loss/read failure/truncated body
-- HTTP 408
-- HTTP 5xx
+Intraday provider selection is independent from quote provider selection. A quote may temporarily be on EastMoney while a new intraday cycle still begins on Tencent; conversely Tencent/EastMoney intraday success or failure must not change quote failover health.
 
-No immediate retry for:
+When StockApp is suspended, MarketDataWorker is paused for new/pending execution. A request that had already begun external HTTP is allowed to finish naturally; suspension does not force-delete a TLS task. Intraday retry/fallback installation is suppressed while paused. On StockApp re-entry, worker execution resumes and existing TTL/expiry semantics handle retained pending work.
 
-- parser/schema errors
-- missing fields
-- body too large
-- unsupported data
-- ordinary HTTP 4xx other than 408
+# Weather data
 
-Maximum: **3 total attempts per intraday refresh cycle**.
+## Open-Meteo request
 
-Deferred delays:
+V1 WeatherApp uses the forecast endpoint through `IWeatherProvider` / `OpenMeteoProvider`.
+
+Conceptual request:
 
 ```text
-attempt 2: ~1500 ms ±20%
-attempt 3: ~4000 ms ±20%
+GET https://api.open-meteo.com/v1/forecast
+    ?latitude=<6 decimal degrees>
+    &longitude=<6 decimal degrees>
+    &current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m
+    &daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max
+    &timezone=Asia%2FShanghai
+    &forecast_days=3
+    &timeformat=unixtime
 ```
 
-Retry never loops inside the Provider; quote work can run between attempts. A retry that would fall outside the 15-second cycle deadline is not allowed to extend the cycle indefinitely.
+Configuration stores latitude/longitude as integer microdegrees and formats them as six-decimal coordinates only at the Provider boundary.
 
-## Quote failover contract
+## Weather fields retained
 
-1. EastMoney is normal quote Provider.
-2. Three EastMoney quote failures within 60 s switch quote traffic to Tencent.
-3. While Tencent is active, EastMoney recovery probe is no faster than once per 120 s.
-4. Two successful probes restore EastMoney.
-5. Failed probe resets recovery-success count.
-6. Intraday failure does not trigger Tencent intraday use.
-
-## Cache and health contract
-
-Quote and intraday have independent health state:
-
-- last error
-- last attempt
-- last success
-- consecutive failed refresh cycles
-
-A quote success clears only quote health. An intraday success clears only intraday health. Failure never erases the corresponding last valid payload.
-
-UI thresholds are evaluated only during active trading:
-
-- existing quote: `报价延迟` when **2 consecutive quote refresh cycles fail OR age >=15 s**
-- existing intraday: `分时延迟` when **2 consecutive intraday refresh cycles fail OR age >=180 s**
-- one isolated intraday failure with a fresh cached chart: no generic page-wide error
-- quote status has priority if quote and intraday are both degraded
-- lunch/closed/non-trading states do not become false delay alarms merely because cached data ages normally
-
-## Request log contract
-
-Each completed/expired/cancelled request emits a concise `[md]` line. Example:
+The parser converts the remote payload into bounded `WeatherSnapshot` state:
 
 ```text
-[md] id=182 type=INTRADAY symbol=000831 provider=EM attempt=2/3 queue=8ms dur=2680ms http=200 native=-5 tls=-29184 bytes=8192/13824 result=NETWORK
+currentTemp
+apparentTemp
+humidityPercent
+windSpeed
+precipitationProbabilityPercent
+weatherCode
+today high/low/code
+tomorrow high/low/code
+dayAfter high/low/code
+updatedEpochSeconds
 ```
 
-Do not log full response bodies by default.
+Raw JSON is not retained after successful parse.
 
-## Validation policy
+Parser requirements:
 
-PC `curl`/Windows Schannel behavior is useful external evidence, but is not treated as proof of the ESP32 failure type. Device-side `[md]` diagnostics are the source used to classify actual ESP32 transport failures.
+- `current` object must exist
+- required current fields must exist and be numeric
+- daily code/high/low/precipitation arrays must contain at least three entries
+- humidity and precipitation remain 0..100
+- weather code remains in expected numeric range
+- temperature/wind values must be finite and within broad sanity ranges
+- daily low may not exceed daily high
 
-If at least 30 physical intraday refresh cycles still have <80% final-cycle success after bounded retries, open a separate design review for an intraday fallback Provider rather than weakening parser or retry limits.
+Provider parses into a temporary object and assigns output only after full validation. Parse/missing-field failure does not mutate the caller's existing valid snapshot.
+
+## Weather refresh contract
+
+- default: 15 minutes
+- configurable: 5..60 minutes
+- first active+online WeatherApp tick with no request history may enqueue immediately
+- subsequent scheduling is paced from **last request attempt time**, not last success time
+- therefore a failed refresh cannot cause an immediate tight retry loop
+- last success timestamp is used for cache age/stale indication, not scheduling
+- no active scheduling while WeatherApp is suspended
+- provider/network/parser failure preserves the last valid cache
+
+Weather has no V1 provider fallback and no rapid retry loop.
+
+# Shared HTTP/TLS transport
+
+Market and app-data Providers use the same `HttpTransport` implementation.
+
+## NetworkArbiter
+
+All external HTTP/TLS operations acquire a shared firmware mutex before creating/using the secure client:
+
+> **At most one external HTTP/TLS request executes at a time.**
+
+This is an execution/memory boundary, not a Provider priority scheduler. MarketDataWorker and AppDataWorker keep their own queue policies, then serialize at the actual external TLS operation.
+
+The lock is RAII-managed so every normal/error return releases it.
+
+## Transport limits
+
+- HTTP 200 required before Provider parsing
+- TCP/connect timeout: 1500 ms
+- TLS handshake timeout: 5 s
+- HTTP/read timeout setting: 2500 ms
+- retained response body maximum: 32 KiB
+- declared/streamed oversize responses rejected
+- content-length mismatch classified as truncated transport failure
+- `HTTPClient::setReuse(false)` remains enabled
+- do not pass the 2500-ms read constant directly into the seconds-based Arduino-ESP32 2.0.14 `WiFiClientSecure::setTimeout()`
+
+Current public-data clients retain the project's pre-existing `WiFiClientSecure::setInsecure()` behavior. The multi-app/weather work does not treat that as an acceptable security boundary for future sensitive Home Assistant credentials; token storage and strict TLS must receive a separate security design before HA write/control features are added.
+
+`tools/validate_http_transport_contract.py` guards the timeout/reuse/arbiter source contract in CI.
+
+# Diagnostics
+
+## Market
+
+```text
+[md] id=... type=QUOTE|INTRADAY|PROBE symbol=... provider=EM|TX attempt=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
+```
+
+When the Tencent intraday cycle hands off to EastMoney, a concise marker is emitted:
+
+```text
+[md] id=... type=INTRADAY symbol=... fallback=TX->EM
+```
+
+The stock footer exposes actual data sources independently. Common examples:
+
+```text
+Q:TX
+Q:TX I:TX
+Q:TX I:EM
+Q:EM I:TX
+```
+
+`I:` appears once a valid intraday cache exists.
+
+## App data / Weather
+
+```text
+[appdata] id=... type=WEATHER location=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
+```
+
+## Runtime memory
+
+```text
+[sys] app=STOCK|MENU|WEATHER|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
+```
+
+Do not log full provider response bodies by default.
+
+# Cache / error isolation
+
+Stock quote, stock intraday, and weather each maintain independent cache/health semantics.
+
+Examples:
+
+- weather failure cannot change stock quote provider state
+- intraday failure cannot clear quote cache
+- intraday fallback cannot change quote failover health
+- stock failure cannot clear weather snapshot
+- inactive app network completion cannot redraw the TFT
+
+# Validation policy
+
+When a provider changes/fails:
+
+1. capture real device diagnostics,
+2. reproduce with a regression fixture/behavior test,
+3. change Provider/transport boundary rather than UI where possible,
+4. never weaken parser simply to accept unknown malformed data,
+5. do not add infinite retry or unbounded timeout as a workaround.
