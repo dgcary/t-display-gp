@@ -1,73 +1,88 @@
-# Home Assistant + Crypto Suite Implementation Plan
+# Home Assistant + Crypto + Nixie Idle Suite Implementation Plan
 
-**Goal:** Extend the T-Display GP shell with a secure read-only Home Assistant dashboard and a low-frequency cryptocurrency dashboard while preserving Stock, Weather, Nixie and DeviceInfo behavior.
+**Goal:** Extend the T-Display GP shell with a read-only Home Assistant client, low-frequency Crypto dashboard, Nixie default startup and a global 30-second idle-to-Nixie policy while preserving Stock/Weather behavior.
 
-**Final architecture:** Weather, Home Assistant and Crypto reuse the **single** `AppDataWorker`. Requests share one worker task and external TLS remains serialized through `NetworkArbiter`; results are separated by `AppDataRequestType` so one app cannot consume another app's delayed result. Local-only Nixie/DeviceInfo remain outside the worker.
+**Final architecture:** Weather, Home Assistant and Crypto reuse the **single** `AppDataWorker`. Actual external HTTP/TLS operations serialize through `NetworkArbiter`; typed result queues prevent cross-app delayed-result loss. Nixie/DeviceInfo remain local-only. `AppManager` owns startup/idle behavior.
 
 ## Final scope
 
-- Hardware remains LILYGO T-Display-S3, 320×170 landscape rotation 3.
-- Startup remains StockApp; existing GPIO semantics are unchanged.
+- Hardware: LILYGO T-Display-S3, 320×170 landscape rotation 3.
 - Menu: Stock / Weather / Nixie / Home Assistant / Crypto / DeviceInfo.
-- No additional per-app FreeRTOS worker.
-- Last valid data survives request failure and app transitions.
-- Home Assistant and Crypto schedule only while active.
-- PR stays Draft until real-board acceptance.
+- **Startup: NixieClock.**
+- `MENU`, `WEATHER`, `HOME_ASSISTANT`, `CRYPTO`, `DEVICE_INFO`: 30 s without valid input -> NixieClock.
+- `STOCK` and `NIXIE_CLOCK`: idle-exempt.
+- valid GPIO0/GPIO14 short/long events reset idle timer; network/data activity does not.
+- no additional per-app FreeRTOS worker.
+- last valid remote data survives failures/transitions.
+- PR remains Draft until physical acceptance.
 
 ## Home Assistant V1
 
-- Read-only only; no `/api/services` writes or control actions.
-- 1–4 configured entities with optional display labels.
-- Refresh 30–300 seconds, default 30 seconds.
-- Sequential `GET <base_url>/api/states/<entity_id>` requests.
-- `Authorization: Bearer <long-lived access token>`.
-- Device→HA TLS is strict: configured CA PEM is passed to `WiFiClientSecure::setCACert`; `setInsecure()` is forbidden for this credentialed path.
-- Token and CA are stored in a dedicated `ha_config` NVS blob under the existing namespace and are not added to AppConfig schema v2.
-- The existing AppConfig schema therefore remains **v2**; no stock/weather migration change is required.
-- HA has a separate LAN configuration portal at `http://<device-ip>:8081/`.
-- That local portal is plain HTTP and must be used only on a trusted LAN. It never returns Token/CA contents; status exposes only `ha_token_set` / `ha_ca_set` booleans.
-- Blank Token/CA fields preserve existing secrets; save validates atomically and reboots.
+Role: **user's existing Home Assistant is the server; T-Display-S3 is only a REST client.**
+
+- read-only; no `/api/services` writes/control actions.
+- 1–4 entity IDs with optional labels.
+- refresh 30–300 s, default 30 s.
+- sequential `GET <base_url>/api/states/<entity_id>`.
+- Bearer Long-Lived Access Token.
+- HTTP mode supports existing/default trusted-LAN HA installations (commonly port 8123); no CA, Token is cleartext on LAN.
+- HTTPS mode requires CA PEM via `WiFiClientSecure::setCACert`; `setInsecure()` is forbidden.
+- both modes acquire `NetworkArbiter` and use bounded response retention.
+- Token/CA stored in separate `ha_config` NVS blob; AppConfig remains schema v2.
+- T-Display config portal: `http://<device-ip>:8081/`; this is not an HA server.
+- status exposes only `ha_token_set` / `ha_ca_set`, never secret contents.
 
 ## Crypto V1
 
-The original CoinGecko idea was dropped after current documentation verification showed Demo/Pro API keys are now required.
-
-Final provider: Binance's dedicated market-data-only host:
+CoinGecko was dropped after current documentation verification showed key requirements. Final provider is Binance's dedicated market-data-only host:
 
 ```text
 GET https://data-api.binance.vision/api/v3/ticker/24hr
     ?symbols=["BTCUSDT","ETHUSDT","SOLUSDT"]
 ```
 
-The request is URL-encoded in firmware. Binance documents `data-api.binance.vision` as public market-data-only and requiring no authentication/API key.
+- no API key.
+- BTC / ETH / SOL versus USDT.
+- one request obtains all 3 24h tickers.
+- latest price + 24h percent.
+- fixed V1 cadence 60 s.
+- active-only scheduling.
+- strict parser maps by symbol, rejects duplicates/missing/malformed values, and updates only after all 3 validate.
 
-- Assets: BTC, ETH, SOL versus USDT.
-- One request obtains all three 24h tickers.
-- Display: latest price + 24h percent change.
-- Refresh default/fixed V1 cadence: 60 seconds.
-- Strict parser maps symbols independent of response order, rejects duplicates/missing/malformed values, and updates cache only after the whole three-symbol response validates.
+## Shared AppDataWorker
 
-## Shared worker/result routing
+- one request queue executes WEATHER / HOME_ASSISTANT / CRYPTO.
+- per-type result queues prevent cross-app result loss.
+- FreeRTOS queues store pointers to C++ request/result objects; no byte-copy of non-trivial `std::string` objects.
+- already-running requests may finish after app exit, but inactive apps schedule no follow-up work and never redraw TFT.
 
-- One request queue executes WEATHER / HOME_ASSISTANT / CRYPTO.
-- Typed result queues prevent cross-app result loss.
-- FreeRTOS queues store pointers to C++ request/result objects; do not byte-copy non-trivial objects containing `std::string`.
-- An external request already executing may finish after app exit, but inactive apps do not schedule follow-up work. Typed late results wait until that app is active again.
+## Nixie startup / idle
+
+`AppManager` owns the policy rather than individual apps.
+
+- default `begin()` and `main.cpp` startup target `AppId::NIXIE_CLOCK`.
+- timeout exactly 30000 ms using unsigned wrap-safe elapsed arithmetic.
+- timeout switch occurs before old app's next tick, preventing one extra remote request at the boundary.
+- Stock stays indefinitely; Nixie stays indefinitely.
+- Nixie remains local-only and does not become a background network/scheduler feature.
 
 ## TDD / verification checklist
 
-- [x] RED dashboard integration contract verified before implementation.
-- [x] Typed app-data routing implemented; Weather adapted.
-- [x] Home Assistant configuration validation/codec/store implemented.
-- [x] Home Assistant strict-TLS provider implemented.
-- [x] Home Assistant controller/app/UI/config portal implemented.
-- [x] Crypto provider/controller/app/UI implemented.
-- [x] CoinGecko replaced with Binance market-data-only endpoint after current-doc verification.
-- [x] Provider/controller/config native tests added.
-- [x] HA ArduinoJson string regression reproduced and fixed.
-- [ ] Final documentation alignment.
-- [ ] Exact-head Ubuntu native PASS.
-- [ ] Exact-head Windows native PASS.
-- [ ] Exact-head ESP32-S3 firmware build PASS.
-- [ ] Exact-head artifact hashes independently verified.
-- [ ] Physical T-Display-S3 acceptance by Codex/user.
+- [x] RED dashboard integration contract verified.
+- [x] typed AppDataWorker result routing; Weather adapted.
+- [x] HA config validation/codec/store.
+- [x] HA Provider/controller/app/UI/config portal.
+- [x] HA HTTPS CA transport with secret-redaction contract.
+- [x] HA official/default HTTP-server compatibility added via RED -> GREEN.
+- [x] Crypto Provider/controller/app/UI.
+- [x] CoinGecko replaced with Binance market-only endpoint.
+- [x] HA ArduinoJson string regression reproduced/fixed.
+- [x] ESP32 `OK` symbol collision reproduced/fixed.
+- [x] Nixie default-start and 30-second idle policy added via RED -> GREEN.
+- [x] Stock/Nixie idle exemptions and millis wrap tests.
+- [x] README / AGENTS / deployment / API / hardware acceptance aligned.
+- [ ] exact-head Ubuntu native PASS.
+- [ ] exact-head Windows native PASS.
+- [ ] exact-head ESP32-S3 firmware build PASS.
+- [ ] exact-head Artifact SHA256 independently verified.
+- [ ] physical T-Display-S3 acceptance by Codex/user.
