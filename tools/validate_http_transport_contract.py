@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate HTTP timeout, reuse, and shared TLS serialization invariants."""
+"""Validate HTTP timeout, reuse, shared TLS serialization, and network diagnostics invariants."""
 from pathlib import Path
 import sys
 
@@ -19,6 +19,11 @@ required_transport = {
     "http.setConnectTimeout(BuildConfig::HTTP_CONNECT_TIMEOUT_MS);",
     "http.setTimeout(BuildConfig::HTTP_READ_TIMEOUT_MS);",
     "http.setReuse(false);",
+    "arbiterWaitMs",
+    "ioElapsedMs",
+    "WiFi.BSSIDstr()",
+    "WiFi.channel()",
+    "[net] host=%s arb=%lums io=%lums",
 }
 required_arbiter = {
     "xSemaphoreCreateMutex()",
@@ -44,7 +49,7 @@ if missing_config or missing_transport or missing_arbiter or missing_main or pre
         for item in missing_config:
             print(f"  {item}")
     if missing_transport:
-        print("missing HTTP transport contract:")
+        print("missing HTTP transport/diagnostics contract:")
         for item in missing_transport:
             print(f"  {item}")
     if missing_arbiter:
@@ -61,4 +66,4 @@ if missing_config or missing_transport or missing_arbiter or missing_main or pre
             print(f"  {item}")
     sys.exit(1)
 
-print("HTTP transport timeout + serialized TLS contract: OK")
+print("HTTP transport timeout + serialized TLS + network diagnostics contract: OK")
