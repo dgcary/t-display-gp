@@ -1,5 +1,7 @@
 #include "HomeAssistantController.h"
 
+#include <utility>
+
 void HomeAssistantController::begin(const HomeAssistantConfig& config) {
   config_ = config;
   viewModel_ = {};

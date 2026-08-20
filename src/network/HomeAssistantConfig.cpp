@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 
 #include <cctype>
+#include <utility>
 
 namespace {
 constexpr size_t MAX_BASE_URL_BYTES = 160;
@@ -52,7 +53,6 @@ HomeAssistantConfigValidationResult validateHomeAssistantConfig(const HomeAssist
   if (config.entityCount > config.entities.size()) {
     return {HomeAssistantConfigError::ENTITY_COUNT, 0};
   }
-
   if (!config.baseUrl.empty()) {
     if (config.baseUrl.size() > MAX_BASE_URL_BYTES || !startsWith(config.baseUrl, "https://") ||
         config.baseUrl.back() == '/' || config.baseUrl.find('?', 8) != std::string::npos ||
@@ -62,12 +62,10 @@ HomeAssistantConfigValidationResult validateHomeAssistantConfig(const HomeAssist
   }
   if (config.token.size() > MAX_TOKEN_BYTES) return {HomeAssistantConfigError::TOKEN, 0};
   if (config.caCert.size() > MAX_CA_CERT_BYTES) return {HomeAssistantConfigError::CA_CERT, 0};
-
   for (size_t i = 0; i < config.entityCount; ++i) {
     if (!validEntityId(config.entities[i].entityId)) return {HomeAssistantConfigError::ENTITY_ID, i};
     if (config.entities[i].label.size() > MAX_LABEL_BYTES) return {HomeAssistantConfigError::LABEL, i};
   }
-
   if (!config.enabled) return {};
   if (config.baseUrl.empty()) return {HomeAssistantConfigError::BASE_URL, 0};
   if (config.token.empty()) return {HomeAssistantConfigError::TOKEN, 0};
@@ -109,7 +107,6 @@ bool decode(std::string_view json, HomeAssistantConfig& out) {
   const DeserializationError parseError = deserializeJson(doc, json.data(), json.size());
   if (parseError) return false;
   if (doc["schema"].as<uint32_t>() != CONFIG_SCHEMA) return false;
-
   HomeAssistantConfig parsed;
   parsed.enabled = doc["enabled"] | false;
   parsed.baseUrl = doc["base_url"] | "";

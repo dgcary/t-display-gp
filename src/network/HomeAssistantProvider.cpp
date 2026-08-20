@@ -2,6 +2,8 @@
 
 #include <ArduinoJson.h>
 
+#include <utility>
+
 namespace {
 void fillDiagnostics(const HttpResponse& response, HomeAssistantDiagnostics* diagnostics) {
   if (!diagnostics) return;
@@ -34,16 +36,13 @@ HomeAssistantError HomeAssistantProvider::fetch(const HomeAssistantConfig& confi
   fillDiagnostics(response, diagnostics);
   const HomeAssistantError transportError = mapTransportError(response);
   if (transportError != HomeAssistantError::NONE) return transportError;
-
   DynamicJsonDocument doc(4096);
   const DeserializationError parseError = deserializeJson(doc, response.body);
   if (parseError) return HomeAssistantError::PARSE;
-
   const char* entityId = doc["entity_id"] | nullptr;
   const char* state = doc["state"] | nullptr;
   if (!entityId || !state) return HomeAssistantError::MISSING_FIELD;
   if (entity.entityId != entityId) return HomeAssistantError::ENTITY_MISMATCH;
-
   HomeAssistantEntitySnapshot parsed;
   parsed.entityId = entityId;
   parsed.state = state;
