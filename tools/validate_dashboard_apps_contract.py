@@ -23,8 +23,9 @@ checks = {
     "src/network/AppDataTypes.h": ["HOME_ASSISTANT", "CRYPTO", "tryReceive(AppDataRequestType type"],
     "src/network/AppDataWorker.cpp": ["HomeAssistantProvider", "CryptoProvider", "AppDataRequestType::HOME_ASSISTANT", "AppDataRequestType::CRYPTO"],
     "src/network/CryptoProvider.cpp": ["data-api.binance.vision/api/v3/ticker/24hr", "BTCUSDT", "ETHUSDT", "SOLUSDT"],
-    "src/network/SecureHomeAssistantTransport.cpp": ["Authorization", "Bearer ", "setCACert", "/api/states/", "NetworkArbiter"],
-    "src/network/HomeAssistantConfigPortal.cpp": ["WebServer server{8081}", "ha_token_set", "ha_ca_set"],
+    "src/network/HomeAssistantConfig.cpp": ["http://", "https://", "isHttpsUrl", "CA_CERT"],
+    "src/network/SecureHomeAssistantTransport.cpp": ["Authorization", "Bearer ", "WiFiClient client", "setCACert", "/api/states/", "NetworkArbiter", '"HA_HTTP"', '"HA_CA"'],
+    "src/network/HomeAssistantConfigPortal.cpp": ["WebServer server{8081}", "ha_token_set", "ha_ca_set", "http://homeassistant.local:8123"],
 }
 missing_files = sorted(path for path in required_files if not Path(path).exists())
 missing_contract = []
@@ -36,10 +37,11 @@ for path, needles in checks.items():
     for needle in needles:
         if needle not in text:
             missing_contract.append(f"{path}: {needle}")
+
 security_violations = []
-secure_transport = Path("src/network/SecureHomeAssistantTransport.cpp")
-if secure_transport.exists() and "setInsecure" in secure_transport.read_text(encoding="utf-8"):
-    security_violations.append("SecureHomeAssistantTransport must not use setInsecure")
+ha_transport = Path("src/network/SecureHomeAssistantTransport.cpp")
+if ha_transport.exists() and "setInsecure" in ha_transport.read_text(encoding="utf-8"):
+    security_violations.append("Home Assistant HTTPS transport must never use setInsecure")
 portal = Path("src/network/HomeAssistantConfigPortal.cpp")
 if portal.exists():
     text = portal.read_text(encoding="utf-8")
@@ -49,6 +51,7 @@ if portal.exists():
 main_cpp = Path("src/main.cpp")
 if main_cpp.exists() and main_cpp.read_text(encoding="utf-8").count("AppDataWorker appDataWorker") != 1:
     security_violations.append("exactly one shared AppDataWorker is required")
+
 if missing_files or missing_contract or security_violations:
     if missing_files:
         print("missing dashboard app files:")
@@ -63,4 +66,5 @@ if missing_files or missing_contract or security_violations:
         for item in security_violations:
             print(f"  {item}")
     sys.exit(1)
-print("Home Assistant strict-TLS + Binance market-only Crypto shared-worker dashboard contract: OK")
+
+print("Home Assistant HTTP + verified HTTPS client and Binance market-only Crypto shared-worker contract: OK")
