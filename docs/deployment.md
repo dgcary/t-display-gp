@@ -1,29 +1,42 @@
 # T-Display GP 部署与烧录指南
 
-用于人工或 Codex 从 GitHub 部署到 **LILYGO T-Display-S3**。
+用于从 GitHub 将 **已经由网页版 ChatGPT 编译验证完成的固件**部署到 **LILYGO T-Display-S3**。
 
-## 1. 唯一准本
+## 1. 固定职责分工
+
+本项目固定采用：
+
+```text
+网页版 ChatGPT
+  -> 代码开发 / 测试 / GitHub 提交
+  -> PlatformIO validators + native tests
+  -> pio run 编译 ESP32-S3 firmware
+  -> GitHub Actions 上传 verified firmware artifact
+
+Codex
+  -> 下载 exact-SHA artifact
+  -> 校验 manifest / SHA256
+  -> 本地烧录
+  -> 串口监控
+  -> 真机功能测试
+  -> 把问题证据反馈给网页版 ChatGPT
+```
+
+**Codex 不再承担常规本地编译和编译排错。** 真机发现问题后也不要现场改源码；回传日志/照片/复现步骤，由网页版 ChatGPT 修改并重新编译。
+
+## 2. 唯一准本
 
 - Repository: `dgcary/t-display-gp`
 - 默认部署已批准的 `main`
 - 用户指定 branch/SHA 时严格部署该 ref
-- 每次真机验收记录完整 40 位 SHA
+- 每次真机验收记录完整 40 位 source SHA
+- GitHub Actions 的 verified firmware artifact 必须与该 SHA 完全对应
 
-不要用旧 `.pio`、旧 `firmware.bin` 或旧工程目录代替 GitHub 当前源码。
+不要用旧 `.pio`、旧 `firmware.bin` 或旧工程目录代替指定 GitHub Artifact。
 
-## 2. 获取代码
+## 3. 开发侧强制验证
 
-```bash
-git fetch origin
-git checkout <branch>
-git pull --ff-only origin <branch>
-git rev-parse HEAD
-git status
-```
-
-工作区必须干净；不要擅自 reset/drop 未提交内容。
-
-## 3. 部署前强制检查
+以下步骤由网页版 ChatGPT / CI 完成，不是 Codex 的本地部署门禁：
 
 ```bash
 python tools/validate_tdisplay_setup.py
@@ -33,21 +46,128 @@ pio test -e native
 pio run -e lilygo-t-display-s3
 ```
 
-任一失败：**禁止烧录**。
+全部成功后 CI 上传：
 
-CI 同时验证 Ubuntu native 与 Windows native。TFT/UI contract 还会验证 Arduino C++17 构建契约、rotation 3、WeatherVisuals/WeatherCatArt native wiring、Weather Unicode 条件文本以及股票独立报价/分时 Provider 页脚接线。
+```text
+tdisplay-gp-firmware-<SOURCE_SHA>
+```
 
-## 4. 烧录
+Artifact 至少包含：
+
+```text
+firmware.bin
+partitions.bin
+bootloader.bin
+firmware-manifest.txt
+```
+
+`firmware-manifest.txt` 包含：
+
+```text
+repository
+source_sha
+workflow_sha
+environment
+firmware_offset
+firmware_sha256
+partitions_sha256
+bootloader_sha256
+```
+
+## 4. Codex 下载预编译 Artifact
+
+Codex 只下载已经通过 CI 的 exact-SHA Artifact。例如：
+
+```powershell
+gh run download <RUN_ID> `
+  -n tdisplay-gp-firmware-<SOURCE_SHA> `
+  -D .\firmware-artifact
+```
+
+下载后必须检查：
+
+```powershell
+Get-Content .\firmware-artifact\firmware-manifest.txt
+(Get-FileHash .\firmware-artifact\firmware.bin -Algorithm SHA256).Hash.ToLower()
+```
+
+要求：
+
+- `source_sha` == 用户指定的 exact SHA
+- 实际 `firmware.bin` SHA256 == manifest 的 `firmware_sha256`
+
+任一不一致：**禁止烧录**。
+
+## 5. 确认设备串口
 
 ```bash
 pio device list
-pio run -e lilygo-t-display-s3 -t upload --upload-port COM6
+```
+
+COM6 是本项目常用 Windows 端口，但每次必须确认 VID/PID/设备信息属于目标 T-Display-S3。
+
+不要触碰其他串口。
+
+## 6. 烧录预编译应用固件
+
+当前项目 partition layout 未改变；CI manifest 指定应用 offset（当前为 `0x10000`）。正常升级只写 `firmware.bin` 到该 offset，以保留 bootloader、partition table、NVS/Wi-Fi/股票/天气配置。
+
+Windows + PlatformIO 环境推荐直接使用已有 PlatformIO esptool：
+
+```powershell
+$pioPython = "$env:USERPROFILE\.platformio\penv\Scripts\python.exe"
+$esptool = "$env:USERPROFILE\.platformio\packages\tool-esptoolpy\esptool.py"
+
+& $pioPython $esptool `
+  --chip esp32s3 `
+  --port COM6 `
+  --baud 460800 `
+  write_flash `
+  0x10000 `
+  .\firmware-artifact\firmware.bin
+```
+
+实际 offset 必须以本次 Artifact 的 `firmware-manifest.txt` 为准；不要硬编码其他值。
+
+禁止：
+
+```text
+erase_flash
+erase NVS
+重写 partitions.bin
+重写 bootloader.bin
+```
+
+除非有单独批准的恢复/首次烧录任务。
+
+## 7. 串口监控
+
+烧录完成后：
+
+```bash
 pio device monitor --port COM6 -b 115200
 ```
 
-COM6 是本项目当前常用 Windows 端口；实际执行前必须确认目标串口确实是 T-Display-S3。
+正常启动应出现：
 
-## 5. 配置迁移
+```text
+[boot] multi-app loop ready
+```
+
+重点收集：
+
+```text
+[md]
+[appdata]
+[sys]
+Guru Meditation
+watchdog
+panic
+abort
+reboot
+```
+
+## 8. 配置迁移
 
 当前配置 schema 为 v2，但继续使用 `stockticker` NVS namespace。
 
@@ -61,7 +181,7 @@ COM6 是本项目当前常用 Windows 端口；实际执行前必须确认目标
 
 升级前后都不要主动擦除 NVS，除非测试目标明确要求“首次配网”。
 
-## 6. 首次配网 / Web 设置
+## 9. 首次配网 / Web 设置
 
 无有效配置时：
 
@@ -81,9 +201,9 @@ COM6 是本项目当前常用 Windows 端口；实际执行前必须确认目标
 长按 GPIO0 -> 主菜单 -> 设备信息 -> 长按 GPIO14
 ```
 
-设备信息页会直接显示 `Web: http://<IP>/`。用同一局域网浏览器访问即可进入 Web 配置页。
+设备信息页会直接显示 `Web: http://<IP>/`。
 
-## 7. App 操作
+## 10. App 操作
 
 ### 普通 App
 
@@ -93,8 +213,6 @@ GPIO14 短按 -> 下一项
 GPIO0 长按  -> 返回主菜单
 GPIO14 长按 -> 保留/无动作
 ```
-
-长按阈值 700 ms。
 
 ### 主菜单
 
@@ -107,7 +225,7 @@ GPIO14 长按 -> 进入选中 App
 
 当前菜单至少包含：`股票`、`天气`、`设备信息`。设备开机默认进入 StockApp。
 
-## 8. 串口日志
+## 11. 串口日志
 
 ### 股票
 
@@ -135,7 +253,7 @@ GPIO14 长按 -> 进入选中 App
 [sys] app=STOCK|MENU|WEATHER|DEVICE_INFO heap_free=... heap_min=... psram_free=... psram_total=... main_stack_hwm=...
 ```
 
-## 9. 多 App Smoke Test
+## 12. 多 App Smoke Test
 
 烧录后按顺序确认：
 
@@ -152,7 +270,7 @@ GPIO14 长按 -> 进入选中 App
 11. 返回股票后旧股票缓存立即可见
 12. 串口无 watchdog / Guru Meditation / 异常 reboot
 
-## 10. 股票 Provider / 分时 fallback 检查
+## 13. 股票 Provider / 分时 fallback 检查
 
 当前策略：
 
@@ -180,22 +298,19 @@ Tencent intraday
 - 正常腾讯分时成功时页脚 `I:TX`
 - 报价来源单独显示为 `Q:TX` 或 fallback `Q:EM`
 - Intraday 成功/失败不得改变 quote failover 健康
-- TX+EM 分时都失败时旧图保留且不会 tight loop；下个周期等待正常分时刷新间隔后重新从 TX 开始
+- TX+EM 分时都失败时旧图保留且不会 tight loop
 
-## 11. 网络隔离检查
+## 14. 网络隔离检查
 
 外部股票与天气 HTTPS 必须通过共享 NetworkArbiter 串行执行。
 
-- 不应出现因多个 TLS 同时执行导致的明显内存异常
 - StockApp 退出后不应继续启动新的 pending 行情工作
 - 已经执行中的股票 HTTPS 可以自然结束
 - Weather 失败不得改变股票 Provider/健康状态
 - Weather 失败后不得形成连续快速请求
 - DeviceInfo 不发起外部网络请求
 
-## 12. 稳定性验收
-
-最低新增多 App 稳定性目标：
+## 15. 稳定性验收
 
 ```text
 Stock -> Menu -> Weather -> Menu -> DeviceInfo -> Menu -> Stock 循环 >=100 次
@@ -207,16 +322,16 @@ cache loss = 0
 明显持续 Heap 泄漏 = 0
 ```
 
-股票原有交易时段量化目标与 Provider fallback 细节见 `hardware-acceptance.md`。
-
-## 13. 状态判定
+## 16. 状态判定
 
 分别记录：
 
 ```text
-HOST TEST PASS
+WEB/CI VALIDATORS PASS
+UBUNTU NATIVE PASS
 WINDOWS NATIVE PASS
 FIRMWARE BUILD PASS
+VERIFIED ARTIFACT PASS
 FLASH PASS
 DEVICE INFO PASS
 WEATHER LIVE/UI PASS
@@ -226,28 +341,28 @@ STOCK STABILITY PASS
 FULL HARDWARE ACCEPTANCE PASS
 ```
 
-前一级不能自动替代后一级。
+编译/Artifact PASS 由网页版 ChatGPT 提供；Codex 不重复本地编译来证明它。
 
-## 14. 常见问题
+## 17. 常见问题
+
+### Codex 本地 `pio run` 卡住
+
+按固定工作流，Codex 不应依赖本地 `pio run`。只要网页版 ChatGPT 已给出 exact-SHA verified artifact，直接下载、校验并用 esptool 烧录。
 
 ### 天气显示“未配置”
 
-进入设备信息查看 IP，在浏览器打开 `http://<IP>/`，启用天气并填写地点/经纬度/刷新周期，保存等待受控重启。
-
-### 天气失败但旧数据还在
-
-这是预期降级：保留旧缓存并显示天气错误/延迟。检查 `[appdata]`，不要通过高频无限重试修复。
+进入设备信息查看 IP，在浏览器打开 `http://<IP>/`，启用天气并填写地点/经纬度/刷新周期。
 
 ### 腾讯报价或分时异常
 
-先看 `[md]`。正常路径应优先 `provider=TX`。若 Tencent 分时最终失败，应继续观察 `fallback=TX->EM` 和后续 `provider=EM type=INTRADAY`。不要通过放宽 Parser 或无限延长 timeout 掩盖数据源问题。
+先看 `[md]`。正常路径应优先 `provider=TX`。若 Tencent 分时最终失败，应观察 `fallback=TX->EM` 和后续 `provider=EM type=INTRADAY`。
 
 ### 东方财富备用仍然失败
 
-这是允许的降级场景。EastMoney 现在只是 secondary；若腾讯正常，主行情不应受影响。若 TX 和 EM 都失败，保留最后有效缓存并等待正常调度周期，不递归增加第三层或 tight retry。
+允许。EastMoney 现在只是 secondary；若腾讯正常，主行情不应受影响。
 
 ### 返回菜单后仍看到一条股票请求完成
 
-允许：退出不会强杀已经开始的 HTTPS。新的 pending/retry 在 StockApp suspended 状态下不会继续执行；已执行请求完成后只进入缓存/结果队列，不得后台绘屏。
+允许：退出不会强杀已经开始的 HTTPS。新的 pending/retry 在 StockApp suspended 状态下不会继续执行。
 
 完整真机验收见 [hardware-acceptance.md](hardware-acceptance.md)。
