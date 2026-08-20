@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the T-Display-S3 TFT, orientation, C++17, and native/UI wiring contract."""
+"""Validate the T-Display-S3 TFT, orientation, C++17, native/UI wiring, and prebuilt artifact contract."""
 from pathlib import Path
 import sys
 
@@ -67,6 +67,7 @@ screen = Path("src/ui/StockScreen.h").read_text(encoding="utf-8")
 stock_screen_cpp = Path("src/ui/StockScreen.cpp").read_text(encoding="utf-8")
 weather_screen_cpp = Path("src/ui/WeatherScreen.cpp").read_text(encoding="utf-8")
 weather_cat_art_h = Path("src/ui/WeatherCatArt.h").read_text(encoding="utf-8")
+workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 required_landscape = {
     "DeviceLayer.cpp": ["tft_.setRotation(3)"],
     "StockScreen.h": ["SCREEN_WIDTH = 320", "SCREEN_HEIGHT = 170"],
@@ -107,7 +108,17 @@ for needle in required_ui_wiring["WeatherCatArt.h"]:
     if needle not in weather_cat_art_h:
         missing_ui.append(f"WeatherCatArt.h: {needle}")
 
-if missing or present_forbidden or missing_native or missing_landscape or missing_ui:
+required_artifact_workflow = {
+    "actions/upload-artifact@v4",
+    "tdisplay-gp-firmware-",
+    ".pio/build/lilygo-t-display-s3/firmware.bin",
+    ".pio/build/lilygo-t-display-s3/partitions.bin",
+    ".pio/build/lilygo-t-display-s3/bootloader.bin",
+    "firmware-manifest.txt",
+}
+missing_artifact_workflow = sorted(item for item in required_artifact_workflow if item not in workflow)
+
+if missing or present_forbidden or missing_native or missing_landscape or missing_ui or missing_artifact_workflow:
     if missing:
         print("missing TFT/C++ build contract flags:")
         for flag in missing:
@@ -128,6 +139,10 @@ if missing or present_forbidden or missing_native or missing_landscape or missin
         print("missing UI wiring contract:")
         for item in missing_ui:
             print(f"  {item}")
+    if missing_artifact_workflow:
+        print("missing prebuilt firmware artifact workflow contract:")
+        for item in missing_artifact_workflow:
+            print(f"  {item}")
     sys.exit(1)
 
-print("T-Display-S3 TFT + C++17 + 320x170 + multi-app native/UI wiring contract: OK")
+print("T-Display-S3 TFT + C++17 + 320x170 + multi-app + prebuilt firmware artifact contract: OK")
