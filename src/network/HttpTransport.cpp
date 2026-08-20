@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <WiFi.h>
 #include <WiFiClientSecure.h>
 
 #include "NetworkArbiter.h"
@@ -70,13 +71,57 @@ HttpResponse makeResponse(HttpTransportError error, int statusCode, std::string 
   return response;
 }
 
+const char* transportErrorName(HttpTransportError error) {
+  switch (error) {
+    case HttpTransportError::NONE: return "OK";
+    case HttpTransportError::NETWORK: return "NETWORK";
+    case HttpTransportError::HTTP_STATUS: return "HTTP";
+    case HttpTransportError::BODY_TOO_LARGE: return "BODY_TOO_LARGE";
+    case HttpTransportError::TRUNCATED_BODY: return "TRUNCATED";
+  }
+  return "UNKNOWN";
+}
+
+std::string hostFromUrl(const std::string& url) {
+  const size_t schemeEnd = url.find("://");
+  const size_t hostStart = schemeEnd == std::string::npos ? 0U : schemeEnd + 3U;
+  const size_t hostEnd = url.find_first_of("/:?", hostStart);
+  return hostEnd == std::string::npos ? url.substr(hostStart)
+                                      : url.substr(hostStart, hostEnd - hostStart);
+}
+
+void logNetworkDiagnostic(const std::string& url, const HttpResponse& response,
+                          uint32_t arbiterWaitMs, uint32_t ioElapsedMs) {
+  const std::string host = hostFromUrl(url);
+  const String ip = WiFi.localIP().toString();
+  const String bssid = WiFi.BSSIDstr();
+  Serial.printf(
+      "[net] host=%s arb=%lums io=%lums total=%lums wifi=%d rssi=%ld ip=%s bssid=%s ch=%d http=%d native=%d tls=%d result=%s\n",
+      host.c_str(), static_cast<unsigned long>(arbiterWaitMs),
+      static_cast<unsigned long>(ioElapsedMs), static_cast<unsigned long>(response.elapsedMs),
+      static_cast<int>(WiFi.status()), static_cast<long>(WiFi.RSSI()), ip.c_str(), bssid.c_str(),
+      static_cast<int>(WiFi.channel()), response.statusCode, response.nativeError, response.tlsError,
+      transportErrorName(response.error));
+}
+
+HttpResponse finishResponse(HttpResponse response, const std::string& url,
+                            uint32_t arbiterWaitMs, uint32_t ioStartedMs) {
+  const uint32_t ioElapsedMs = static_cast<uint32_t>(millis() - ioStartedMs);
+  logNetworkDiagnostic(url, response, arbiterWaitMs, ioElapsedMs);
+  return response;
+}
+
 }  // namespace
 
 HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& headers) {
   const uint32_t startedMs = millis();
   NetworkRequestGuard requestGuard(sharedNetworkArbiter());
+  const uint32_t ioStartedMs = millis();
+  const uint32_t arbiterWaitMs = static_cast<uint32_t>(ioStartedMs - startedMs);
   if (!requestGuard.locked()) {
-    return makeResponse(HttpTransportError::NETWORK, 0, {}, 0, 0, -1, 0, startedMs);
+    HttpResponse response = makeResponse(HttpTransportError::NETWORK, 0, {}, 0, 0, -1, 0, startedMs);
+    logNetworkDiagnostic(url, response, arbiterWaitMs, 0);
+    return response;
   }
 
   WiFiClientSecure client;
@@ -92,8 +137,9 @@ HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& heade
   http.setReuse(false);
 
   if (!http.begin(client, url.c_str())) {
-    return makeResponse(HttpTransportError::NETWORK, 0, {}, 0, lastTlsError(client),
-                        -1, 0, startedMs);
+    return finishResponse(
+        makeResponse(HttpTransportError::NETWORK, 0, {}, 0, lastTlsError(client), -1, 0, startedMs),
+        url, arbiterWaitMs, ioStartedMs);
   }
   for (const auto& header : headers) {
     http.addHeader(header.name.c_str(), header.value.c_str());
@@ -103,21 +149,24 @@ HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& heade
   if (status <= 0) {
     const int tlsError = lastTlsError(client);
     http.end();
-    return makeResponse(HttpTransportError::NETWORK, 0, {}, status, tlsError,
-                        -1, 0, startedMs);
+    return finishResponse(
+        makeResponse(HttpTransportError::NETWORK, 0, {}, status, tlsError, -1, 0, startedMs),
+        url, arbiterWaitMs, ioStartedMs);
   }
 
   const int contentLength = http.getSize();
   if (status != HTTP_CODE_OK) {
     http.end();
-    return makeResponse(HttpTransportError::HTTP_STATUS, status, {}, 0, 0,
-                        contentLength, 0, startedMs);
+    return finishResponse(
+        makeResponse(HttpTransportError::HTTP_STATUS, status, {}, 0, 0, contentLength, 0, startedMs),
+        url, arbiterWaitMs, ioStartedMs);
   }
 
   if (contentLength > static_cast<int>(BuildConfig::HTTP_MAX_BODY_BYTES)) {
     http.end();
-    return makeResponse(HttpTransportError::BODY_TOO_LARGE, status, {}, 0, 0,
-                        contentLength, 0, startedMs);
+    return finishResponse(
+        makeResponse(HttpTransportError::BODY_TOO_LARGE, status, {}, 0, 0, contentLength, 0, startedMs),
+        url, arbiterWaitMs, ioStartedMs);
   }
 
   BoundedMemoryStream sink(BuildConfig::HTTP_MAX_BODY_BYTES);
@@ -127,17 +176,25 @@ HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& heade
   http.end();
 
   if (sink.overflowed()) {
-    return makeResponse(HttpTransportError::BODY_TOO_LARGE, status, {}, written < 0 ? written : 0,
-                        tlsError, contentLength, receivedBytes, startedMs);
+    return finishResponse(
+        makeResponse(HttpTransportError::BODY_TOO_LARGE, status, {}, written < 0 ? written : 0,
+                     tlsError, contentLength, receivedBytes, startedMs),
+        url, arbiterWaitMs, ioStartedMs);
   }
   if (written < 0) {
-    return makeResponse(HttpTransportError::NETWORK, status, {}, written, tlsError,
-                        contentLength, receivedBytes, startedMs);
+    return finishResponse(
+        makeResponse(HttpTransportError::NETWORK, status, {}, written, tlsError,
+                     contentLength, receivedBytes, startedMs),
+        url, arbiterWaitMs, ioStartedMs);
   }
   if (contentLength >= 0 && written != contentLength) {
-    return makeResponse(HttpTransportError::TRUNCATED_BODY, status, {}, 0, tlsError,
-                        contentLength, receivedBytes, startedMs);
+    return finishResponse(
+        makeResponse(HttpTransportError::TRUNCATED_BODY, status, {}, 0, tlsError,
+                     contentLength, receivedBytes, startedMs),
+        url, arbiterWaitMs, ioStartedMs);
   }
-  return makeResponse(HttpTransportError::NONE, status, sink.takeBody(), 0, 0,
-                      contentLength, receivedBytes, startedMs);
+  return finishResponse(
+      makeResponse(HttpTransportError::NONE, status, sink.takeBody(), 0, 0,
+                   contentLength, receivedBytes, startedMs),
+      url, arbiterWaitMs, ioStartedMs);
 }
