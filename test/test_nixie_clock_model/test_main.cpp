@@ -2,6 +2,9 @@
 
 #include "NixieClockModel.h"
 
+void setUp() {}
+void tearDown() {}
+
 void test_valid_local_time_maps_to_view_model() {
   const LocalDateTime local{2026, 8, 20, 17, 42, 9, 4};
   const NixieClockViewModel model = NixieClockModel::fromLocalDateTime(local, 1000U);
