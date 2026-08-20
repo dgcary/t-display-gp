@@ -11,6 +11,7 @@ enum class AppId {
   MENU,
   STOCK,
   WEATHER,
+  NIXIE_CLOCK,
   DEVICE_INFO,
 };
 
