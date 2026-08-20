@@ -7,7 +7,7 @@
 void setUp() {}
 void tearDown() {}
 
-HomeAssistantConfig validConfig() {
+HomeAssistantConfig validHttpsConfig() {
   HomeAssistantConfig config;
   config.enabled = true;
   config.baseUrl = "https://ha.example.test:8123";
@@ -20,38 +20,49 @@ HomeAssistantConfig validConfig() {
   return config;
 }
 
+HomeAssistantConfig validHttpConfig() {
+  HomeAssistantConfig config = validHttpsConfig();
+  config.baseUrl = "http://homeassistant.local:8123";
+  config.caCert.clear();
+  return config;
+}
+
 void test_disabled_default_is_valid_and_has_no_required_secret() {
   HomeAssistantConfig config;
   TEST_ASSERT_TRUE(validateHomeAssistantConfig(config).ok());
 }
 
-void test_enabled_requires_https_token_ca_and_entity() {
-  HomeAssistantConfig config = validConfig();
+void test_enabled_http_server_requires_token_and_entity_but_not_ca() {
+  HomeAssistantConfig config = validHttpConfig();
   TEST_ASSERT_TRUE(validateHomeAssistantConfig(config).ok());
-  config.baseUrl = "http://ha.local:8123";
-  TEST_ASSERT_EQUAL(HomeAssistantConfigError::BASE_URL, validateHomeAssistantConfig(config).error);
-  config = validConfig();
   config.token.clear();
   TEST_ASSERT_EQUAL(HomeAssistantConfigError::TOKEN, validateHomeAssistantConfig(config).error);
-  config = validConfig();
-  config.caCert.clear();
-  TEST_ASSERT_EQUAL(HomeAssistantConfigError::CA_CERT, validateHomeAssistantConfig(config).error);
-  config = validConfig();
+  config = validHttpConfig();
   config.entityCount = 0;
   TEST_ASSERT_EQUAL(HomeAssistantConfigError::ENTITY_COUNT, validateHomeAssistantConfig(config).error);
 }
 
-void test_enabled_rejects_noncanonical_or_bad_entity_id() {
-  HomeAssistantConfig config = validConfig();
+void test_enabled_https_server_requires_ca() {
+  HomeAssistantConfig config = validHttpsConfig();
+  TEST_ASSERT_TRUE(validateHomeAssistantConfig(config).ok());
+  config.caCert.clear();
+  TEST_ASSERT_EQUAL(HomeAssistantConfigError::CA_CERT, validateHomeAssistantConfig(config).error);
+}
+
+void test_enabled_rejects_unknown_scheme_noncanonical_or_bad_entity_id() {
+  HomeAssistantConfig config = validHttpsConfig();
+  config.baseUrl = "ftp://ha.example.test";
+  TEST_ASSERT_EQUAL(HomeAssistantConfigError::BASE_URL, validateHomeAssistantConfig(config).error);
+  config = validHttpConfig();
   config.baseUrl += "/";
   TEST_ASSERT_EQUAL(HomeAssistantConfigError::BASE_URL, validateHomeAssistantConfig(config).error);
-  config = validConfig();
+  config = validHttpConfig();
   config.entities[0].entityId = "Sensor.Bad-ID";
   TEST_ASSERT_EQUAL(HomeAssistantConfigError::ENTITY_ID, validateHomeAssistantConfig(config).error);
 }
 
-void test_codec_round_trip_keeps_secure_fields() {
-  const HomeAssistantConfig original = validConfig();
+void test_codec_round_trip_keeps_http_mode_without_ca() {
+  const HomeAssistantConfig original = validHttpConfig();
   std::string encoded;
   TEST_ASSERT_TRUE(HomeAssistantConfigCodec::encode(original, encoded));
   HomeAssistantConfig decoded;
@@ -59,7 +70,7 @@ void test_codec_round_trip_keeps_secure_fields() {
   TEST_ASSERT_TRUE(decoded.enabled);
   TEST_ASSERT_EQUAL_STRING(original.baseUrl.c_str(), decoded.baseUrl.c_str());
   TEST_ASSERT_EQUAL_STRING(original.token.c_str(), decoded.token.c_str());
-  TEST_ASSERT_EQUAL_STRING(original.caCert.c_str(), decoded.caCert.c_str());
+  TEST_ASSERT_TRUE(decoded.caCert.empty());
   TEST_ASSERT_EQUAL_UINT32(2, decoded.entityCount);
   TEST_ASSERT_EQUAL_STRING("sensor.living_temperature", decoded.entities[0].entityId.c_str());
 }
@@ -67,8 +78,9 @@ void test_codec_round_trip_keeps_secure_fields() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_disabled_default_is_valid_and_has_no_required_secret);
-  RUN_TEST(test_enabled_requires_https_token_ca_and_entity);
-  RUN_TEST(test_enabled_rejects_noncanonical_or_bad_entity_id);
-  RUN_TEST(test_codec_round_trip_keeps_secure_fields);
+  RUN_TEST(test_enabled_http_server_requires_token_and_entity_but_not_ca);
+  RUN_TEST(test_enabled_https_server_requires_ca);
+  RUN_TEST(test_enabled_rejects_unknown_scheme_noncanonical_or_bad_entity_id);
+  RUN_TEST(test_codec_round_trip_keeps_http_mode_without_ca);
   return UNITY_END();
 }
