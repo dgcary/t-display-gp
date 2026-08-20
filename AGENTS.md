@@ -1,26 +1,21 @@
 # AGENTS.md — T-Display GP
 
-This repository is the source of truth for T-Display GP firmware. These rules apply to ChatGPT, Codex and other automated agents.
+GitHub `dgcary/t-display-gp` is the source of truth for this firmware.
 
 ## Target
 
-- Repository: `dgcary/t-display-gp`
-- Hardware: **LILYGO T-Display-S3 only**
-- MCU: ESP32-S3
-- TFT: ST7789 physical 170×320, 8-bit parallel
-- Logical orientation: **320×170 landscape, rotation 3**
-- Framework: Arduino/C++17 via PlatformIO
-- Environment: `lilygo-t-display-s3`
+- LILYGO T-Display-S3 only; ESP32-S3.
+- ST7789 physical 170×320, 8-bit parallel.
+- logical **320×170 landscape rotation 3**.
+- Arduino/C++17 via PlatformIO env `lilygo-t-display-s3`.
 
-Do not silently retarget board, display, controller, pinout or orientation.
+Do not silently change target/pins/display/orientation.
 
-## Source of truth and workflow
+## Development / deployment split
 
-GitHub exact SHA is authoritative. Do not use an old local checkout/binary as source of truth.
+Web ChatGPT owns source inspection, design, implementation, regression tests, GitHub commits/PR updates, validators, native tests, real ESP32-S3 PlatformIO compile, exact-SHA artifact verification.
 
-Web ChatGPT owns source inspection, requirements/design, implementation, tests, review, GitHub changes, PlatformIO validation, real ESP32-S3 compilation and verified firmware artifacts.
-
-Required verification:
+Required development checks:
 
 ```bash
 python tools/validate_tdisplay_setup.py
@@ -32,51 +27,25 @@ pio test -e native
 pio run -e lilygo-t-display-s3
 ```
 
-CI must publish `tdisplay-gp-firmware-<SOURCE_SHA>` containing:
+CI publishes `tdisplay-gp-firmware-<SOURCE_SHA>` containing firmware.bin, partitions.bin, bootloader.bin, firmware-manifest.txt.
 
-```text
-firmware.bin
-partitions.bin
-bootloader.bin
-firmware-manifest.txt
-```
+Codex only downloads exact artifact, verifies manifest/hash, flashes application image, monitors serial and performs physical tests. Normal deployment does not recompile, erase NVS, or rewrite bootloader/partitions.
 
-Codex is the local hardware executor only: download exact-SHA artifact, verify manifest/hash, identify the connected T-Display-S3, flash the prebuilt application image, monitor serial, perform physical tests, and return evidence. Do not use Codex local compilation as the normal deployment gate.
+## Hardware/input
 
-For the unchanged partition layout, normal upgrade writes only `firmware.bin` at the manifest offset (currently `0x10000`). Do not erase flash/NVS or rewrite bootloader/partitions unless separately approved.
-
-## Hardware/input invariants
-
-- GPIO15 display power HIGH before TFT initialization.
+- GPIO15 display power HIGH before TFT init.
 - GPIO38 backlight.
-- GPIO0/GPIO14 INPUT_PULLUP, active-low.
-- TFT color order `TFT_RGB`, init `INIT_SEQUENCE_3`, rotation 3.
-- debounce 40 ms.
-- long press 700 ms.
-- long press fires once and suppresses short-on-release.
-- no hold auto-repeat in V1.
-
-Input semantics:
+- GPIO0/GPIO14 INPUT_PULLUP active-low.
+- debounce 40 ms, long 700 ms, long suppresses release-short, no hold repeat.
 
 ```text
-normal app:
-  GPIO0 short  -> app previous
-  GPIO14 short -> app next
-  GPIO0 long   -> main menu
-  GPIO14 long  -> reserved/no-op
-
-menu:
-  GPIO0 short  -> previous app
-  GPIO14 short -> next app
-  GPIO0 long   -> no-op
-  GPIO14 long  -> enter selected app
+normal app: GPIO0 short prev; GPIO14 short next; GPIO0 long menu; GPIO14 long no-op
+menu:       GPIO0 short prev; GPIO14 short next; GPIO0 long no-op; GPIO14 long enter
 ```
 
-Any valid non-NONE input event counts as user activity for the idle policy, including a reserved/no-op long event.
+Any valid non-NONE input counts as user activity, including reserved/no-op long events.
 
-## Current shell and startup/idle policy
-
-Current registry:
+## Current App shell
 
 ```text
 StockApp
@@ -87,205 +56,164 @@ CryptoApp
 DeviceInfoApp
 ```
 
-**Startup defaults to `NIXIE_CLOCK`.**
+### Startup / idle
 
-`AppManager` owns the global idle policy:
+**Startup = `NIXIE_CLOCK`.**
 
-- `MENU`, `WEATHER`, `HOME_ASSISTANT`, `CRYPTO`, `DEVICE_INFO`: after **30,000 ms** without a valid button event, switch to `NIXIE_CLOCK`.
-- `STOCK`: exempt from auto-idle indefinitely.
-- `NIXIE_CLOCK`: exempt; it is the idle destination.
-- network/data refreshes do not reset user activity.
-- elapsed time must use unsigned wrap-safe `millis()` subtraction.
-- the idle switch occurs before the old app receives another `tick()` at the boundary, so a remote app does not launch an extra request at 30 seconds.
+`AppManager` owns global idle:
 
-Do not duplicate idle timers inside individual apps.
+- MENU / WEATHER / HOME_ASSISTANT / CRYPTO / DEVICE_INFO: 30000 ms without valid input -> NIXIE_CLOCK.
+- STOCK: exempt indefinitely.
+- NIXIE_CLOCK: exempt and is destination.
+- network/data activity never resets user activity.
+- elapsed uses unsigned wrap-safe millis subtraction.
+- timeout switch happens before old app's next tick, preventing an extra remote request at boundary.
 
-## App architecture
+Do not implement duplicate idle timers per app.
 
-- `main.cpp` owns common boot/provisioning and drives `AppManager`; app business logic belongs in app/controller/provider boundaries.
-- Only the active app receives normal input/tick/render calls.
-- Leaving an app preserves its valid cache/state.
-- Inactive apps never redraw the TFT after late network completion.
-- Menu behavior must not assume an exact app count.
+## App lifecycle
 
-### StockApp
+- `main.cpp` only common boot/service/AppManager wiring; app logic stays in app/controller/provider boundaries.
+- only active app gets normal input/tick/render.
+- app exit preserves valid cache/state.
+- inactive late results never redraw TFT.
+- menu must not hard-code exact count behavior.
 
-- Keep existing `StockController`, `StockScreen`, `MarketDataWorker`, Tencent/EastMoney policy.
-- GPIO0/GPIO14 short presses remain previous/next stock.
-- Stock is exempt from the global 30-second idle fallback.
-- Exiting Stock pauses new MarketDataWorker execution; do not force-kill an already executing HTTPS request.
-- Returning to Stock preserves cache and existing QoS/refresh behavior.
+## Stock
 
-### WeatherApp
+- Tencent quote + intraday primary; EastMoney secondary/fallback.
+- quote and intraday health independent.
+- quote traffic outranks intraday; waiting intraday latest-wins.
+- every new intraday cycle starts Tencent.
+- Tencent transient intraday retry bounded/deferred max 3 and yields to quote.
+- EastMoney intraday failure terminal for cycle; full cycle failure waits normal refresh.
+- quote failover after 3 Tencent failures in existing window; while secondary probe Tencent at existing interval; 2 consecutive successes recover.
+- Stock exit pauses new/pending MarketDataWorker execution but does not force-kill already executing HTTPS.
+- **Stock exempt from idle-to-Nixie.**
+- parsers remain fail-closed; failures preserve cache.
 
-- V1 provider Open-Meteo.
-- Default refresh 15 minutes; configured 5–60 minutes.
-- Scheduling anchored to last attempt to prevent retry storms.
-- Preserve last successful cache on failure.
-- Weather failure cannot affect stock health.
-- Active-only scheduling.
-- Hand-painted watercolor cat remains lightweight/procedural and bounded to its region; animation-only frames must not clear the full screen.
+## Weather
 
-### NixieClockApp
+- Open-Meteo V1.
+- default 15 min; 5–60 min configurable.
+- schedule from last attempt, no tight retry.
+- failure preserves cache and cannot poison Stock health.
+- active-only.
+- hand-painted watercolor cat remains lightweight/procedural; animation redraw bounded region only.
 
-- Default startup and global idle destination.
-- Local-only: no `HTTPClient`, `WiFiClientSecure`, `HttpTransport`, `AppDataWorker` or `NetworkArbiter` dependency.
-- Reuse `DeviceLayer::localDateTime()` and common NTP/system clock; do not add a separate NTP task/client.
-- Show valid local HH:MM, date, weekday and seconds; invalid/unsynchronized time fails closed with explicit waiting state.
-- Approx. 1 s local-time sampling and approx. 500 ms colon phase.
-- Animation-only refresh must be bounded/partial; do not clear the entire TFT every 500 ms.
-- Short presses currently no-op; GPIO0-long menu remains global.
+## Nixie
 
-### DeviceInfoApp
+- default startup + global idle destination.
+- local-only: no HTTPClient/WiFiClientSecure/HttpTransport/AppDataWorker/NetworkArbiter dependency.
+- reuse common system clock via `DeviceLayer::localDateTime()`; no independent NTP client/task.
+- valid HH:MM/date/weekday/seconds; invalid time explicit waiting.
+- ~1 s sample, ~500 ms colon phase; partial refresh, not periodic full-screen clear.
 
-- Local-only; no external requests.
-- Show LAN IP prominently plus SSID/RSSI/MAC, uptime/time, heap/min-heap, PSRAM and `Web: http://<IP>/`.
-- Never display passwords, HA tokens or other secrets.
+## DeviceInfo
 
-### HomeAssistantApp
+Local-only. Show IP, SSID/RSSI/MAC, uptime/time, heap/min heap, PSRAM and `Web: http://<IP>/`; no password/token display.
 
-**The existing Home Assistant installation is the server. T-Display-S3 is only a REST API client.** Do not run or emulate a Home Assistant server on the device.
+## Home Assistant
 
-V1 contract:
+**The user's existing Home Assistant is the server. T-Display-S3 is only a REST API client. Do not implement a second HA server on the board.**
 
-- read-only; no `/api/services` writes or entity control.
-- 1–4 configured entity IDs, optional display labels.
+V1:
+
+- read-only, no `/api/services` writes/control.
+- 1–4 entity IDs, optional labels.
 - sequential `GET <base_url>/api/states/<entity_id>`.
 - `Authorization: Bearer <Long-Lived Access Token>`.
-- refresh 30–300 seconds, default 30 seconds.
-- active-only scheduling; per-entity last-valid cache survives errors.
-- configuration stored separately in `ha_config` under the existing NVS namespace; do not change AppConfig schema v2 solely for HA.
-- device config portal: `http://<device-ip>:8081/`; it is a T-Display config UI, **not** a HA server.
-- `/api/ha/status` may expose `ha_token_set` / `ha_ca_set` booleans but never Token or CA contents.
-- serial logs must never include Token or full Authorization header.
+- refresh 30–300 s, default 30; active-only.
+- per-entity last-valid cache survives errors.
+- HA config stored in separate `ha_config` NVS blob; AppConfig remains schema v2.
+- T-Display client config page `http://<device-ip>:8081/`; this is not HA server.
+- status may expose `ha_token_set` / `ha_ca_set`, never Token/CA contents.
+- serial never logs Token/full Authorization.
 
-Transport modes:
+Transport:
 
 ```text
-http://...
-  -> ordinary WiFiClient
-  -> intended only for a trusted LAN
-  -> Bearer token is cleartext on the LAN
-
-https://...
-  -> WiFiClientSecure
-  -> configured CA PEM via setCACert()
-  -> setInsecure() is forbidden
+http://  -> WiFiClient; trusted-LAN cleartext mode; CA not required
+https:// -> WiFiClientSecure + configured setCACert(); setInsecure forbidden
 ```
 
-Both modes go through `NetworkArbiter`, use bounded response retention, and keep normal connect/read/reuse limits. Unknown URL schemes are rejected. HTTPS without CA is invalid.
+Unknown schemes invalid. HTTPS without CA invalid. Both modes acquire NetworkArbiter, reuse false, bounded HA body 4 KiB. HTTP explicitly exposes Bearer token to LAN observers and must be documented as trusted-LAN only.
 
-### CryptoApp
+## Crypto
 
-- BTCUSDT, ETHUSDT, SOLUSDT.
-- Provider: Binance market-data-only `data-api.binance.vision` `/api/v3/ticker/24hr` with all 3 symbols in one request.
-- No API key/credential.
-- fixed V1 refresh 60 seconds.
-- active-only scheduling.
-- parser maps by symbol rather than response order, rejects duplicate/missing/malformed values, and updates cache only after all 3 validate.
+- BTCUSDT / ETHUSDT / SOLUSDT.
+- provider `data-api.binance.vision`, `/api/v3/ticker/24hr`, one request for 3 symbols.
+- no Binance API credential.
+- fixed V1 refresh 60 s; active-only.
+- parser maps by symbol, rejects unknown/duplicate/missing/malformed rows; update only after all 3 validate.
 - failure preserves last complete snapshot.
 
-## Shared low-frequency app data
+## Shared AppDataWorker
 
-Do not create one FreeRTOS worker per app.
+Do not create per-app workers.
 
-- Stock keeps specialized `MarketDataWorker`.
-- Weather / Home Assistant / Crypto share exactly **one** `AppDataWorker` request path.
-- Results are separated by `AppDataRequestType` so one app cannot consume another app's delayed result.
-- FreeRTOS queues pass pointers to C++ request/result objects; do not raw byte-copy non-trivial objects containing `std::string`.
-- Local-only Nixie/DeviceInfo do not use either network worker.
+- Stock keeps specialized MarketDataWorker.
+- Weather / HA / Crypto share exactly one AppDataWorker request queue/task.
+- typed result queues by AppDataRequestType prevent cross-app delayed-result loss.
+- FreeRTOS queues pass pointers to C++ request/results; do not raw byte-copy objects containing std::string.
+- Nixie/DeviceInfo use no network worker.
 
-## Market-data invariants
+## NetworkArbiter / transport
 
-Tencent is quote + intraday primary; EastMoney is quote + intraday secondary/fallback.
+All actual external HTTP/TLS operations serialize through shared NetworkArbiter, max one at once.
 
-- quote and intraday provider health are independent.
-- every new intraday cycle starts Tencent regardless of quote provider.
-- Tencent transient intraday retries are bounded/deferred, max 3 attempts, and yield to quote work.
-- EastMoney intraday failure is terminal for that cycle.
-- full intraday failure waits normal refresh; no empty-cache retry storm.
-- quote traffic outranks intraday; waiting intraday is latest-wins.
-- quote failover: 3 Tencent failures in existing window -> EastMoney; while on EastMoney probe Tencent at existing interval; 2 consecutive probe successes recover.
-- parser validation stays fail-closed.
+Public Stock/Weather/Crypto HttpTransport remains:
 
-## Network/memory invariants
-
-Actual external HTTP/TLS operations are serialized through `NetworkArbiter`: at most one executes at a time.
-
-Public-data `HttpTransport` constraints remain:
-
-- connect timeout 1500 ms.
-- HTTP/read timeout setting 2500 ms.
-- TLS handshake cap 5 s.
+- connect 1500 ms.
+- HTTP/read setting 2500 ms.
+- TLS handshake 5 s cap.
 - retained body max 32 KiB.
-- `HTTPClient::setReuse(false)`.
-- do not pass the 2500-ms read constant directly to the seconds-based Arduino-ESP32 2.0.14 `WiFiClientSecure::setTimeout()`.
-- public market/weather/crypto clients keep the existing `setInsecure()` trust model unless separately redesigned.
+- HTTPClient reuse false.
+- don't pass millisecond read constant to seconds-based WiFiClientSecure::setTimeout in Arduino-ESP32 2.0.14.
+- public-data clients keep existing setInsecure trust model unless separately redesigned.
 
-Home Assistant is a credentialed exception: HTTPS must use configured CA and must never use `setInsecure()`; HTTP is an explicit trusted-LAN cleartext mode. HA retained body is bounded at 4 KiB.
+HA HTTPS credential path is the exception: CA verification required, no setInsecure.
 
-## Configuration invariants
+## Config
 
-- AppConfig schema remains **v2** in `stockticker` namespace.
-- v1 migration preserves stock symbols/names/refresh and adds disabled 15-minute weather defaults.
+- AppConfig schema v2, namespace `stockticker`.
+- v1 migration preserves stocks/names/refresh; Weather default disabled/15 min.
 - Nixie adds no config fields.
-- Home Assistant uses separate `ha_config` blob; normal firmware upgrade must preserve it.
-- configuration updates are reboot-applied; do not partially hot-apply a mixed state.
+- HA separate `ha_config` blob.
+- normal firmware upgrade preserves NVS.
+- configuration changes reboot-apply atomically.
 
 ## Diagnostics
 
 ```text
-[md]      market requests
+[md]      Stock
 [appdata] WEATHER / HOME_ASSISTANT / CRYPTO
-[net]     actual network timing; HA mode=HA_HTTP or HA_CA
-[sys]     runtime resources and active app
+[net]     actual transport; HA mode=HA_HTTP or HA_CA
+[sys]     MENU|STOCK|WEATHER|NIXIE_CLOCK|HOME_ASSISTANT|CRYPTO|DEVICE_INFO
 ```
 
-`[sys] app=` values include:
-
-```text
-MENU | STOCK | WEATHER | NIXIE_CLOCK | HOME_ASSISTANT | CRYPTO | DEVICE_INFO
-```
-
-Do not log full provider bodies or credentials by default.
-
-## UI invariants
-
-- 320×170 logical landscape.
-- Stock positive red / negative green.
-- Stock lunch discontinuity and previous-close/open references remain.
-- Stock footer distinguishes quote (`Q`) and intraday (`I`) sources.
-- Menu/Weather/Nixie/HomeAssistant/Crypto/DeviceInfo use bounded text/simple shapes; no large bitmap/GIF additions without memory review.
-- Chinese text uses the Unicode font path where required.
+No full bodies/credentials by default.
 
 ## Physical acceptance
 
-At minimum verify on the actual board:
+Real T-Display-S3 evidence must verify:
 
-1. correct 320×170 orientation and Chinese text.
-2. boot enters NixieClock.
-3. Nixie shows real local HH:MM/date/weekday/seconds after sync, with no periodic full-screen flicker and no network traffic caused by Nixie.
-4. menu navigates all six apps and GPIO14-long enters selected app.
-5. Weather, Home Assistant, Crypto, DeviceInfo and Menu return to Nixie at 30 seconds with no valid button event.
-6. a valid button event before 30 seconds restarts the idle timer.
-7. Stock remains on Stock beyond 30 seconds; Nixie remains Nixie.
-8. Home Assistant connects as a client to the user's existing server using the configured HTTP or verified-HTTPS mode; 1–4 entities render correctly; no Token appears in logs/status.
-9. Crypto retrieves BTC/ETH/SOL data from Binance and displays price/24h change.
-10. Weather retrieves configured location data and watercolor-cat rendering remains stable.
-11. Stock Tencent primary/fallback semantics remain correct.
-12. caches survive transitions/failures.
-13. at least 100 multi-app transitions without watchdog/reboot/freeze and without monotonic heap leakage.
+- 320×170 + Chinese.
+- boot Nixie.
+- Nixie local time/partial animation/no network.
+- six-app menu/input.
+- Menu/Weather/HA/Crypto/DeviceInfo -> Nixie at 30 s; valid button resets timer; Stock/Nixie exempt.
+- HA connects as client to existing user server over configured HTTP or CA-verified HTTPS; 1–4 entities render; no secret leak.
+- Crypto BTC/ETH/SOL live.
+- Weather live + watercolor UI.
+- Stock Tencent/EastMoney behavior unchanged.
+- caches survive transitions/failures.
+- >=100 transitions, no watchdog/reboot/freeze/monotonic heap leak.
 
-See `docs/hardware-acceptance.md` for the detailed checklist.
+See `docs/hardware-acceptance.md`.
 
-## Scope/safety
+## Safety
 
-Deployment is limited to the connected T-Display-S3 and this repository. Do not modify unrelated servers, routers, DHCP, Wi-Fi infrastructure, or other devices. Never hard-code Wi-Fi passwords, GitHub credentials, API secrets, broker credentials, HA tokens or personal account data.
+Scope is this repository and connected T-Display-S3. Do not modify unrelated servers/network/DHCP/Wi-Fi infrastructure. Never hard-code passwords, GitHub secrets, HA tokens or account credentials.
 
-When lifecycle/input/config/provider/transport/build/deployment/UI behavior changes, keep these aligned in the same PR:
-
-- `README.md`
-- `AGENTS.md`
-- `docs/deployment.md`
-- `docs/api-contract.md`
-- `docs/hardware-acceptance.md`
+When lifecycle/input/config/provider/transport/build/deployment/UI changes, keep README.md, AGENTS.md, docs/deployment.md, docs/api-contract.md and docs/hardware-acceptance.md aligned in the same PR.
