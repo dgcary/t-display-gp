@@ -22,7 +22,7 @@ checks = {
     "src/main.cpp": ["HomeAssistantApp", "CryptoApp", '"智能家居"', '"加密货币"', "AppId::HOME_ASSISTANT", "AppId::CRYPTO"],
     "src/network/AppDataTypes.h": ["HOME_ASSISTANT", "CRYPTO", "tryReceive(AppDataRequestType type"],
     "src/network/AppDataWorker.cpp": ["HomeAssistantProvider", "CryptoProvider", "AppDataRequestType::HOME_ASSISTANT", "AppDataRequestType::CRYPTO"],
-    "src/network/CryptoProvider.cpp": ["api.coingecko.com/api/v3/simple/price", "bitcoin,ethereum,solana", "include_24hr_change=true"],
+    "src/network/CryptoProvider.cpp": ["api.binance.com/api/v3/ticker/24hr", "BTCUSDT", "ETHUSDT", "SOLUSDT"],
     "src/network/SecureHomeAssistantTransport.cpp": ["Authorization", "Bearer ", "setCACert", "/api/states/", "NetworkArbiter"],
     "src/network/HomeAssistantConfigPortal.cpp": ["WebServer server{8081}", "ha_token_set", "ha_ca_set"],
 }
@@ -58,4 +58,4 @@ if missing_files or missing_contract or security_violations:
         print("dashboard security/architecture violations:")
         for item in security_violations: print(f"  {item}")
     sys.exit(1)
-print("Home Assistant strict-TLS + Crypto shared-worker dashboard contract: OK")
+print("Home Assistant strict-TLS + Binance Crypto shared-worker dashboard contract: OK")

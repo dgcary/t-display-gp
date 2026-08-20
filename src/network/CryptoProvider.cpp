@@ -2,12 +2,15 @@
 
 #include <ArduinoJson.h>
 
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 namespace {
 constexpr char CRYPTO_URL[] =
-    "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true&include_last_updated_at=true";
-constexpr const char* IDS[] = {"bitcoin", "ethereum", "solana"};
+    "https://api.binance.com/api/v3/ticker/24hr?symbols=%5B%22BTCUSDT%22,%22ETHUSDT%22,%22SOLUSDT%22%5D";
+constexpr const char* SYMBOLS[] = {"BTCUSDT", "ETHUSDT", "SOLUSDT"};
 
 void fillDiagnostics(const HttpResponse& response, CryptoDiagnostics* diagnostics) {
   if (!diagnostics) return;
@@ -29,6 +32,24 @@ CryptoError mapTransportError(HttpTransportError error) {
   }
   return CryptoError::NETWORK;
 }
+
+int symbolIndex(const char* symbol) {
+  if (!symbol) return -1;
+  for (int i = 0; i < 3; ++i) {
+    if (std::strcmp(symbol, SYMBOLS[i]) == 0) return i;
+  }
+  return -1;
+}
+
+bool parseNumber(const char* text, double& out) {
+  if (!text || !*text) return false;
+  errno = 0;
+  char* end = nullptr;
+  const double value = std::strtod(text, &end);
+  if (errno != 0 || end == text || *end != '\0' || !std::isfinite(value)) return false;
+  out = value;
+  return true;
+}
 }  // namespace
 
 CryptoError CryptoProvider::fetch(CryptoSnapshot& out, CryptoDiagnostics* diagnostics) {
@@ -38,26 +59,33 @@ CryptoError CryptoProvider::fetch(CryptoSnapshot& out, CryptoDiagnostics* diagno
   const CryptoError transportError = mapTransportError(response.error);
   if (transportError != CryptoError::NONE) return transportError;
 
-  DynamicJsonDocument doc(1536);
+  DynamicJsonDocument doc(4096);
   const DeserializationError parseError = deserializeJson(doc, response.body);
   if (parseError) return CryptoError::PARSE;
+  JsonArrayConst rows = doc.as<JsonArrayConst>();
+  if (rows.size() != 3) return CryptoError::MISSING_FIELD;
 
   CryptoSnapshot parsed;
-  for (size_t i = 0; i < parsed.quotes.size(); ++i) {
-    JsonObjectConst object = doc[IDS[i]].as<JsonObjectConst>();
-    if (object.isNull() || !object["usd"].is<double>() ||
-        !object["usd_24h_change"].is<double>() || !object["last_updated_at"].is<uint64_t>()) {
-      return CryptoError::MISSING_FIELD;
-    }
-    const double price = object["usd"].as<double>();
-    const double change = object["usd_24h_change"].as<double>();
-    const uint64_t updated = object["last_updated_at"].as<uint64_t>();
-    if (!std::isfinite(price) || price <= 0.0 || !std::isfinite(change) || change < -100.0 ||
-        change > 1000000.0 || updated == 0) {
+  bool seen[3] = {false, false, false};
+  for (JsonObjectConst row : rows) {
+    const char* symbol = row["symbol"] | nullptr;
+    const int index = symbolIndex(symbol);
+    if (index < 0 || seen[index]) return CryptoError::PARSE;
+    const char* lastPrice = row["lastPrice"] | nullptr;
+    const char* changePercent = row["priceChangePercent"] | nullptr;
+    if (!lastPrice || !changePercent || !row["closeTime"].is<uint64_t>()) return CryptoError::MISSING_FIELD;
+    double price = 0.0;
+    double change = 0.0;
+    if (!parseNumber(lastPrice, price) || !parseNumber(changePercent, change) || price <= 0.0 ||
+        change < -100.0 || change > 1000000.0) {
       return CryptoError::PARSE;
     }
-    parsed.quotes[i] = {price, change, updated};
+    const uint64_t closeTimeMs = row["closeTime"].as<uint64_t>();
+    if (closeTimeMs == 0) return CryptoError::PARSE;
+    parsed.quotes[index] = {price, change, closeTimeMs / 1000ULL};
+    seen[index] = true;
   }
+  for (bool value : seen) if (!value) return CryptoError::MISSING_FIELD;
   out = parsed;
   return CryptoError::NONE;
 }

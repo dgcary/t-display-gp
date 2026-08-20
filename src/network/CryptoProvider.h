@@ -16,7 +16,7 @@ enum class CryptoError {
 };
 
 struct CryptoQuote {
-  double priceUsd = 0.0;
+  double priceUsdt = 0.0;
   double change24hPercent = 0.0;
   uint64_t updatedEpochSeconds = 0;
 };

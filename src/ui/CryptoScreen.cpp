@@ -18,9 +18,9 @@ constexpr uint16_t DOWN = 0x07E0;
 const char* SYMBOLS[] = {"BTC", "ETH", "SOL"};
 
 void formatPrice(double value, char* out, size_t size) {
-  if (value >= 10000.0) std::snprintf(out, size, "$%.0f", value);
-  else if (value >= 1000.0) std::snprintf(out, size, "$%.1f", value);
-  else std::snprintf(out, size, "$%.2f", value);
+  if (value >= 10000.0) std::snprintf(out, size, "%.0f", value);
+  else if (value >= 1000.0) std::snprintf(out, size, "%.1f", value);
+  else std::snprintf(out, size, "%.2f", value);
 }
 }
 
@@ -36,10 +36,10 @@ void CryptoScreen::render(const CryptoViewModel& view, bool) {
   display_->setTextFont(2);
   display_->setTextDatum(TL_DATUM);
   display_->setTextColor(TEXT, BG);
-  display_->drawString("CRYPTO", 10, 7);
+  display_->drawString("CRYPTO / USDT", 10, 7);
   display_->setTextDatum(TR_DATUM);
   display_->setTextColor(MUTED, BG);
-  display_->drawString("CoinGecko", 310, 7);
+  display_->drawString("Binance Spot", 310, 7);
   display_->drawFastHLine(8, 25, 304, BORDER);
 
   if (!view.hasData) {
@@ -61,7 +61,7 @@ void CryptoScreen::render(const CryptoViewModel& view, bool) {
       display_->setTextColor(TEXT, PANEL);
       display_->drawString(SYMBOLS[i], 18, y + 15);
       char price[24] = {};
-      formatPrice(quote.priceUsd, price, sizeof(price));
+      formatPrice(quote.priceUsdt, price, sizeof(price));
       display_->setTextDatum(MC_DATUM);
       display_->setTextFont(4);
       display_->setTextColor(TEXT, PANEL);
@@ -83,5 +83,5 @@ void CryptoScreen::render(const CryptoViewModel& view, bool) {
                        view.requestInFlight ? "UPDATING" : "60s REFRESH";
   display_->drawString(status, 8, 166);
   display_->setTextDatum(BR_DATUM);
-  display_->drawString("Data: CoinGecko", 312, 166);
+  display_->drawString("BTC ETH SOL / USDT", 312, 166);
 }

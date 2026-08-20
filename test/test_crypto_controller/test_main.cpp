@@ -65,7 +65,7 @@ void test_crypto_success_caches_and_waits_sixty_seconds() {
   queue.results.push_back(ok);
   controller.tick(200);
   TEST_ASSERT_TRUE(controller.viewModel().hasData);
-  TEST_ASSERT_DOUBLE_WITHIN(0.01, 70000.0, controller.viewModel().snapshot.quotes[0].priceUsd);
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, 70000.0, controller.viewModel().snapshot.quotes[0].priceUsdt);
   controller.tick(100 + 60000U - 1U);
   TEST_ASSERT_EQUAL_UINT32(1, queue.requests.size());
   controller.tick(100 + 60000U);
@@ -96,7 +96,7 @@ void test_crypto_failure_preserves_cache_and_does_not_tight_retry() {
   queue.results.push_back(fail);
   controller.tick(60002);
   TEST_ASSERT_TRUE(controller.viewModel().hasData);
-  TEST_ASSERT_DOUBLE_WITHIN(0.01, 65000.0, controller.viewModel().snapshot.quotes[0].priceUsd);
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, 65000.0, controller.viewModel().snapshot.quotes[0].priceUsdt);
   TEST_ASSERT_EQUAL(CryptoError::NETWORK, controller.viewModel().error);
   controller.tick(61000);
   TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
