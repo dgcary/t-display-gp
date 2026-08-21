@@ -8,13 +8,11 @@ LILYGO T-Display-S3 320×170 多应用桌面终端。
 
 GitHub exact SHA 是项目事实源。
 
-## Startup / Idle
+## Startup / Navigation
 
 - **默认启动 NixieClock。**
-- Menu / Weather / Home Assistant / Crypto / DeviceInfo：30 s 无有效按键 -> NixieClock。
-- Stock / NixieClock：idle-exempt。
-- 任意有效 GPIO0/GPIO14 short/long 重置 timer；网络/数据活动不重置。
-- AppManager 统一管理，wrap-safe millis。
+- **没有自动 idle 跳转。** Menu / Stock / Weather / NixieClock / Home Assistant / Crypto / DeviceInfo 都会保持当前页面，直到用户主动按键切换。
+- `AppManager` 不维护无操作计时器，也不会因为网络/数据活动自动切 App。
 
 ## Home Assistant
 
@@ -52,13 +50,13 @@ http://<T-Display-IP>:8081/
 ## Other Apps
 
 ### Stock
-Tencent quote+intraday primary，EastMoney fallback；quote/intraday health 独立；quote 优先；intraday latest-wins；有界 retry；cache-preserving；Stock 不自动 idle。
+Tencent quote+intraday primary，EastMoney fallback；quote/intraday health 独立；quote 优先；intraday latest-wins；有界 retry；cache-preserving。
 
 ### Weather
 Open-Meteo current + 3-day；默认 15 min，5–60 min；active-only；failure 保留 cache；程序化手绘水彩小猫动画。
 
 ### Nixie Clock
-默认启动/idle destination；复用 ESP32 system clock/common NTP；HH:MM/date/weekday/seconds；未同步 fail-closed；1 s sample + ~500 ms colon；partial redraw；local-only。
+默认启动；复用 ESP32 system clock/common NTP；HH:MM/date/weekday/seconds；未同步 fail-closed；1 s sample + ~500 ms colon；partial redraw；local-only。
 
 ### Crypto
 Binance market-data-only `data-api.binance.vision`；BTCUSDT/ETHUSDT/SOLUSDT；无需 API key；one request / 60 s；price + 24h change；active-only；strict symbol-mapped parser；failure 保留 last complete snapshot。

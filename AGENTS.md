@@ -43,8 +43,6 @@ normal app: GPIO0 short prev; GPIO14 short next; GPIO0 long menu; GPIO14 long no
 menu:       GPIO0 short prev; GPIO14 short next; GPIO0 long no-op; GPIO14 long enter
 ```
 
-Any valid non-NONE input counts as user activity, including reserved/no-op long events.
-
 ## Current App shell
 
 ```text
@@ -56,20 +54,15 @@ CryptoApp
 DeviceInfoApp
 ```
 
-### Startup / idle
+### Startup / navigation
 
 **Startup = `NIXIE_CLOCK`.**
 
-`AppManager` owns global idle:
+There is **no automatic idle-to-Nixie behavior**.
 
-- MENU / WEATHER / HOME_ASSISTANT / CRYPTO / DEVICE_INFO: 30000 ms without valid input -> NIXIE_CLOCK.
-- STOCK: exempt indefinitely.
-- NIXIE_CLOCK: exempt and is destination.
-- network/data activity never resets user activity.
-- elapsed uses unsigned wrap-safe millis subtraction.
-- timeout switch happens before old app's next tick, preventing an extra remote request at boundary.
-
-Do not implement duplicate idle timers per app.
+- MENU / STOCK / WEATHER / NIXIE_CLOCK / HOME_ASSISTANT / CRYPTO / DEVICE_INFO remain active indefinitely until explicit user navigation.
+- `AppManager` must not maintain a global inactivity timer or switch apps because of elapsed idle time.
+- network/data activity never changes the active app.
 
 ## App lifecycle
 
@@ -89,7 +82,7 @@ Do not implement duplicate idle timers per app.
 - EastMoney intraday failure terminal for cycle; full cycle failure waits normal refresh.
 - quote failover after 3 Tencent failures in existing window; while secondary probe Tencent at existing interval; 2 consecutive successes recover.
 - Stock exit pauses new/pending MarketDataWorker execution but does not force-kill already executing HTTPS.
-- **Stock exempt from idle-to-Nixie.**
+- Stock remains active until the user explicitly leaves it.
 - parsers remain fail-closed; failures preserve cache.
 
 ## Weather
@@ -103,7 +96,7 @@ Do not implement duplicate idle timers per app.
 
 ## Nixie
 
-- default startup + global idle destination.
+- default startup; not an automatic idle destination.
 - local-only: no HTTPClient/WiFiClientSecure/HttpTransport/AppDataWorker/NetworkArbiter dependency.
 - reuse common system clock via `DeviceLayer::localDateTime()`; no independent NTP client/task.
 - valid HH:MM/date/weekday/seconds; invalid time explicit waiting.
@@ -202,7 +195,7 @@ Real T-Display-S3 evidence must verify:
 - boot Nixie.
 - Nixie local time/partial animation/no network.
 - six-app menu/input.
-- Menu/Weather/HA/Crypto/DeviceInfo -> Nixie at 30 s; valid button resets timer; Stock/Nixie exempt.
+- every app/menu remains on the selected view during >60 s inactivity; no automatic switch to Nixie.
 - HA connects as client to existing user server over configured HTTP or CA-verified HTTPS; 1–4 entities render; no secret leak.
 - Crypto BTC/ETH/SOL live.
 - Weather live + watercolor UI.

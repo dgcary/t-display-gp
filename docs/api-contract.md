@@ -1,6 +1,6 @@
 # Data Provider / HTTP API Contract
 
-Status date: 2026-08-20
+Status date: 2026-08-21
 
 Remote payloads stay behind Provider abstractions. UI/controllers consume structured state and do not parse raw provider bodies directly. Local-only apps remain outside remote Provider paths.
 
@@ -53,7 +53,7 @@ common NTP -> ESP32 system clock -> DeviceLayer::localDateTime()
            -> NixieClockModel -> NixieClockScreen
 ```
 
-Nixie must not call `HttpTransport`, `HTTPClient`, `WiFiClientSecure`, `AppDataWorker` or `NetworkArbiter`. It is default startup and system idle destination.
+Nixie must not call `HttpTransport`, `HTTPClient`, `WiFiClientSecure`, `AppDataWorker` or `NetworkArbiter`. It is the default startup app. There is no global idle timeout or automatic idle destination.
 
 # Home Assistant
 

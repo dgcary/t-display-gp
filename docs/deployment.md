@@ -4,7 +4,7 @@
 
 **Web ChatGPT:** GitHub source/design/code/tests, validators, native tests, real ESP32-S3 PlatformIO compile, exact-SHA Artifact verification.
 
-**Codex:** exact-SHA Artifact download/hash check, flash prebuilt application, serial monitor, physical UI/network/idle/soak test, evidence return. Codex does not use a local rebuild as the normal deployment gate.
+**Codex:** exact-SHA Artifact download/hash check, flash prebuilt application, serial monitor, physical UI/network/navigation/soak test, evidence return. Codex does not use a local rebuild as the normal deployment gate.
 
 ## Development checks
 
@@ -41,13 +41,11 @@ Menu:
 股票 / 天气 / 辉光时钟 / 智能家居 / 加密货币 / 设备信息
 ```
 
-Idle:
+Navigation:
 
 ```text
-Menu/Weather/HomeAssistant/Crypto/DeviceInfo: 30 s no valid button -> Nixie
-Stock/Nixie: exempt
-valid GPIO short/long: reset timer
-network/data activity: does not reset timer
+No automatic idle-to-Nixie switch.
+Menu/Stock/Weather/Nixie/HomeAssistant/Crypto/DeviceInfo remain active until explicit button navigation.
 ```
 
 ## Home Assistant deployment/config
@@ -93,7 +91,7 @@ Never expose HA Token.
 1. flash exact verified app image.
 2. boot Nixie; time sync/animation correct.
 3. six-app menu/input.
-4. 30 s idle for five eligible views, button reset, Stock/Nixie exemptions.
+4. leave Menu/Weather/HA/Crypto/DeviceInfo/Stock on screen for >60 s and confirm there is no automatic app switch.
 5. DeviceInfo/Web.
 6. Weather live/cache/UI.
 7. HA client reads user's existing server; secret leak check.

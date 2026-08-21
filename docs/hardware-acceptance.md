@@ -34,23 +34,23 @@ actual firmware.bin SHA256 == manifest firmware_sha256
 - 菜单六项：股票、天气、辉光时钟、智能家居、加密货币、设备信息。
 - 40 ms debounce、700 ms long、long release 不产生额外 short。
 
-## 默认启动 / Idle
+## 默认启动 / Navigation
 
 重启必须直接进入 **NixieClock**。
 
-无按键：
+自动 idle 跳转已取消。分别在以下页面无按键停留 >60 s：
 
 ```text
-Menu             30s -> Nixie
-Weather          30s -> Nixie
-Home Assistant   30s -> Nixie
-Crypto           30s -> Nixie
-DeviceInfo       30s -> Nixie
-Stock            >60s -> still Stock
-Nixie            >60s -> still Nixie
+Menu             -> still Menu
+Weather          -> still Weather
+Home Assistant   -> still Home Assistant
+Crypto           -> still Crypto
+DeviceInfo       -> still DeviceInfo
+Stock            -> still Stock
+Nixie            -> still Nixie
 ```
 
-在自动待机 App 停留约 20 s 后产生任意有效 GPIO short/long，确认 30 s 从该事件重新计算。网络刷新/数据变化不能重置 idle。
+期间网络刷新/数据变化不得自动切换 App。App 只允许由用户明确按键导航切换。
 
 ## NixieClock
 
@@ -101,7 +101,7 @@ Secret 检查：
 - USDT price + 24h change。
 - `[appdata] type=CRYPTO`。
 - `[net] host=data-api.binance.vision ...`。
-- 前台停留 >60s 正常刷新，无 tight loop。
+- 前台停留 >60s 正常刷新，无 tight loop，且不得自动切到 Nixie。
 - 成功后安全断网，last complete snapshot 保留。
 - 退出 Crypto 后不启动新 Crypto cycles。
 
@@ -111,7 +111,7 @@ Secret 检查：
 
 ## Stock regression
 
-Stock >60s 不自动回时钟。切股一次一只；正红负绿；quote/intraday 信息和图表正常；Tencent 默认 primary；每个新 intraday cycle 先 Tencent；quote/intraday health 独立。
+Stock >60s 保持 Stock，直到用户主动离开。切股一次一只；正红负绿；quote/intraday 信息和图表正常；Tencent 默认 primary；每个新 intraday cycle 先 Tencent；quote/intraday health 独立。
 
 正常常见：`Q:TX I:TX`。Tencent intraday 最终失败且 EastMoney 健康时应有 `[md] ... fallback=TX->EM` 并可出现 `I:EM`。Quote failover/recovery 逻辑不回归。
 
@@ -122,7 +122,7 @@ Stock >60s 不自动回时钟。切股一次一只；正红负绿；quote/intrad
 - actual external HTTP/TLS max one at once。
 - Weather/HA/Crypto 共用一个 AppDataWorker，但 late results 不串 App。
 - inactive app late completion 不 redraw current TFT。
-- 30 s idle 边界不让旧 remote app 再启动一轮 request。
+- 显式离开 remote app 后，不允许 inactive app 启动新的 request cycle。
 - Nixie/DeviceInfo 不占 AppDataWorker/NetworkArbiter。
 
 ## Stability
@@ -147,8 +147,7 @@ FIRMWARE SHA256:
 FLASH: PASS/FAIL
 DISPLAY/INPUT: PASS/FAIL
 NIXIE DEFAULT START: PASS/FAIL
-30S IDLE POLICY: PASS/FAIL
-STOCK/NIXIE EXEMPT: PASS/FAIL
+NO AUTO-IDLE SWITCH: PASS/FAIL
 WEATHER: PASS/FAIL
 HOME ASSISTANT HTTP: PASS/FAIL/NOT TESTED
 HOME ASSISTANT HTTPS CA: PASS/FAIL/NOT TESTED

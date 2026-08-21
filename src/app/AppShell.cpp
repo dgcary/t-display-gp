@@ -56,7 +56,6 @@ bool AppManager::begin(AppId startupApp) {
 
 void AppManager::onInput(InputEvent event) {
   if (!active_ || event == InputEvent::NONE) return;
-  userActivityPending_ = true;
 
   if (active_->id() == AppId::MENU) {
     if (event == InputEvent::NEXT_LONG) {
@@ -78,23 +77,6 @@ void AppManager::onInput(InputEvent event) {
 }
 
 void AppManager::tick(uint32_t nowMs) {
-  if (!active_) return;
-
-  if (userActivityPending_ || !activityClockValid_) {
-    lastUserActivityMs_ = nowMs;
-    activityClockValid_ = true;
-    userActivityPending_ = false;
-  }
-
-  if (autoIdleEnabled(active_->id()) &&
-      elapsed(nowMs, lastUserActivityMs_) >= IDLE_TO_NIXIE_MS) {
-    if (switchTo(AppId::NIXIE_CLOCK)) {
-      lastUserActivityMs_ = nowMs;
-      activityClockValid_ = true;
-      userActivityPending_ = false;
-    }
-  }
-
   if (active_) active_->tick(nowMs);
 }
 
@@ -123,7 +105,5 @@ bool AppManager::switchTo(AppId id) {
   if (active_) active_->onExit();
   active_ = target;
   active_->onEnter();
-  activityClockValid_ = false;
-  userActivityPending_ = false;
   return true;
 }
