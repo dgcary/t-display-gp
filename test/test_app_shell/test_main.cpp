@@ -133,68 +133,34 @@ void test_tick_and_render_are_isolated_to_active_app() {
   TEST_ASSERT_EQUAL_INT(1, f.stock.ticks);
 }
 
-void test_weather_idles_to_nixie_at_exactly_thirty_seconds() {
+void test_weather_remains_active_after_long_inactivity() {
   ShellFixture f;
   f.manager.begin(AppId::WEATHER);
-  f.manager.tick(1000);
-  f.manager.tick(30999);
-  TEST_ASSERT_EQUAL(AppId::WEATHER, f.manager.activeAppId());
-  f.manager.tick(31000);
-  TEST_ASSERT_EQUAL(AppId::NIXIE_CLOCK, f.manager.activeAppId());
-  TEST_ASSERT_EQUAL_INT(1, f.weather.exits);
-  TEST_ASSERT_EQUAL_INT(1, f.nixie.enters);
-}
-
-void test_valid_button_activity_resets_idle_timer() {
-  ShellFixture f;
-  f.manager.begin(AppId::WEATHER);
-  f.manager.tick(1000);
-  f.manager.tick(20000);
-  f.manager.onInput(InputEvent::NEXT_SHORT);
-  f.manager.tick(20000);
-  f.manager.tick(49999);
-  TEST_ASSERT_EQUAL(AppId::WEATHER, f.manager.activeAppId());
-  f.manager.tick(50000);
-  TEST_ASSERT_EQUAL(AppId::NIXIE_CLOCK, f.manager.activeAppId());
-}
-
-void test_stock_is_exempt_from_idle_fallback() {
-  ShellFixture f;
-  f.manager.begin(AppId::STOCK);
   f.manager.tick(1000);
   f.manager.tick(1000 + 24U * 60U * 60U * 1000U);
-  TEST_ASSERT_EQUAL(AppId::STOCK, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL(AppId::WEATHER, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL_INT(0, f.weather.exits);
   TEST_ASSERT_EQUAL_INT(0, f.nixie.enters);
 }
 
-void test_nixie_is_exempt_from_idle_fallback() {
-  ShellFixture f;
-  f.manager.begin(AppId::NIXIE_CLOCK);
-  f.manager.tick(1000);
-  f.manager.tick(1000 + 24U * 60U * 60U * 1000U);
-  TEST_ASSERT_EQUAL(AppId::NIXIE_CLOCK, f.manager.activeAppId());
-  TEST_ASSERT_EQUAL_INT(0, f.nixie.exits);
-}
-
-void test_menu_idles_to_nixie() {
+void test_menu_remains_active_after_long_inactivity() {
   ShellFixture f;
   f.manager.begin(AppId::WEATHER);
   f.manager.onInput(InputEvent::PREV_LONG);
   f.manager.tick(5000);
+  f.manager.tick(5000 + 24U * 60U * 60U * 1000U);
   TEST_ASSERT_EQUAL(AppId::MENU, f.manager.activeAppId());
-  f.manager.tick(35000);
-  TEST_ASSERT_EQUAL(AppId::NIXIE_CLOCK, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL_INT(0, f.nixie.enters);
 }
 
-void test_idle_elapsed_is_wrap_safe() {
+void test_device_info_remains_active_across_millis_wrap() {
   ShellFixture f;
   f.manager.begin(AppId::DEVICE_INFO);
   const uint32_t start = 0xFFFFFF00U;
   f.manager.tick(start);
-  f.manager.tick(static_cast<uint32_t>(start + 29999U));
+  f.manager.tick(static_cast<uint32_t>(start + 60000U));
   TEST_ASSERT_EQUAL(AppId::DEVICE_INFO, f.manager.activeAppId());
-  f.manager.tick(static_cast<uint32_t>(start + 30000U));
-  TEST_ASSERT_EQUAL(AppId::NIXIE_CLOCK, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL_INT(0, f.nixie.enters);
 }
 
 int main() {
@@ -205,11 +171,8 @@ int main() {
   RUN_TEST(test_reserved_next_long_is_swallowed_in_normal_app);
   RUN_TEST(test_short_events_reach_only_active_normal_app);
   RUN_TEST(test_tick_and_render_are_isolated_to_active_app);
-  RUN_TEST(test_weather_idles_to_nixie_at_exactly_thirty_seconds);
-  RUN_TEST(test_valid_button_activity_resets_idle_timer);
-  RUN_TEST(test_stock_is_exempt_from_idle_fallback);
-  RUN_TEST(test_nixie_is_exempt_from_idle_fallback);
-  RUN_TEST(test_menu_idles_to_nixie);
-  RUN_TEST(test_idle_elapsed_is_wrap_safe);
+  RUN_TEST(test_weather_remains_active_after_long_inactivity);
+  RUN_TEST(test_menu_remains_active_after_long_inactivity);
+  RUN_TEST(test_device_info_remains_active_across_millis_wrap);
   return UNITY_END();
 }
