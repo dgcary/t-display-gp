@@ -1,5 +1,6 @@
 #include <unity.h>
 
+#include <cstdint>
 #include <vector>
 
 #include "AppShell.h"
@@ -48,19 +49,24 @@ class FakeApp final : public IApp {
 
 struct ShellFixture {
   FakeMenuRenderer renderer;
-  std::vector<AppDescriptor> descriptors{{AppId::STOCK, "股票"}, {AppId::WEATHER, "天气"}};
+  std::vector<AppDescriptor> descriptors{{AppId::STOCK, "股票"},
+                                         {AppId::WEATHER, "天气"},
+                                         {AppId::NIXIE_CLOCK, "辉光时钟"},
+                                         {AppId::DEVICE_INFO, "设备信息"}};
   MenuApp menu{descriptors, renderer};
   FakeApp stock{AppId::STOCK, "股票"};
   FakeApp weather{AppId::WEATHER, "天气"};
-  AppManager manager{menu, {&stock, &weather}};
+  FakeApp nixie{AppId::NIXIE_CLOCK, "辉光时钟"};
+  FakeApp deviceInfo{AppId::DEVICE_INFO, "设备信息"};
+  AppManager manager{menu, {&stock, &weather, &nixie, &deviceInfo}};
 };
 
-void test_defaults_to_stock_and_enters_once() {
+void test_defaults_to_nixie_and_enters_once() {
   ShellFixture f;
-  TEST_ASSERT_TRUE(f.manager.begin(AppId::STOCK));
-  TEST_ASSERT_EQUAL(AppId::STOCK, f.manager.activeAppId());
-  TEST_ASSERT_EQUAL_INT(1, f.stock.enters);
-  TEST_ASSERT_EQUAL_INT(0, f.stock.exits);
+  TEST_ASSERT_TRUE(f.manager.begin());
+  TEST_ASSERT_EQUAL(AppId::NIXIE_CLOCK, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL_INT(1, f.nixie.enters);
+  TEST_ASSERT_EQUAL_INT(0, f.stock.enters);
   TEST_ASSERT_EQUAL_INT(0, f.weather.enters);
 }
 
@@ -82,7 +88,7 @@ void test_menu_selection_wraps_and_next_long_enters_selected_app() {
   f.manager.onInput(InputEvent::NEXT_SHORT);
   TEST_ASSERT_EQUAL_UINT32(1, f.menu.selectedIndex());
   f.manager.onInput(InputEvent::NEXT_SHORT);
-  TEST_ASSERT_EQUAL_UINT32(0, f.menu.selectedIndex());
+  TEST_ASSERT_EQUAL_UINT32(2, f.menu.selectedIndex());
   f.manager.onInput(InputEvent::PREV_SHORT);
   TEST_ASSERT_EQUAL_UINT32(1, f.menu.selectedIndex());
 
@@ -127,13 +133,46 @@ void test_tick_and_render_are_isolated_to_active_app() {
   TEST_ASSERT_EQUAL_INT(1, f.stock.ticks);
 }
 
+void test_weather_remains_active_after_long_inactivity() {
+  ShellFixture f;
+  f.manager.begin(AppId::WEATHER);
+  f.manager.tick(1000);
+  f.manager.tick(1000 + 24U * 60U * 60U * 1000U);
+  TEST_ASSERT_EQUAL(AppId::WEATHER, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL_INT(0, f.weather.exits);
+  TEST_ASSERT_EQUAL_INT(0, f.nixie.enters);
+}
+
+void test_menu_remains_active_after_long_inactivity() {
+  ShellFixture f;
+  f.manager.begin(AppId::WEATHER);
+  f.manager.onInput(InputEvent::PREV_LONG);
+  f.manager.tick(5000);
+  f.manager.tick(5000 + 24U * 60U * 60U * 1000U);
+  TEST_ASSERT_EQUAL(AppId::MENU, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL_INT(0, f.nixie.enters);
+}
+
+void test_device_info_remains_active_across_millis_wrap() {
+  ShellFixture f;
+  f.manager.begin(AppId::DEVICE_INFO);
+  const uint32_t start = 0xFFFFFF00U;
+  f.manager.tick(start);
+  f.manager.tick(static_cast<uint32_t>(start + 60000U));
+  TEST_ASSERT_EQUAL(AppId::DEVICE_INFO, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL_INT(0, f.nixie.enters);
+}
+
 int main() {
   UNITY_BEGIN();
-  RUN_TEST(test_defaults_to_stock_and_enters_once);
+  RUN_TEST(test_defaults_to_nixie_and_enters_once);
   RUN_TEST(test_prev_long_returns_to_menu_and_does_not_reach_stock);
   RUN_TEST(test_menu_selection_wraps_and_next_long_enters_selected_app);
   RUN_TEST(test_reserved_next_long_is_swallowed_in_normal_app);
   RUN_TEST(test_short_events_reach_only_active_normal_app);
   RUN_TEST(test_tick_and_render_are_isolated_to_active_app);
+  RUN_TEST(test_weather_remains_active_after_long_inactivity);
+  RUN_TEST(test_menu_remains_active_after_long_inactivity);
+  RUN_TEST(test_device_info_remains_active_across_millis_wrap);
   return UNITY_END();
 }

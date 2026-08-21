@@ -12,6 +12,8 @@ enum class AppId {
   STOCK,
   WEATHER,
   NIXIE_CLOCK,
+  HOME_ASSISTANT,
+  CRYPTO,
   DEVICE_INFO,
 };
 
@@ -48,7 +50,6 @@ class IApp {
 class MenuApp final : public IApp {
  public:
   MenuApp(std::vector<AppDescriptor> items, IMenuRenderer& renderer);
-
   AppId id() const override { return AppId::MENU; }
   const char* name() const override { return "菜单"; }
   void onEnter() override;
@@ -58,10 +59,8 @@ class MenuApp final : public IApp {
   bool takeDirtyFlag() override;
   bool takeFullRedrawFlag() override;
   void render(bool fullRedraw) override;
-
   size_t selectedIndex() const { return selectedIndex_; }
   AppId selectedAppId() const;
-
  private:
   std::vector<AppDescriptor> items_;
   IMenuRenderer& renderer_;
@@ -73,8 +72,7 @@ class MenuApp final : public IApp {
 class AppManager {
  public:
   AppManager(MenuApp& menu, std::initializer_list<IApp*> apps);
-
-  bool begin(AppId startupApp = AppId::STOCK);
+  bool begin(AppId startupApp = AppId::NIXIE_CLOCK);
   void onInput(InputEvent event);
   void tick(uint32_t nowMs);
   void render();
@@ -83,7 +81,6 @@ class AppManager {
  private:
   IApp* findApp(AppId id) const;
   bool switchTo(AppId id);
-
   MenuApp& menu_;
   std::vector<IApp*> apps_;
   IApp* active_ = nullptr;

@@ -7,8 +7,13 @@
 #include "AppDataWorker.h"
 #include "AppShell.h"
 #include "ConfigStore.h"
+#include "CryptoApp.h"
 #include "DeviceInfoApp.h"
 #include "DeviceLayer.h"
+#include "HomeAssistantApp.h"
+#include "HomeAssistantConfig.h"
+#include "HomeAssistantConfigPortal.h"
+#include "HomeAssistantConfigStore.h"
 #include "MenuScreen.h"
 #include "NetworkArbiter.h"
 #include "NixieClockApp.h"
@@ -18,27 +23,32 @@
 
 namespace {
 AppConfig appConfig;
+HomeAssistantConfig homeAssistantConfig;
 ConfigStore configStore;
+HomeAssistantConfigStore homeAssistantConfigStore;
 ProvisioningService provisioning;
+HomeAssistantConfigPortal homeAssistantConfigPortal;
 DeviceLayer device;
 AppDataWorker appDataWorker;
 MenuScreen menuScreen;
 StockApp stockApp(device);
 WeatherApp weatherApp(device, appDataWorker);
 NixieClockApp nixieClockApp(device);
+HomeAssistantApp homeAssistantApp(device, appDataWorker);
+CryptoApp cryptoApp(device, appDataWorker);
 DeviceInfoApp deviceInfoApp(device);
 MenuApp menuApp({{AppId::STOCK, "股票"},
                  {AppId::WEATHER, "天气"},
                  {AppId::NIXIE_CLOCK, "辉光时钟"},
+                 {AppId::HOME_ASSISTANT, "智能家居"},
+                 {AppId::CRYPTO, "加密货币"},
                  {AppId::DEVICE_INFO, "设备信息"}},
                 menuScreen);
-AppManager appManager(menuApp, {&stockApp, &weatherApp, &nixieClockApp, &deviceInfoApp});
+AppManager appManager(menuApp, {&stockApp, &weatherApp, &nixieClockApp, &homeAssistantApp, &cryptoApp, &deviceInfoApp});
 bool appReady = false;
 uint32_t nextResourceLogMs = 0;
 
-void startChinaTimeSync() {
-  configTzTime("CST-8", "ntp.aliyun.com", "pool.ntp.org", "time.nist.gov");
-}
+void startChinaTimeSync() { configTzTime("CST-8", "ntp.aliyun.com", "pool.ntp.org", "time.nist.gov"); }
 
 const char* appName(AppId id) {
   switch (id) {
@@ -46,6 +56,8 @@ const char* appName(AppId id) {
     case AppId::STOCK: return "STOCK";
     case AppId::WEATHER: return "WEATHER";
     case AppId::NIXIE_CLOCK: return "NIXIE_CLOCK";
+    case AppId::HOME_ASSISTANT: return "HOME_ASSISTANT";
+    case AppId::CRYPTO: return "CRYPTO";
     case AppId::DEVICE_INFO: return "DEVICE_INFO";
   }
   return "UNKNOWN";
@@ -65,12 +77,9 @@ void setup() {
   Serial.begin(115200);
   delay(50);
   Serial.println("[boot] T-Display GP starting");
-
-  // Bring up the panel first so provisioning has visible feedback even on a
-  // factory-erased device. DeviceLayer intentionally does not wait for NTP.
   device.begin();
-
   configStore.load(appConfig);
+  homeAssistantConfigStore.load(homeAssistantConfig);
   Serial.println("[boot] provisioning start");
   if (!provisioning.ensureConnected(appConfig)) {
     Serial.println("Provisioning failed; restarting");
@@ -78,11 +87,10 @@ void setup() {
     ESP.restart();
     return;
   }
-
   Serial.println("[boot] provisioning complete; starting shared services");
   startChinaTimeSync();
   provisioning.beginWebPortal(appConfig);
-
+  homeAssistantConfigPortal.begin(homeAssistantConfig);
   if (!sharedNetworkArbiter().begin()) {
     Serial.println("Network arbiter failed to start");
     return;
@@ -91,29 +99,14 @@ void setup() {
     Serial.println("App-data worker failed to start");
     return;
   }
-
   menuScreen.begin(device.display(), device.unicodeFont());
-  if (!stockApp.begin(appConfig)) {
-    Serial.println("Stock app failed to start");
-    return;
-  }
-  if (!weatherApp.begin(appConfig)) {
-    Serial.println("Weather app failed to start");
-    return;
-  }
-  if (!nixieClockApp.begin()) {
-    Serial.println("Nixie clock app failed to start");
-    return;
-  }
-  if (!deviceInfoApp.begin()) {
-    Serial.println("Device info app failed to start");
-    return;
-  }
-  if (!appManager.begin(AppId::STOCK)) {
-    Serial.println("App manager failed to start");
-    return;
-  }
-
+  if (!stockApp.begin(appConfig)) { Serial.println("Stock app failed to start"); return; }
+  if (!weatherApp.begin(appConfig)) { Serial.println("Weather app failed to start"); return; }
+  if (!nixieClockApp.begin()) { Serial.println("Nixie clock app failed to start"); return; }
+  if (!homeAssistantApp.begin(homeAssistantConfig)) { Serial.println("Home Assistant app failed to start"); return; }
+  if (!cryptoApp.begin()) { Serial.println("Crypto app failed to start"); return; }
+  if (!deviceInfoApp.begin()) { Serial.println("Device info app failed to start"); return; }
+  if (!appManager.begin(AppId::NIXIE_CLOCK)) { Serial.println("App manager failed to start"); return; }
   appReady = true;
   Serial.println("[boot] multi-app loop ready");
   logResourceSnapshot(millis());
@@ -121,19 +114,12 @@ void setup() {
 
 void loop() {
   provisioning.process();
-  if (!appReady) {
-    delay(1);
-    return;
-  }
-
+  homeAssistantConfigPortal.process();
+  if (!appReady) { delay(1); return; }
   const uint32_t nowMs = millis();
   appManager.onInput(device.pollButtons(nowMs));
   appManager.tick(nowMs);
   appManager.render();
-
-  if (static_cast<int32_t>(nowMs - nextResourceLogMs) >= 0) {
-    logResourceSnapshot(nowMs);
-  }
-
+  if (static_cast<int32_t>(nowMs - nextResourceLogMs) >= 0) logResourceSnapshot(nowMs);
   delay(1);
 }
