@@ -64,6 +64,7 @@ right 152..319, y=27..152: Bad Apple!! 168×126 monochrome player
 
 - UI 只显示“今 / 明”，不显示“后天”；Provider 内部 three-day 数据契约不变。
 - Bad Apple：**168×126、2190 frames、10 FPS、约 219 s、静音、循环**。
+- 视频区及左右边界保持干净：**不绘制贯穿顶部的横线，也不绘制左右分隔竖线**。
 - 1-bit packed first frame + XOR sparse-delta compressed asset；当前生成资产约 1.72 MB。
 - 进入 Weather 后从 frame 0 播放；离开 Weather 后停止视频刷新；只重绘视频区域，不做 10 FPS 整屏清屏。
 - 不新增 FreeRTOS task，不占用新的 AppDataWorker/NetworkArbiter 路径。
