@@ -78,6 +78,7 @@ Nixie            -> still Nixie
 右侧视频必须满足：
 
 - 可视区域为 **168×126**，从约 `x=152, y=27` 铺到屏幕右侧/接近底部，无越界。
+- **不得出现贯穿顶部的横向分隔线，也不得出现左侧天气与视频之间的竖向分隔线。**
 - 黑白 Bad Apple silhouette 动画可辨认，不应只是噪点/全黑/全白。
 - 帧率体感约 10 FPS，连续播放；不能每 100 ms 整屏闪黑/清屏。
 - 保持 Weather 前台约 **220 s**，确认完整约 219 s 序列后能回到开头并继续循环。
@@ -173,6 +174,7 @@ DISPLAY/INPUT: PASS/FAIL
 NIXIE DEFAULT START: PASS/FAIL
 NO AUTO-IDLE SWITCH: PASS/FAIL
 WEATHER LEFT LAYOUT: PASS/FAIL
+WEATHER NO DIVIDERS: PASS/FAIL
 BAD APPLE 168x126: PASS/FAIL
 BAD APPLE ~10FPS: PASS/FAIL
 BAD APPLE ~219S LOOP: PASS/FAIL
