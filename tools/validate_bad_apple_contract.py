@@ -44,7 +44,13 @@ forbidden = []
 weather = Path("src/ui/WeatherScreen.cpp")
 if weather.exists():
     text = weather.read_text(encoding="utf-8")
-    for token in ("WeatherCatArt", "drawWatercolorCat", "dayAfter"):
+    for token in (
+        "WeatherCatArt",
+        "drawWatercolorCat",
+        "dayAfter",
+        "display_->drawFastHLine(0, 24, 320, UiTheme::GRID)",
+        "display_->drawFastVLine(150, 27, 126, UiTheme::GRID)",
+    ):
         if token in text:
             forbidden.append(f"src/ui/WeatherScreen.cpp: {token}")
 
@@ -70,4 +76,4 @@ if missing or contract or forbidden:
             print(f"  {item}")
     sys.exit(1)
 
-print("Bad Apple Weather 168x126 + 10fps + two-day compact layout contract: OK")
+print("Bad Apple Weather 168x126 + 10fps + two-day compact no-divider layout contract: OK")
