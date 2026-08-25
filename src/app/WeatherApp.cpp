@@ -1,6 +1,6 @@
 #include "WeatherApp.h"
 
-#include "WeatherVisuals.h"
+#include "BadApplePlayback.h"
 
 bool WeatherApp::begin(const AppConfig& config) {
   if (initialized_) return true;
@@ -19,6 +19,8 @@ void WeatherApp::onEnter() {
   animationInitialized_ = false;
   animationDirty_ = false;
   animationOnlyRender_ = false;
+  playbackClockValid_ = false;
+  screen_.resetBadApple();
 }
 
 void WeatherApp::onExit() {
@@ -26,10 +28,11 @@ void WeatherApp::onExit() {
   controller_.setActive(false);
   animationDirty_ = false;
   animationOnlyRender_ = false;
+  playbackClockValid_ = false;
 }
 
 void WeatherApp::onButton(InputEvent) {
-  // Weather V1 has no short-press sub-navigation. Global long-press handling
+  // Weather has no short-press sub-navigation. Global long-press handling
   // remains owned by AppManager.
 }
 
@@ -38,13 +41,21 @@ void WeatherApp::tick(uint32_t nowMs) {
   controller_.setWifiOnline(device_.wifiConnected());
   controller_.tick(nowMs);
 
-  if (controller_.viewModel().hasData) {
-    const uint8_t nextFrame = WeatherVisuals::animationFrame(nowMs);
-    if (!animationInitialized_ || nextFrame != animationFrame_) {
-      animationFrame_ = nextFrame;
-      animationInitialized_ = true;
-      animationDirty_ = true;
-    }
+  if (!controller_.viewModel().hasData) {
+    playbackClockValid_ = false;
+    return;
+  }
+
+  if (!playbackClockValid_) {
+    playbackStartMs_ = nowMs;
+    playbackClockValid_ = true;
+  }
+  const uint32_t elapsedMs = static_cast<uint32_t>(nowMs - playbackStartMs_);
+  const uint32_t nextFrame = BadApplePlayback::frameIndex(elapsedMs);
+  if (!animationInitialized_ || nextFrame != animationFrame_) {
+    animationFrame_ = nextFrame;
+    animationInitialized_ = true;
+    animationDirty_ = true;
   }
 }
 
@@ -53,8 +64,7 @@ bool WeatherApp::takeDirtyFlag() {
   const bool contentDirty = forceDirty_ || controllerDirty;
   const bool dirty = contentDirty || animationDirty_;
 
-  // If only the 2 Hz pet animation changed, redraw only the right-side pet
-  // scene instead of clearing the full 320x170 panel.
+  // A 10 fps Bad Apple frame only redraws the right-side video viewport.
   animationOnlyRender_ = dirty && !contentDirty && animationDirty_;
   if (contentDirty) animationDirty_ = false;
   forceDirty_ = false;
