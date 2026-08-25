@@ -14,9 +14,13 @@ python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 python tools/validate_nixie_clock_contract.py
 python tools/validate_dashboard_apps_contract.py
+python tools/validate_bad_apple_contract.py
 pio test -e native
+python tools/prepare_bad_apple_asset.py
 pio run -e lilygo-t-display-s3
 ```
+
+Bad Apple 构建阶段需要 ffmpeg。生成器必须验证锁定 source Git blob SHA1，并对全部 2190 帧的 delta 编解码 round-trip 成功后才允许 ESP build。
 
 Codex 下载 exact-SHA `tdisplay-gp-firmware-<SOURCE_SHA>` 并确认：
 
@@ -25,7 +29,7 @@ manifest source_sha == approved SHA
 actual firmware.bin SHA256 == manifest firmware_sha256
 ```
 
-正常升级仅写 `firmware.bin` 到 manifest `firmware_offset`（当前通常 `0x10000`），不 erase NVS，不重写 bootloader/partition table。Serial 115200。
+正常升级仅写 `firmware.bin` 到 manifest `firmware_offset`（当前通常 `0x10000`），Bad Apple 媒体已包含在 application image 内。不得 erase NVS，不重写 bootloader/partition table。Serial 115200。
 
 ## Display / Input
 
@@ -61,9 +65,28 @@ Nixie            -> still Nixie
 - 不产生由 Nixie 触发的 `[md]` / `[appdata]`。
 - `[sys] app=NIXIE_CLOCK`。
 
-## Weather
+## Weather / Bad Apple
 
-配置有效地点：current temp/apparent/humidity/wind/precipitation、中文 condition、三日 high-low/condition 正常；手绘水彩小猫两帧动画无整屏闪烁。观察 `[appdata] type=WEATHER`。成功后安全断网，旧 cache 保留且无 tight retry。
+先配置有效地点并确认 `[appdata] type=WEATHER` 正常。
+
+左侧信息必须满足：
+
+- current condition、temperature、apparent temperature、humidity、wind、precipitation probability、updated time 可读且不被视频覆盖。
+- 底部仅显示紧凑的 **“今” / “明”** 两行 high-low/condition。
+- **不得显示“后天”** 卡片/行。
+
+右侧视频必须满足：
+
+- 可视区域为 **168×126**，从约 `x=152, y=27` 铺到屏幕右侧/接近底部，无越界。
+- 黑白 Bad Apple silhouette 动画可辨认，不应只是噪点/全黑/全白。
+- 帧率体感约 10 FPS，连续播放；不能每 100 ms 整屏闪黑/清屏。
+- 保持 Weather 前台约 **220 s**，确认完整约 219 s 序列后能回到开头并继续循环。
+- 长按 GPIO0 离开 Weather 后，当前页面不得再被 Bad Apple 后台重绘/污染。
+- 再次进入 Weather 时从视频开头重新播放。
+- 视频播放不应触发额外 `[net]` / `[appdata]` 请求；Open-Meteo 仍仅按原刷新策略工作。
+- Weather 播放 5 min 期间无 watchdog/panic/reboot/freeze，heap 不持续单向下降。
+
+天气网络回归：成功取得天气后安全断网，旧 cache 保留且无 tight retry；Bad Apple 本地视频仍可继续播放，因为媒体已经在 firmware.bin 内。
 
 ## Home Assistant
 
@@ -123,6 +146,7 @@ Stock >60s 保持 Stock，直到用户主动离开。切股一次一只；正红
 - Weather/HA/Crypto 共用一个 AppDataWorker，但 late results 不串 App。
 - inactive app late completion 不 redraw current TFT。
 - 显式离开 remote app 后，不允许 inactive app 启动新的 request cycle。
+- Bad Apple 播放不得新增 FreeRTOS worker/AppDataWorker request/NetworkArbiter traffic。
 - Nixie/DeviceInfo 不占 AppDataWorker/NetworkArbiter。
 
 ## Stability
@@ -133,7 +157,7 @@ Stock >60s 保持 Stock，直到用户主动离开。切股一次一只；正红
 app=MENU|STOCK|WEATHER|NIXIE_CLOCK|HOME_ASSISTANT|CRYPTO|DEVICE_INFO
 ```
 
-至少覆盖开机、Stock 10 min、Weather/HA success、Crypto >=2 cycles、Nixie 5 min、100 transitions、Wi-Fi interruption/recovery。
+至少覆盖开机、Stock 10 min、Weather Bad Apple >=5 min、Weather network cache test、HA success、Crypto >=2 cycles、Nixie 5 min、100 transitions、Wi-Fi interruption/recovery。
 
 100 次跨 App/menu transition：watchdog=0、unexpected reboot=0、freeze=0、short-after-long=0、明显 heap leak=0、background wrong-screen redraw=0。
 
@@ -148,7 +172,12 @@ FLASH: PASS/FAIL
 DISPLAY/INPUT: PASS/FAIL
 NIXIE DEFAULT START: PASS/FAIL
 NO AUTO-IDLE SWITCH: PASS/FAIL
-WEATHER: PASS/FAIL
+WEATHER LEFT LAYOUT: PASS/FAIL
+BAD APPLE 168x126: PASS/FAIL
+BAD APPLE ~10FPS: PASS/FAIL
+BAD APPLE ~219S LOOP: PASS/FAIL
+BAD APPLE EXIT/REENTER: PASS/FAIL
+WEATHER NETWORK/CACHE: PASS/FAIL
 HOME ASSISTANT HTTP: PASS/FAIL/NOT TESTED
 HOME ASSISTANT HTTPS CA: PASS/FAIL/NOT TESTED
 HA SECRET LEAK: PASS/FAIL

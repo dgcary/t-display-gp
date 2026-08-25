@@ -53,7 +53,22 @@ http://<T-Display-IP>:8081/
 Tencent quote+intraday primary，EastMoney fallback；quote/intraday health 独立；quote 优先；intraday latest-wins；有界 retry；cache-preserving。
 
 ### Weather
-Open-Meteo current + 3-day；默认 15 min，5–60 min；active-only；failure 保留 cache；程序化手绘水彩小猫动画。
+Open-Meteo 仍获取 current + 3-day structured data；默认 15 min，5–60 min；active-only；failure 保留 cache。
+
+天气屏重新排版为：
+
+```text
+left 0..149: current weather + compact Today/Tomorrow
+right 152..319, y=27..152: Bad Apple!! 168×126 monochrome player
+```
+
+- UI 只显示“今 / 明”，不显示“后天”；Provider 内部 three-day 数据契约不变。
+- Bad Apple：**168×126、2190 frames、10 FPS、约 219 s、静音、循环**。
+- 1-bit packed first frame + XOR sparse-delta compressed asset；当前生成资产约 1.72 MB。
+- 进入 Weather 后从 frame 0 播放；离开 Weather 后停止视频刷新；只重绘视频区域，不做 10 FPS 整屏清屏。
+- 不新增 FreeRTOS task，不占用新的 AppDataWorker/NetworkArbiter 路径。
+- 构建时 `tools/prepare_bad_apple_asset.py` 从锁定 source commit/blob 获取转换输入、校验 Git blob SHA1、经 ffmpeg 缩放/抽帧/二值化，并对全部 delta 做 round-trip 校验；原始 MP4 和生成 C++ 资产均不提交仓库。
+- 仓库许可证只覆盖本项目代码；**不对 Bad Apple!! 原始 PV/音乐重新授权**，相关权利归各自权利人。
 
 ### Nixie Clock
 默认启动；复用 ESP32 system clock/common NTP；HH:MM/date/weekday/seconds；未同步 fail-closed；1 s sample + ~500 ms colon；partial redraw；local-only。
@@ -80,6 +95,7 @@ Stock -> dedicated MarketDataWorker
 Weather / HomeAssistant / Crypto -> exactly one shared AppDataWorker -> typed result queues
 Nixie / DeviceInfo -> local-only
 all actual external HTTP/TLS -> NetworkArbiter -> max one at once
+Weather Bad Apple playback -> local flash asset only; no runtime network/task
 ```
 
 FreeRTOS queues pass request/result pointers rather than raw-copying non-trivial std::string objects。
@@ -105,13 +121,17 @@ No secret logging。
 
 ## Verification
 
+Host/CI needs ffmpeg for the generated Bad Apple firmware asset.
+
 ```bash
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 python tools/validate_nixie_clock_contract.py
 python tools/validate_dashboard_apps_contract.py
+python tools/validate_bad_apple_contract.py
 pio test -e native
+python tools/prepare_bad_apple_asset.py
 pio run -e lilygo-t-display-s3
 ```
 

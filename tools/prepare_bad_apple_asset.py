@@ -107,6 +107,19 @@ def put_varuint(out: bytearray, value: int) -> None:
     out.append(value)
 
 
+def read_varuint(data: bytes, pos: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    while pos < len(data) and shift <= 28:
+        byte = data[pos]
+        pos += 1
+        value |= (byte & 0x7F) << shift
+        if (byte & 0x80) == 0:
+            return value, pos
+        shift += 7
+    raise RuntimeError("invalid Bad Apple delta varint")
+
+
 def encode_delta(previous: bytes, current: bytes) -> bytes:
     delta = bytes(a ^ b for a, b in zip(previous, current))
     encoded = bytearray()
@@ -136,6 +149,25 @@ def encode_delta(previous: bytes, current: bytes) -> bytes:
         encoded.extend(delta[start:end])
         cursor = end
     return bytes(encoded)
+
+
+def decode_delta(previous: bytes, encoded: bytes) -> bytes:
+    frame = bytearray(previous)
+    input_pos = 0
+    cursor = 0
+    while input_pos < len(encoded):
+        skip, input_pos = read_varuint(encoded, input_pos)
+        if skip > len(frame) - cursor:
+            raise RuntimeError("Bad Apple delta skip exceeds frame")
+        cursor += skip
+        literal, input_pos = read_varuint(encoded, input_pos)
+        if literal > len(frame) - cursor or literal > len(encoded) - input_pos:
+            raise RuntimeError("Bad Apple delta literal exceeds frame/input")
+        for index in range(literal):
+            frame[cursor + index] ^= encoded[input_pos + index]
+        cursor += literal
+        input_pos += literal
+    return bytes(frame)
 
 
 def write_array(handle, values, per_line: int = 16, formatter=str) -> None:
@@ -182,8 +214,12 @@ def main() -> int:
     offsets = [0]
     payload = bytearray()
     previous = first
-    for current in frames[1:]:
-        payload.extend(encode_delta(previous, current))
+    for frame_index, current in enumerate(frames[1:], start=1):
+        encoded = encode_delta(previous, current)
+        reconstructed = decode_delta(previous, encoded)
+        if reconstructed != current:
+            raise RuntimeError(f"Bad Apple delta round-trip mismatch at frame {frame_index}")
+        payload.extend(encoded)
         offsets.append(len(payload))
         previous = current
 
@@ -197,7 +233,8 @@ def main() -> int:
     emit_asset(first, offsets, bytes(payload))
     print(
         f"Bad Apple asset: {WIDTH}x{HEIGHT}, {FRAME_COUNT} frames @ {FPS} fps, "
-        f"packed={PACKED_FRAME_BYTES * FRAME_COUNT} bytes, asset={total_asset} bytes"
+        f"packed={PACKED_FRAME_BYTES * FRAME_COUNT} bytes, asset={total_asset} bytes, "
+        "delta-roundtrip=OK"
     )
     print(f"generated {HEADER_PATH.relative_to(ROOT)} and {CPP_PATH.relative_to(ROOT)}")
     return 0
