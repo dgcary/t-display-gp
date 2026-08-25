@@ -35,5 +35,7 @@ class WeatherApp final : public IApp {
   bool animationInitialized_ = false;
   bool animationDirty_ = false;
   bool animationOnlyRender_ = false;
-  uint8_t animationFrame_ = 0;
+  bool playbackClockValid_ = false;
+  uint32_t playbackStartMs_ = 0;
+  uint32_t animationFrame_ = 0;
 };

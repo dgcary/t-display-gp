@@ -1,8 +1,8 @@
 # Data Provider / HTTP API Contract
 
-Status date: 2026-08-21
+Status date: 2026-08-25
 
-Remote payloads stay behind Provider abstractions. UI/controllers consume structured state and do not parse raw provider bodies directly. Local-only apps remain outside remote Provider paths.
+Remote payloads stay behind Provider abstractions. UI/controllers consume structured state and do not parse raw provider bodies directly. Local-only apps/media playback remain outside remote Provider paths.
 
 ## Provider matrix
 
@@ -14,6 +14,7 @@ Remote payloads stay behind Provider abstractions. UI/controllers consume struct
 | Nixie time | Device local system clock | no HTTP |
 | Home Assistant | **user's existing HA server** | T-Display read-only REST client |
 | Crypto | Binance market-data-only | none |
+| Weather Bad Apple playback | local compiled flash asset | no runtime HTTP/task |
 
 # A-share market data
 
@@ -40,9 +41,44 @@ Rules remain:
 
 V1 uses Open-Meteo current weather + three-day forecast with configured location.
 
-Structured state includes current temperature/apparent/humidity/wind/precipitation/weather code, 3 daily high-low-code sets and updated time.
+Structured state still includes current temperature/apparent/humidity/wind/precipitation/weather code, 3 daily high-low-code sets and updated time. Required fields/ranges are validated; parse occurs into a temporary snapshot and assigns only after complete success. Default refresh 15 min, configurable 5–60 min, paced from last attempt, active-only, failure preserves cache.
 
-Required fields/ranges are validated; parse occurs into a temporary snapshot and assigns only after complete success. Default refresh 15 min, configurable 5–60 min, paced from last attempt, active-only, failure preserves cache.
+The **network/provider contract is unchanged** by the Bad Apple UI. Presentation intentionally consumes only:
+
+```text
+current weather
+weather.today
+weather.tomorrow
+```
+
+`weather.dayAfter` remains valid structured provider/cache data but is not rendered on the 320×170 Weather screen so the right side can host the larger video viewport.
+
+## Weather Bad Apple media path
+
+Bad Apple is a build-time media transformation, not a runtime remote Provider:
+
+```text
+pinned source video + verified Git blob SHA1
+  -> ffmpeg: 168x126, 10 FPS, 2190 frames
+  -> threshold to 1-bit
+  -> first frame + XOR sparse-delta encoding
+  -> full generator round-trip verification
+  -> generated BadAppleAsset.*
+  -> firmware.bin
+  -> WeatherScreen local playback
+```
+
+Runtime contract:
+
+- viewport x=152, y=27, width=168, height=126.
+- 2190 frames @ 10 FPS, ~219 s, silent, looping.
+- Weather entry starts frame 0; Weather exit stops frame scheduling/rendering.
+- frame updates redraw only the right video region; no 10 FPS full-screen clear.
+- presentation draws no full-width top divider and no vertical separator at the left edge of the video viewport.
+- one packed frame buffer = 2646 bytes; no full uncompressed video buffer in RAM.
+- no `HttpTransport`, `HTTPClient`, `WiFiClientSecure`, `NetworkArbiter`, AppDataWorker request, or dedicated FreeRTOS task for playback.
+- original MP4 and generated C++ media are not committed; generation is deterministic from pinned source identity.
+- source-code/project licensing does not relicense the underlying Bad Apple!! PV/music; rights in that media remain with their respective holders.
 
 # Nixie Clock
 
@@ -140,13 +176,15 @@ one request queue -> AppDataWorker
 
 Typed result queues prevent one App consuming/dropping another App's late result. FreeRTOS queues store pointers to C++ request/result objects rather than byte-copying objects containing `std::string`.
 
-An already-running request may finish after app exit, but inactive apps do not schedule follow-up cycles and never redraw TFT.
+An already-running request may finish after app exit, but inactive apps do not schedule follow-up cycles and never redraw TFT. Bad Apple playback is separate local UI work and does not use this worker.
 
 # NetworkArbiter / public HttpTransport
 
 All actual external HTTP/TLS operations serialize through `NetworkArbiter`: max one at once.
 
 Public Stock/Weather/Crypto `HttpTransport` remains: connect 1500 ms, read setting 2500 ms, TLS handshake cap 5 s, retained body max 32 KiB, reuse false. Public-data clients retain existing `setInsecure()` behavior; this does **not** extend to HA HTTPS credentials.
+
+Bad Apple runtime playback does not acquire NetworkArbiter and does not perform network I/O.
 
 # Diagnostics
 
@@ -161,6 +199,6 @@ No full provider bodies or credentials by default.
 
 # Cache/error isolation
 
-Weather failure cannot alter Stock health; intraday failure cannot alter quote health; Stock failure cannot clear Weather/HA/Crypto; HA failure preserves per-entity cache; Crypto failure preserves last complete snapshot; Nixie cannot enqueue network work; inactive late result cannot redraw TFT.
+Weather failure cannot alter Stock health; intraday failure cannot alter quote health; Stock failure cannot clear Weather/HA/Crypto; HA failure preserves per-entity cache; Crypto failure preserves last complete snapshot; Nixie cannot enqueue network work; inactive late result cannot redraw TFT. Weather media playback cannot change provider/network health.
 
 Provider changes require real diagnostics plus regression coverage; do not relax strict parsing merely to raise apparent success rate.

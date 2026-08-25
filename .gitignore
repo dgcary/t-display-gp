@@ -1,1 +1,4 @@
 .worktrees/
+.badapple-cache/
+src/generated/BadAppleAsset.h
+src/generated/BadAppleAsset.cpp
