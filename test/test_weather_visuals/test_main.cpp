@@ -27,19 +27,18 @@ void test_cat_mood_reacts_to_weather_and_temperature() {
   TEST_ASSERT_EQUAL(CatMood::COLD, WeatherVisuals::catMood(2, 3.0f));
 }
 
-void test_animation_frame_is_two_phase_and_wrap_independent() {
+void test_animation_frame_advances_at_ten_fps() {
   TEST_ASSERT_EQUAL_UINT8(0, WeatherVisuals::animationFrame(0));
-  TEST_ASSERT_EQUAL_UINT8(0, WeatherVisuals::animationFrame(499));
-  TEST_ASSERT_EQUAL_UINT8(1, WeatherVisuals::animationFrame(500));
-  TEST_ASSERT_EQUAL_UINT8(1, WeatherVisuals::animationFrame(999));
-  TEST_ASSERT_EQUAL_UINT8(0, WeatherVisuals::animationFrame(1000));
-  TEST_ASSERT_EQUAL_UINT8(0, WeatherVisuals::animationFrame(0xFFFFFFFFU));
+  TEST_ASSERT_EQUAL_UINT8(0, WeatherVisuals::animationFrame(99));
+  TEST_ASSERT_EQUAL_UINT8(1, WeatherVisuals::animationFrame(100));
+  TEST_ASSERT_EQUAL_UINT8(2, WeatherVisuals::animationFrame(200));
+  TEST_ASSERT_EQUAL_UINT8(9, WeatherVisuals::animationFrame(999));
 }
 
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_weather_codes_map_to_visual_kinds);
   RUN_TEST(test_cat_mood_reacts_to_weather_and_temperature);
-  RUN_TEST(test_animation_frame_is_two_phase_and_wrap_independent);
+  RUN_TEST(test_animation_frame_advances_at_ten_fps);
   return UNITY_END();
 }
