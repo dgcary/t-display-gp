@@ -20,6 +20,10 @@ jobs:
       - run: python tools/validate_bad_apple_contract.py
       - run: pip install platformio
       - run: pio test -e native
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
       - name: Prepare pinned Bad Apple firmware asset
         run: python tools/prepare_bad_apple_asset.py
       - run: pio run -e lilygo-t-display-s3
