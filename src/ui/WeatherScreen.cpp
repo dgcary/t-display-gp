@@ -164,7 +164,6 @@ void WeatherScreen::render(const WeatherViewModel& model, bool, uint32_t animati
   unicodeFont_->setForegroundColor(model.wifiOnline ? UiTheme::UP : UiTheme::WARNING);
   unicodeFont_->setCursor(270, 17);
   unicodeFont_->print(model.wifiOnline ? "Wi-Fi" : "离线");
-  display_->drawFastHLine(0, 24, 320, UiTheme::GRID);
 
   if (!model.configured) {
     unicodeFont_->setForegroundColor(UiTheme::WARNING);
@@ -189,7 +188,6 @@ void WeatherScreen::render(const WeatherViewModel& model, bool, uint32_t animati
   }
 
   const WeatherSnapshot& w = model.weather;
-  display_->drawFastVLine(150, 27, 126, UiTheme::GRID);
 
   unicodeFont_->setForegroundColor(conditionColor(w.weatherCode));
   unicodeFont_->setCursor(8, 42);
