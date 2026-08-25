@@ -74,6 +74,7 @@ Runtime contract:
 - 2190 frames @ 10 FPS, ~219 s, silent, looping.
 - Weather entry starts frame 0; Weather exit stops frame scheduling/rendering.
 - frame updates redraw only the right video region; no 10 FPS full-screen clear.
+- presentation draws no full-width top divider and no vertical separator at the left edge of the video viewport.
 - one packed frame buffer = 2646 bytes; no full uncompressed video buffer in RAM.
 - no `HttpTransport`, `HTTPClient`, `WiFiClientSecure`, `NetworkArbiter`, AppDataWorker request, or dedicated FreeRTOS task for playback.
 - original MP4 and generated C++ media are not committed; generation is deterministic from pinned source identity.
