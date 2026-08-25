@@ -63,7 +63,7 @@ left: current condition/temp/apparent/humidity/wind/rain/update + compact 今/�
 right: x=152..319, y=27..152, Bad Apple 168×126 monochrome video
 ```
 
-The day-after forecast is intentionally not rendered. Bad Apple playback is 2190 frames at 10 FPS (~219 s), silent and looping. It restarts at frame 0 when Weather is entered, redraws only the video viewport at frame cadence, and stops video updates immediately after leaving Weather. Playback uses local flash data and requires no runtime network/task/worker.
+The day-after forecast is intentionally not rendered. The Weather screen does not draw the previous full-width header divider or the vertical separator beside the video, so the Bad Apple viewport stays visually clean. Bad Apple playback is 2190 frames at 10 FPS (~219 s), silent and looping. It restarts at frame 0 when Weather is entered, redraws only the video viewport at frame cadence, and stops video updates immediately after leaving Weather. Playback uses local flash data and requires no runtime network/task/worker.
 
 The project/source-code license does not relicense the underlying Bad Apple!! PV/music; original media rights remain with their respective rights holders.
 
@@ -111,7 +111,7 @@ Never expose HA Token.
 2. boot Nixie; time sync/animation correct.
 3. six-app menu/input.
 4. leave Menu/Weather/HA/Crypto/DeviceInfo/Stock on screen for >60 s and confirm there is no automatic app switch.
-5. enter Weather: current data readable; only 今/明 forecasts appear; right-side Bad Apple fills 168×126, progresses near 10 FPS with no whole-screen flicker.
+5. enter Weather: current data readable; only 今/明 forecasts appear; right-side Bad Apple fills 168×126; no full-width top divider or vertical video separator; playback progresses near 10 FPS with no whole-screen flicker.
 6. keep Weather open for ~220 s and confirm the full sequence loops; leave Weather and confirm video redraw stops; re-enter and confirm it restarts from beginning.
 7. Weather live/cache/network regression.
 8. DeviceInfo/Web.
