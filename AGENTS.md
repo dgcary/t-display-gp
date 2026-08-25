@@ -98,6 +98,7 @@ There is **no automatic idle-to-Nixie behavior**.
 - remote fetch is active-only through the existing shared AppDataWorker.
 - Weather UI shows current data plus compact **Today/Tomorrow only**; `dayAfter` may remain in provider/cache but must not be rendered.
 - right-side Bad Apple viewport is fixed **x=152, y=27, 168×126**.
+- do not draw a full-width header divider or a vertical left/video separator; the Bad Apple viewport and its boundary must remain free of UI divider lines.
 - Bad Apple playback contract: **2190 frames, 10 FPS, ~219 s, 1-bit monochrome, silent, loop**.
 - Weather entry resets playback to frame 0. Weather exit stops animation scheduling/rendering.
 - 10 FPS updates redraw only the video viewport; do not full-screen clear at frame cadence.
@@ -117,7 +118,7 @@ There is **no automatic idle-to-Nixie behavior**.
 
 ## DeviceInfo
 
-Local-only. Show IP, SSID/RSSI/MAC, uptime/time, heap/min heap, PSRAM and `Web: http://<IP>/`; no password/token display.
+Local-only. Show IP, SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM and `Web: http://<IP>/`; no password/token display.
 
 ## Home Assistant
 
@@ -143,7 +144,7 @@ http://  -> WiFiClient; trusted-LAN cleartext mode; CA not required
 https:// -> WiFiClientSecure + configured setCACert(); setInsecure forbidden
 ```
 
-Unknown schemes invalid. HTTPS without CA invalid. Both modes acquire NetworkArbiter, reuse false, bounded HA body 4 KiB. HTTP explicitly exposes Bearer token to LAN observers and must be documented as trusted-LAN only.
+Unknown schemes invalid. HTTPS without valid CA invalid. Both modes acquire NetworkArbiter, reuse false, bounded HA body 4 KiB. HTTP explicitly exposes Bearer token to LAN observers and must be documented as trusted-LAN only.
 
 ## Crypto
 
@@ -212,6 +213,7 @@ Real T-Display-S3 evidence must verify:
 - six-app menu/input.
 - every app/menu remains on the selected view during >60 s inactivity; no automatic switch to Nixie.
 - Weather left text remains readable; Today/Tomorrow are shown and day-after is absent.
+- Weather has no full-width top divider and no vertical divider at the Bad Apple boundary.
 - Weather right 168×126 Bad Apple animation progresses near 10 FPS, shows multiple recognizable silhouette scenes, loops around 219 s, and causes no 10 FPS full-screen flicker.
 - leaving Weather stops Bad Apple redraw; re-entering Weather restarts at frame 0.
 - HA connects as client to existing user server over configured HTTP or CA-verified HTTPS; 1–4 entities render; no secret leak.
