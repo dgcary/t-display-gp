@@ -109,7 +109,7 @@ if MQTT_HEADER.exists() and MQTT_SOURCE.exists():
         "device/",
         "/request",
         "pushall",
-        "mqtt.loop()",
+        "mqtt_->loop()",
     ):
         if marker not in mqtt_source:
             errors.append(f"BambuMqttService.cpp missing MQTT marker: {marker}")
