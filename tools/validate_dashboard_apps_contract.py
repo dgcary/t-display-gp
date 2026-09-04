@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Home Assistant + Crypto dashboard integration and security contracts."""
+"""Validate Home Assistant dashboard integration and security contracts."""
 from pathlib import Path
 import sys
 
@@ -12,17 +12,12 @@ required_files = {
     "src/network/HomeAssistantConfig.h", "src/network/HomeAssistantConfig.cpp",
     "src/network/HomeAssistantConfigStore.h", "src/network/HomeAssistantConfigStore.cpp",
     "src/network/HomeAssistantConfigPortal.h", "src/network/HomeAssistantConfigPortal.cpp",
-    "src/app/CryptoApp.h", "src/app/CryptoApp.cpp",
-    "src/app/CryptoController.h", "src/app/CryptoController.cpp",
-    "src/ui/CryptoScreen.h", "src/ui/CryptoScreen.cpp",
-    "src/network/CryptoProvider.h", "src/network/CryptoProvider.cpp",
 }
 checks = {
-    "src/app/AppShell.h": ["HOME_ASSISTANT", "CRYPTO"],
-    "src/main.cpp": ["HomeAssistantApp", "CryptoApp", '"智能家居"', '"加密货币"', "AppId::HOME_ASSISTANT", "AppId::CRYPTO"],
-    "src/network/AppDataTypes.h": ["HOME_ASSISTANT", "CRYPTO", "tryReceive(AppDataRequestType type"],
-    "src/network/AppDataWorker.cpp": ["HomeAssistantProvider", "CryptoProvider", "AppDataRequestType::HOME_ASSISTANT", "AppDataRequestType::CRYPTO"],
-    "src/network/CryptoProvider.cpp": ["data-api.binance.vision/api/v3/ticker/24hr", "BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "src/app/AppShell.h": ["HOME_ASSISTANT"],
+    "src/main.cpp": ["HomeAssistantApp", '"智能家居"', "AppId::HOME_ASSISTANT", "AppDataWorker appDataWorker"],
+    "src/network/AppDataTypes.h": ["HOME_ASSISTANT", "tryReceive(AppDataRequestType type"],
+    "src/network/AppDataWorker.cpp": ["HomeAssistantProvider", "AppDataRequestType::HOME_ASSISTANT", "OpenMeteoProvider"],
     "src/network/HomeAssistantConfig.cpp": ["http://", "https://", "isHttpsUrl", "CA_CERT"],
     "src/network/SecureHomeAssistantTransport.cpp": ["Authorization", "Bearer ", "WiFiClient client", "setCACert", "/api/states/", "NetworkArbiter", '"HA_HTTP"', '"HA_CA"'],
     "src/network/HomeAssistantConfigPortal.cpp": ["WebServer server{8081}", "ha_token_set", "ha_ca_set", "http://homeassistant.local:8123"],
@@ -51,20 +46,23 @@ if portal.exists():
 main_cpp = Path("src/main.cpp")
 if main_cpp.exists() and main_cpp.read_text(encoding="utf-8").count("AppDataWorker appDataWorker") != 1:
     security_violations.append("exactly one shared AppDataWorker is required")
+worker = Path("src/network/AppDataWorker.cpp")
+if worker.exists() and "Crypto" in worker.read_text(encoding="utf-8"):
+    security_violations.append("shared AppDataWorker must no longer contain Crypto paths")
 
 if missing_files or missing_contract or security_violations:
     if missing_files:
-        print("missing dashboard app files:")
+        print("missing Home Assistant files:")
         for item in missing_files:
             print(f"  {item}")
     if missing_contract:
-        print("missing dashboard integration contract:")
+        print("missing Home Assistant integration contract:")
         for item in missing_contract:
             print(f"  {item}")
     if security_violations:
-        print("dashboard security/architecture violations:")
+        print("Home Assistant security/architecture violations:")
         for item in security_violations:
             print(f"  {item}")
     sys.exit(1)
 
-print("Home Assistant HTTP + verified HTTPS client and Binance market-only Crypto shared-worker contract: OK")
+print("Home Assistant HTTP + verified HTTPS shared-worker contract: OK")

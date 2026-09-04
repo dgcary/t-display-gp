@@ -11,9 +11,7 @@ enum class AppId {
   MENU,
   STOCK,
   WEATHER,
-  NIXIE_CLOCK,
   HOME_ASSISTANT,
-  CRYPTO,
   DEVICE_INFO,
 };
 
@@ -72,7 +70,7 @@ class MenuApp final : public IApp {
 class AppManager {
  public:
   AppManager(MenuApp& menu, std::initializer_list<IApp*> apps);
-  bool begin(AppId startupApp = AppId::NIXIE_CLOCK);
+  bool begin(AppId startupApp = AppId::STOCK);
   void onInput(InputEvent event);
   void tick(uint32_t nowMs);
   void render();

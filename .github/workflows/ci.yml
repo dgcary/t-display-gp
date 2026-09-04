@@ -16,7 +16,6 @@ jobs:
       - run: python tools/validate_provisioning_contract.py
       - run: python tools/validate_http_transport_contract.py
       - run: python tools/validate_app_shell_contract.py
-      - run: python tools/validate_nixie_clock_contract.py
       - run: python tools/validate_dashboard_apps_contract.py
       - run: python tools/validate_bad_apple_contract.py
       - run: pip install platformio

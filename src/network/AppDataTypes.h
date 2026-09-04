@@ -3,14 +3,12 @@
 #include <cstdint>
 
 #include "AppConfig.h"
-#include "CryptoProvider.h"
 #include "HomeAssistantConfig.h"
 #include "HomeAssistantProvider.h"
 #include "WeatherProvider.h"
 
 enum class AppDataRequestType {
   WEATHER,
-  CRYPTO,
   HOME_ASSISTANT,
 };
 
@@ -29,9 +27,6 @@ struct AppDataResult {
   WeatherError error = WeatherError::NONE;
   WeatherSnapshot weather;
   WeatherDiagnostics diagnostics;
-  CryptoError cryptoError = CryptoError::NONE;
-  CryptoSnapshot crypto;
-  CryptoDiagnostics cryptoDiagnostics;
   HomeAssistantError homeAssistantError = HomeAssistantError::NONE;
   uint8_t entityIndex = 0;
   HomeAssistantEntitySnapshot homeAssistant;

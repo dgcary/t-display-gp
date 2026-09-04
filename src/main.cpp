@@ -7,7 +7,6 @@
 #include "AppDataWorker.h"
 #include "AppShell.h"
 #include "ConfigStore.h"
-#include "CryptoApp.h"
 #include "DeviceInfoApp.h"
 #include "DeviceLayer.h"
 #include "HomeAssistantApp.h"
@@ -16,7 +15,6 @@
 #include "HomeAssistantConfigStore.h"
 #include "MenuScreen.h"
 #include "NetworkArbiter.h"
-#include "NixieClockApp.h"
 #include "ProvisioningService.h"
 #include "StockApp.h"
 #include "WeatherApp.h"
@@ -33,18 +31,14 @@ AppDataWorker appDataWorker;
 MenuScreen menuScreen;
 StockApp stockApp(device);
 WeatherApp weatherApp(device, appDataWorker);
-NixieClockApp nixieClockApp(device);
 HomeAssistantApp homeAssistantApp(device, appDataWorker);
-CryptoApp cryptoApp(device, appDataWorker);
 DeviceInfoApp deviceInfoApp(device);
 MenuApp menuApp({{AppId::STOCK, "股票"},
                  {AppId::WEATHER, "天气"},
-                 {AppId::NIXIE_CLOCK, "辉光时钟"},
                  {AppId::HOME_ASSISTANT, "智能家居"},
-                 {AppId::CRYPTO, "加密货币"},
                  {AppId::DEVICE_INFO, "设备信息"}},
                 menuScreen);
-AppManager appManager(menuApp, {&stockApp, &weatherApp, &nixieClockApp, &homeAssistantApp, &cryptoApp, &deviceInfoApp});
+AppManager appManager(menuApp, {&stockApp, &weatherApp, &homeAssistantApp, &deviceInfoApp});
 bool appReady = false;
 uint32_t nextResourceLogMs = 0;
 
@@ -55,9 +49,7 @@ const char* appName(AppId id) {
     case AppId::MENU: return "MENU";
     case AppId::STOCK: return "STOCK";
     case AppId::WEATHER: return "WEATHER";
-    case AppId::NIXIE_CLOCK: return "NIXIE_CLOCK";
     case AppId::HOME_ASSISTANT: return "HOME_ASSISTANT";
-    case AppId::CRYPTO: return "CRYPTO";
     case AppId::DEVICE_INFO: return "DEVICE_INFO";
   }
   return "UNKNOWN";
@@ -102,11 +94,9 @@ void setup() {
   menuScreen.begin(device.display(), device.unicodeFont());
   if (!stockApp.begin(appConfig)) { Serial.println("Stock app failed to start"); return; }
   if (!weatherApp.begin(appConfig)) { Serial.println("Weather app failed to start"); return; }
-  if (!nixieClockApp.begin()) { Serial.println("Nixie clock app failed to start"); return; }
   if (!homeAssistantApp.begin(homeAssistantConfig)) { Serial.println("Home Assistant app failed to start"); return; }
-  if (!cryptoApp.begin()) { Serial.println("Crypto app failed to start"); return; }
   if (!deviceInfoApp.begin()) { Serial.println("Device info app failed to start"); return; }
-  if (!appManager.begin(AppId::NIXIE_CLOCK)) { Serial.println("App manager failed to start"); return; }
+  if (!appManager.begin(AppId::STOCK)) { Serial.println("App manager failed to start"); return; }
   appReady = true;
   Serial.println("[boot] multi-app loop ready");
   logResourceSnapshot(millis());
