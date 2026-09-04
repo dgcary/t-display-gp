@@ -18,6 +18,7 @@ constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 1500;
 constexpr uint32_t HTTP_READ_TIMEOUT_MS = 2500;
 constexpr uint32_t HTTP_TLS_HANDSHAKE_TIMEOUT_SEC = 5;
 constexpr size_t HTTP_MAX_BODY_BYTES = 32768;
+constexpr size_t BAMBU_HTTPS_MAX_BODY_BYTES = 16384;
 constexpr uint32_t CURRENT_QUOTE_REQUEST_TTL_MS = 8000;
 constexpr uint32_t BACKGROUND_QUOTE_REQUEST_TTL_MS = 12000;
 constexpr uint32_t PRIMARY_PROBE_REQUEST_TTL_MS = 30000;
@@ -31,4 +32,6 @@ constexpr uint32_t INTRADAY_DELAY_MS = 180000;
 constexpr uint32_t CHANNEL_DELAY_FAILURE_CYCLES = 2;
 constexpr char CONFIG_NAMESPACE[] = "stockticker";
 constexpr uint32_t CONFIG_SCHEMA_VERSION = 2;
+constexpr char BAMBU_CONFIG_NAMESPACE[] = "bambucloud";
+constexpr char BAMBU_CONFIG_KEY[] = "config";
 }  // namespace BuildConfig
