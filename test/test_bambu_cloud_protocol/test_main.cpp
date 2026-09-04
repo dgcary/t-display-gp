@@ -63,6 +63,25 @@ void test_extract_user_id_from_jwt_payload() {
   TEST_ASSERT_EQUAL_STRING("u_12345", userId.c_str());
 }
 
+void test_profile_reply_extracts_string_and_numeric_user_id() {
+  static std::string userId;
+  userId = "old";
+  TEST_ASSERT_TRUE(parseBambuProfileUserId(R"({"uidStr":"123456"})", userId));
+  TEST_ASSERT_EQUAL_STRING("u_123456", userId.c_str());
+
+  TEST_ASSERT_TRUE(parseBambuProfileUserId(R"({"uid":987654})", userId));
+  TEST_ASSERT_EQUAL_STRING("u_987654", userId.c_str());
+}
+
+void test_profile_reply_fails_closed_on_missing_or_malformed_uid() {
+  static std::string userId;
+  userId = "keep-me";
+  TEST_ASSERT_FALSE(parseBambuProfileUserId(R"({"name":"no uid"})", userId));
+  TEST_ASSERT_EQUAL_STRING("keep-me", userId.c_str());
+  TEST_ASSERT_FALSE(parseBambuProfileUserId("{broken", userId));
+  TEST_ASSERT_EQUAL_STRING("keep-me", userId.c_str());
+}
+
 void test_device_list_parses_bound_printers_and_fails_closed() {
   static std::vector<BambuCloudDevice> devices;
   devices = {
@@ -97,6 +116,8 @@ int main() {
   RUN_TEST(test_login_reply_detects_tfa_by_key_when_login_type_is_empty);
   RUN_TEST(test_login_reply_maps_http_error_and_malformed_input_fails_closed);
   RUN_TEST(test_extract_user_id_from_jwt_payload);
+  RUN_TEST(test_profile_reply_extracts_string_and_numeric_user_id);
+  RUN_TEST(test_profile_reply_fails_closed_on_missing_or_malformed_uid);
   RUN_TEST(test_device_list_parses_bound_printers_and_fails_closed);
   RUN_TEST(test_report_topic_is_bounded_to_one_device_serial);
   return UNITY_END();
