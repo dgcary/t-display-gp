@@ -8,7 +8,10 @@ STORE_HEADER = ROOT / "src" / "network" / "BambuConfigStore.h"
 STORE_SOURCE = ROOT / "src" / "network" / "BambuConfigStore.cpp"
 CLIENT_HEADER = ROOT / "src" / "network" / "BambuCloudClient.h"
 CLIENT_SOURCE = ROOT / "src" / "network" / "BambuCloudClient.cpp"
+MQTT_HEADER = ROOT / "src" / "network" / "BambuMqttService.h"
+MQTT_SOURCE = ROOT / "src" / "network" / "BambuMqttService.cpp"
 BUILD_CONFIG = ROOT / "include" / "build_config.h"
+PLATFORMIO = ROOT / "platformio.ini"
 
 errors = []
 
@@ -28,6 +31,7 @@ if PROTOCOL_HEADER.exists() and PROTOCOL_SOURCE.exists():
         "ERROR",
         "parseBambuLoginReply",
         "extractBambuUserIdFromJwt",
+        "parseBambuProfileUserId",
         "parseBambuDeviceList",
         "bambuReportTopic",
     ]
@@ -41,7 +45,8 @@ if PROTOCOL_HEADER.exists() and PROTOCOL_SOURCE.exists():
         if marker in joined:
             errors.append(f"pure protocol layer must not depend on transport: {marker}")
 
-for path in (STORE_HEADER, STORE_SOURCE, CLIENT_HEADER, CLIENT_SOURCE, BUILD_CONFIG):
+for path in (STORE_HEADER, STORE_SOURCE, CLIENT_HEADER, CLIENT_SOURCE, BUILD_CONFIG, PLATFORMIO,
+             MQTT_HEADER, MQTT_SOURCE):
     if not path.exists():
         errors.append(f"missing {path.relative_to(ROOT)}")
 
@@ -86,16 +91,49 @@ if CLIENT_HEADER.exists() and CLIENT_SOURCE.exists():
     if "Serial" in client_source:
         errors.append("BambuCloudClient.cpp must not log credentials or cloud response bodies")
 
+if MQTT_HEADER.exists() and MQTT_SOURCE.exists():
+    mqtt_header = MQTT_HEADER.read_text(encoding="utf-8")
+    mqtt_source = MQTT_SOURCE.read_text(encoding="utf-8")
+    for marker in ("class BambuMqttService", "begin(", "snapshot()", "status()"):
+        if marker not in mqtt_header:
+            errors.append(f"BambuMqttService.h missing marker: {marker}")
+    for marker in (
+        "PubSubClient",
+        "WiFiClientSecure",
+        "setCACertBundle",
+        "rootca_crt_bundle_start",
+        "setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)",
+        "sharedNetworkArbiter",
+        "bambuBrokerForRegion",
+        "bambuReportTopic",
+        "device/",
+        "/request",
+        "pushall",
+        "mqtt.loop()",
+    ):
+        if marker not in mqtt_source:
+            errors.append(f"BambuMqttService.cpp missing MQTT marker: {marker}")
+    if "setInsecure" in mqtt_source:
+        errors.append("Bambu MQTT Cloud transport must never call setInsecure()")
+
 if BUILD_CONFIG.exists():
     build_config = BUILD_CONFIG.read_text(encoding="utf-8")
     required_build_markers = [
         'BAMBU_CONFIG_NAMESPACE[] = "bambucloud"',
         'BAMBU_CONFIG_KEY[] = "config"',
         "BAMBU_HTTPS_MAX_BODY_BYTES",
+        "BAMBU_MQTT_BUFFER_BYTES",
     ]
     for marker in required_build_markers:
         if marker not in build_config:
             errors.append(f"build_config.h missing Bambu marker: {marker}")
+    if "BAMBU_MQTT_BUFFER_BYTES = 40960" not in build_config:
+        errors.append("BAMBU_MQTT_BUFFER_BYTES must be at least the approved 40960-byte V1 buffer")
+
+if PLATFORMIO.exists():
+    platformio = PLATFORMIO.read_text(encoding="utf-8")
+    if "knolleary/PubSubClient" not in platformio:
+        errors.append("platformio.ini missing PubSubClient dependency")
 
 # No Bambu-owned production source may weaken TLS verification.
 for path in sorted((ROOT / "src" / "network").glob("Bambu*.cpp")):
@@ -108,4 +146,4 @@ if errors:
         print(f"ERROR: {error}")
     sys.exit(1)
 
-print("Bambu Cloud protocol + secret store + verified HTTPS contract: OK")
+print("Bambu Cloud protocol + secret store + verified HTTPS + persistent MQTT contract: OK")
