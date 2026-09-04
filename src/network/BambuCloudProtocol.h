@@ -25,5 +25,6 @@ struct BambuCloudDevice {
 
 bool parseBambuLoginReply(int httpStatus, const std::string& body, BambuLoginReply& out);
 bool extractBambuUserIdFromJwt(const std::string& token, std::string& userId);
+bool parseBambuProfileUserId(const std::string& body, std::string& userId);
 bool parseBambuDeviceList(const std::string& body, std::vector<BambuCloudDevice>& out);
 std::string bambuReportTopic(const std::string& serial);
