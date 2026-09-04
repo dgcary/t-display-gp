@@ -16,8 +16,8 @@
 #include "DeviceLayer.h"
 #include "HomeAssistantApp.h"
 #include "HomeAssistantConfig.h"
-#include "HomeAssistantConfigPortal.h"
 #include "HomeAssistantConfigStore.h"
+#include "IntegrationConfigPortal.h"
 #include "MenuScreen.h"
 #include "NetworkArbiter.h"
 #include "ProvisioningService.h"
@@ -32,7 +32,7 @@ ConfigStore configStore;
 HomeAssistantConfigStore homeAssistantConfigStore;
 BambuConfigStore bambuConfigStore;
 ProvisioningService provisioning;
-HomeAssistantConfigPortal homeAssistantConfigPortal;
+IntegrationConfigPortal integrationConfigPortal;
 BambuCloudClient bambuCloudClient;
 BambuMqttService bambuMqttService;
 DeviceLayer device;
@@ -95,7 +95,6 @@ void setup() {
   Serial.println("[boot] provisioning complete; starting shared services");
   startChinaTimeSync();
   provisioning.beginWebPortal(appConfig);
-  homeAssistantConfigPortal.begin(homeAssistantConfig);
   if (!sharedNetworkArbiter().begin()) {
     Serial.println("Network arbiter failed to start");
     return;
@@ -108,6 +107,8 @@ void setup() {
     Serial.println("Bambu MQTT service failed to start");
     return;
   }
+  integrationConfigPortal.begin(homeAssistantConfig, bambuConfig, bambuConfigStore,
+                                bambuCloudClient, bambuMqttService);
   menuScreen.begin(device.display(), device.unicodeFont());
   if (!stockApp.begin(appConfig)) { Serial.println("Stock app failed to start"); return; }
   if (!weatherApp.begin(appConfig)) { Serial.println("Weather app failed to start"); return; }
@@ -122,7 +123,7 @@ void setup() {
 
 void loop() {
   provisioning.process();
-  homeAssistantConfigPortal.process();
+  integrationConfigPortal.process();
   if (!appReady) { delay(1); return; }
   const uint32_t nowMs = millis();
   appManager.onInput(device.pollButtons(nowMs));
