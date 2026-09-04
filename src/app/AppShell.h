@@ -11,6 +11,7 @@ enum class AppId {
   MENU,
   STOCK,
   WEATHER,
+  BAMBU,
   HOME_ASSISTANT,
   DEVICE_INFO,
 };

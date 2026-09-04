@@ -6,6 +6,11 @@
 #include "AppConfig.h"
 #include "AppDataWorker.h"
 #include "AppShell.h"
+#include "BambuApp.h"
+#include "BambuCloudClient.h"
+#include "BambuConfig.h"
+#include "BambuConfigStore.h"
+#include "BambuMqttService.h"
 #include "ConfigStore.h"
 #include "DeviceInfoApp.h"
 #include "DeviceLayer.h"
@@ -22,23 +27,29 @@
 namespace {
 AppConfig appConfig;
 HomeAssistantConfig homeAssistantConfig;
+BambuConfig bambuConfig;
 ConfigStore configStore;
 HomeAssistantConfigStore homeAssistantConfigStore;
+BambuConfigStore bambuConfigStore;
 ProvisioningService provisioning;
 HomeAssistantConfigPortal homeAssistantConfigPortal;
+BambuCloudClient bambuCloudClient;
+BambuMqttService bambuMqttService;
 DeviceLayer device;
 AppDataWorker appDataWorker;
 MenuScreen menuScreen;
 StockApp stockApp(device);
 WeatherApp weatherApp(device, appDataWorker);
+BambuApp bambuApp(device, bambuMqttService, bambuConfig);
 HomeAssistantApp homeAssistantApp(device, appDataWorker);
 DeviceInfoApp deviceInfoApp(device);
 MenuApp menuApp({{AppId::STOCK, "股票"},
                  {AppId::WEATHER, "天气"},
+                 {AppId::BAMBU, "Bambu Lab"},
                  {AppId::HOME_ASSISTANT, "智能家居"},
                  {AppId::DEVICE_INFO, "设备信息"}},
                 menuScreen);
-AppManager appManager(menuApp, {&stockApp, &weatherApp, &homeAssistantApp, &deviceInfoApp});
+AppManager appManager(menuApp, {&stockApp, &weatherApp, &bambuApp, &homeAssistantApp, &deviceInfoApp});
 bool appReady = false;
 uint32_t nextResourceLogMs = 0;
 
@@ -49,6 +60,7 @@ const char* appName(AppId id) {
     case AppId::MENU: return "MENU";
     case AppId::STOCK: return "STOCK";
     case AppId::WEATHER: return "WEATHER";
+    case AppId::BAMBU: return "BAMBU";
     case AppId::HOME_ASSISTANT: return "HOME_ASSISTANT";
     case AppId::DEVICE_INFO: return "DEVICE_INFO";
   }
@@ -72,6 +84,7 @@ void setup() {
   device.begin();
   configStore.load(appConfig);
   homeAssistantConfigStore.load(homeAssistantConfig);
+  bambuConfigStore.load(bambuConfig);
   Serial.println("[boot] provisioning start");
   if (!provisioning.ensureConnected(appConfig)) {
     Serial.println("Provisioning failed; restarting");
@@ -91,9 +104,14 @@ void setup() {
     Serial.println("App-data worker failed to start");
     return;
   }
+  if (!bambuMqttService.begin(bambuConfig, bambuConfigStore, bambuCloudClient)) {
+    Serial.println("Bambu MQTT service failed to start");
+    return;
+  }
   menuScreen.begin(device.display(), device.unicodeFont());
   if (!stockApp.begin(appConfig)) { Serial.println("Stock app failed to start"); return; }
   if (!weatherApp.begin(appConfig)) { Serial.println("Weather app failed to start"); return; }
+  if (!bambuApp.begin()) { Serial.println("Bambu app failed to start"); return; }
   if (!homeAssistantApp.begin(homeAssistantConfig)) { Serial.println("Home Assistant app failed to start"); return; }
   if (!deviceInfoApp.begin()) { Serial.println("Device info app failed to start"); return; }
   if (!appManager.begin(AppId::STOCK)) { Serial.println("App manager failed to start"); return; }
