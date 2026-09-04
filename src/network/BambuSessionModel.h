@@ -5,6 +5,7 @@
 enum class BambuSessionState {
   DISABLED = 0,
   UNCONFIGURED,
+  PRINTER_SELECTION_REQUIRED,
   MQTT_CONNECTING,
   ONLINE,
   TOKEN_INVALID,
@@ -41,7 +42,7 @@ class BambuSessionModel {
   BambuSessionState state_ = BambuSessionState::UNCONFIGURED;
   bool automaticReloginAvailable_ = false;
   bool reloginScheduled_ = false;
-  uint8_t reloginFailureCount_ = 0;
+  uint8_t reloginFailureCount_ = 0U;
   uint32_t reloginAnchorMs_ = 0;
-  uint32_t reloginDelayMs_ = 0;
+  uint32_t reloginDelayMs_ = 0U;
 };
