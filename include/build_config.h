@@ -12,6 +12,8 @@ constexpr uint32_t MIN_QUOTE_REFRESH_MS = 3000;
 constexpr uint32_t MAX_QUOTE_REFRESH_MS = 5000;
 constexpr uint32_t INTRADAY_REFRESH_MS = 60000;
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
+constexpr uint32_t BUTTON_LONG_PRESS_MS = 700;
+constexpr uint32_t WEATHER_DEFAULT_REFRESH_MIN = 15;
 constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 1500;
 constexpr uint32_t HTTP_READ_TIMEOUT_MS = 2500;
 constexpr uint32_t HTTP_TLS_HANDSHAKE_TIMEOUT_SEC = 5;
@@ -28,5 +30,5 @@ constexpr uint32_t QUOTE_DELAY_MS = 15000;
 constexpr uint32_t INTRADAY_DELAY_MS = 180000;
 constexpr uint32_t CHANNEL_DELAY_FAILURE_CYCLES = 2;
 constexpr char CONFIG_NAMESPACE[] = "stockticker";
-constexpr uint32_t CONFIG_SCHEMA_VERSION = 1;
+constexpr uint32_t CONFIG_SCHEMA_VERSION = 2;
 }  // namespace BuildConfig

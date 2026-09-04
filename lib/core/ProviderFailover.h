@@ -17,7 +17,7 @@ class ProviderFailover {
   static constexpr uint64_t FAILURE_WINDOW_MS = 60000;
   static constexpr uint64_t PRIMARY_PROBE_INTERVAL_MS = 120000;
 
-  ProviderId active_ = ProviderId::EAST_MONEY;
+  ProviderId active_ = ProviderId::TENCENT;
   uint32_t primaryFailureCount_ = 0;
   uint64_t firstPrimaryFailureMs_ = 0;
   uint32_t recoverySuccessCount_ = 0;

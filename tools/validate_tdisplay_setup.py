@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Validate the T-Display-S3 TFT and logical-orientation contract."""
+"""Validate the T-Display-S3 TFT, orientation, C++17, native/UI wiring, and prebuilt artifact contract."""
 from pathlib import Path
 import sys
 
 text = Path("platformio.ini").read_text(encoding="utf-8")
 required = {
+    "default_envs = lilygo-t-display-s3",
+    "build_unflags =",
+    "-std=gnu++11",
+    "-std=gnu++17",
     "-DUSER_SETUP_LOADED=1",
     "-DST7789_DRIVER=1",
     "-DINIT_SEQUENCE_3=1",
@@ -29,6 +33,10 @@ required = {
     "-DTFT_D7=48",
     "-DTFT_BL=38",
     "-DTFT_BACKLIGHT_ON=HIGH",
+    "-DLOAD_GLCD=1",
+    "-DLOAD_FONT2=1",
+    "-DLOAD_FONT4=1",
+    "-DSMOOTH_FONT=1",
 }
 missing = sorted(flag for flag in required if flag not in text)
 
@@ -38,11 +46,16 @@ required_native_test_wiring = {
     "-Isrc/network",
     "-Isrc/device",
     "-Isrc/ui",
+    "+<app/AppShell.cpp>",
     "+<app/StockController.cpp>",
+    "+<app/WeatherController.cpp>",
     "+<network/EastMoneyProvider.cpp>",
+    "+<network/OpenMeteoProvider.cpp>",
     "+<network/TencentProvider.cpp>",
     "+<network/ProvisioningForm.cpp>",
     "+<ui/StockScreen.cpp>",
+    "+<ui/WeatherCatArt.cpp>",
+    "+<ui/WeatherVisuals.cpp>",
 }
 missing_native = sorted(item for item in required_native_test_wiring if item not in text)
 
@@ -51,6 +64,10 @@ present_forbidden = [flag for flag in forbidden if flag in text]
 
 device = Path("src/device/DeviceLayer.cpp").read_text(encoding="utf-8")
 screen = Path("src/ui/StockScreen.h").read_text(encoding="utf-8")
+stock_screen_cpp = Path("src/ui/StockScreen.cpp").read_text(encoding="utf-8")
+weather_screen_cpp = Path("src/ui/WeatherScreen.cpp").read_text(encoding="utf-8")
+weather_cat_art_h = Path("src/ui/WeatherCatArt.h").read_text(encoding="utf-8")
+workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 required_landscape = {
     "DeviceLayer.cpp": ["tft_.setRotation(3)"],
     "StockScreen.h": ["SCREEN_WIDTH = 320", "SCREEN_HEIGHT = 170"],
@@ -63,9 +80,47 @@ for needle in required_landscape["StockScreen.h"]:
     if needle not in screen:
         missing_landscape.append(f"StockScreen.h: {needle}")
 
-if missing or present_forbidden or missing_native or missing_landscape:
+required_ui_wiring = {
+    "StockScreen.cpp": [
+        "StockScreenText::providerSummary(model.provider, model.intradayProvider, model.hasIntraday)",
+        "previous_.intradayProvider != next.intradayProvider",
+    ],
+    "WeatherScreen.cpp": [
+        "font.print(conditionName(day.weatherCode))",
+        "renderAnimation",
+        "WeatherVisuals::catMood",
+        "WeatherCatArt::pose",
+        "drawWatercolorCat",
+    ],
+    "WeatherCatArt.h": [
+        "HAND_PAINTED_WATERCOLOR",
+        "CatAccessory::",
+    ],
+}
+missing_ui = []
+for needle in required_ui_wiring["StockScreen.cpp"]:
+    if needle not in stock_screen_cpp:
+        missing_ui.append(f"StockScreen.cpp: {needle}")
+for needle in required_ui_wiring["WeatherScreen.cpp"]:
+    if needle not in weather_screen_cpp:
+        missing_ui.append(f"WeatherScreen.cpp: {needle}")
+for needle in required_ui_wiring["WeatherCatArt.h"]:
+    if needle not in weather_cat_art_h:
+        missing_ui.append(f"WeatherCatArt.h: {needle}")
+
+required_artifact_workflow = {
+    "actions/upload-artifact@v4",
+    "tdisplay-gp-firmware-",
+    ".pio/build/lilygo-t-display-s3/firmware.bin",
+    ".pio/build/lilygo-t-display-s3/partitions.bin",
+    ".pio/build/lilygo-t-display-s3/bootloader.bin",
+    "firmware-manifest.txt",
+}
+missing_artifact_workflow = sorted(item for item in required_artifact_workflow if item not in workflow)
+
+if missing or present_forbidden or missing_native or missing_landscape or missing_ui or missing_artifact_workflow:
     if missing:
-        print("missing TFT contract flags:")
+        print("missing TFT/C++ build contract flags:")
         for flag in missing:
             print(f"  {flag}")
     if missing_native:
@@ -80,6 +135,14 @@ if missing or present_forbidden or missing_native or missing_landscape:
         print("missing landscape contract:")
         for item in missing_landscape:
             print(f"  {item}")
+    if missing_ui:
+        print("missing UI wiring contract:")
+        for item in missing_ui:
+            print(f"  {item}")
+    if missing_artifact_workflow:
+        print("missing prebuilt firmware artifact workflow contract:")
+        for item in missing_artifact_workflow:
+            print(f"  {item}")
     sys.exit(1)
 
-print("T-Display-S3 TFT + 320x170 landscape contract: OK")
+print("T-Display-S3 TFT + C++17 + 320x170 + multi-app + prebuilt firmware artifact contract: OK")
