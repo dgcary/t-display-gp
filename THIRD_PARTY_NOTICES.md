@@ -16,6 +16,12 @@ references.
 - **Xinyuan-LilyGO/T-Display-S3** — MIT License. Authoritative board pinout,
   display setup, firmware examples, and PlatformIO reference.
   https://github.com/Xinyuan-LilyGO/T-Display-S3
+- **Keralots/BambuHelper** — MIT License. Pinned protocol/reference implementation
+  for Bambu Cloud authentication, broker selection, Cloud MQTT session behavior,
+  large report-buffer requirements, and read-only printer-state interpretation.
+  This firmware adapts only the protocol behavior needed for its own modular
+  Bambu integration; it does not import the upstream UI/OTA/Wi-Fi stack wholesale.
+  https://github.com/Keralots/BambuHelper
 
 ## Direct dependencies
 
@@ -32,5 +38,8 @@ references.
   https://github.com/tzapu/WiFiManager
 - **bblanchon/ArduinoJson** — MIT License.
   https://github.com/bblanchon/ArduinoJson
+- **knolleary/PubSubClient** — MIT License. Used for the persistent, verified-TLS
+  Bambu Cloud MQTT client.
+  https://github.com/knolleary/pubsubclient
 
 Each dependency remains subject to its own upstream license and notices.
