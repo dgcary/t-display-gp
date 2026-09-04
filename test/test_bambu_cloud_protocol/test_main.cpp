@@ -61,7 +61,10 @@ void test_extract_user_id_from_jwt_payload() {
 
 void test_device_list_parses_bound_printers_and_fails_closed() {
   const std::string body = R"({"data":[{"dev_id":"01P00A123456789","name":"Office P1S","dev_product_name":"P1S"},{"dev_id":"03009A987654321","name":"A1 mini","dev_product_name":"A1 mini"}]})";
-  std::vector<BambuCloudDevice> devices;
+  std::vector<BambuCloudDevice> devices = {
+      {"sentinel-1", "sentinel", "sentinel"},
+      {"sentinel-2", "sentinel", "sentinel"},
+  };
   TEST_ASSERT_TRUE(parseBambuDeviceList(body, devices));
   TEST_ASSERT_EQUAL_UINT32(2, devices.size());
   TEST_ASSERT_EQUAL_STRING("01P00A123456789", devices[0].serial.c_str());
