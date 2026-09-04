@@ -94,7 +94,7 @@ if MQTT_HEADER.exists() and MQTT_SOURCE.exists():
             errors.append(f"BambuMqttService.cpp missing MQTT marker: {marker}")
     if "setInsecure" in mqtt_source:
         errors.append("Bambu MQTT Cloud transport must never call setInsecure()")
-    if mqtt_source.count("mqtt_->publish") != 1 or '"pushall"' not in mqtt_source:
+    if mqtt_source.count("mqtt_->publish") != 1 or "pushall" not in mqtt_source:
         errors.append("Bambu MQTT V1 may publish only the single read-only pushall request path")
     for control in ('"pause"', '"resume"', '"stop"', '"temperature"'):
         if control in mqtt_source:
