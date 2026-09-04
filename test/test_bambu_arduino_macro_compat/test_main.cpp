@@ -6,6 +6,9 @@
 #include "BambuSessionModel.h"
 #undef DISABLED
 
+void setUp() {}
+void tearDown() {}
+
 void test_bambu_session_header_is_safe_after_arduino_disabled_macro() {
   BambuSessionModel model;
   TEST_ASSERT_EQUAL_INT(static_cast<int>(BambuSessionState::UNCONFIGURED),
