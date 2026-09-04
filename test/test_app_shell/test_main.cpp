@@ -51,23 +51,23 @@ struct ShellFixture {
   FakeMenuRenderer renderer;
   std::vector<AppDescriptor> descriptors{{AppId::STOCK, "股票"},
                                          {AppId::WEATHER, "天气"},
-                                         {AppId::NIXIE_CLOCK, "辉光时钟"},
+                                         {AppId::HOME_ASSISTANT, "智能家居"},
                                          {AppId::DEVICE_INFO, "设备信息"}};
   MenuApp menu{descriptors, renderer};
   FakeApp stock{AppId::STOCK, "股票"};
   FakeApp weather{AppId::WEATHER, "天气"};
-  FakeApp nixie{AppId::NIXIE_CLOCK, "辉光时钟"};
+  FakeApp homeAssistant{AppId::HOME_ASSISTANT, "智能家居"};
   FakeApp deviceInfo{AppId::DEVICE_INFO, "设备信息"};
-  AppManager manager{menu, {&stock, &weather, &nixie, &deviceInfo}};
+  AppManager manager{menu, {&stock, &weather, &homeAssistant, &deviceInfo}};
 };
 
-void test_defaults_to_nixie_and_enters_once() {
+void test_defaults_to_stock_and_enters_once() {
   ShellFixture f;
   TEST_ASSERT_TRUE(f.manager.begin());
-  TEST_ASSERT_EQUAL(AppId::NIXIE_CLOCK, f.manager.activeAppId());
-  TEST_ASSERT_EQUAL_INT(1, f.nixie.enters);
-  TEST_ASSERT_EQUAL_INT(0, f.stock.enters);
+  TEST_ASSERT_EQUAL(AppId::STOCK, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL_INT(1, f.stock.enters);
   TEST_ASSERT_EQUAL_INT(0, f.weather.enters);
+  TEST_ASSERT_EQUAL_INT(0, f.homeAssistant.enters);
 }
 
 void test_prev_long_returns_to_menu_and_does_not_reach_stock() {
@@ -140,7 +140,6 @@ void test_weather_remains_active_after_long_inactivity() {
   f.manager.tick(1000 + 24U * 60U * 60U * 1000U);
   TEST_ASSERT_EQUAL(AppId::WEATHER, f.manager.activeAppId());
   TEST_ASSERT_EQUAL_INT(0, f.weather.exits);
-  TEST_ASSERT_EQUAL_INT(0, f.nixie.enters);
 }
 
 void test_menu_remains_active_after_long_inactivity() {
@@ -150,7 +149,6 @@ void test_menu_remains_active_after_long_inactivity() {
   f.manager.tick(5000);
   f.manager.tick(5000 + 24U * 60U * 60U * 1000U);
   TEST_ASSERT_EQUAL(AppId::MENU, f.manager.activeAppId());
-  TEST_ASSERT_EQUAL_INT(0, f.nixie.enters);
 }
 
 void test_device_info_remains_active_across_millis_wrap() {
@@ -160,12 +158,11 @@ void test_device_info_remains_active_across_millis_wrap() {
   f.manager.tick(start);
   f.manager.tick(static_cast<uint32_t>(start + 60000U));
   TEST_ASSERT_EQUAL(AppId::DEVICE_INFO, f.manager.activeAppId());
-  TEST_ASSERT_EQUAL_INT(0, f.nixie.enters);
 }
 
 int main() {
   UNITY_BEGIN();
-  RUN_TEST(test_defaults_to_nixie_and_enters_once);
+  RUN_TEST(test_defaults_to_stock_and_enters_once);
   RUN_TEST(test_prev_long_returns_to_menu_and_does_not_reach_stock);
   RUN_TEST(test_menu_selection_wraps_and_next_long_enters_selected_app);
   RUN_TEST(test_reserved_next_long_is_swallowed_in_normal_app);
