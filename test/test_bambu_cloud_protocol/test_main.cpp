@@ -75,8 +75,8 @@ void test_device_list_parses_bound_printers_and_fails_closed() {
 }
 
 void test_report_topic_is_bounded_to_one_device_serial() {
-  TEST_ASSERT_EQUAL_STRING("device/01P00A123456789/report",
-                           bambuReportTopic("01P00A123456789").c_str());
+  const std::string topic = bambuReportTopic("01P00A123456789");
+  TEST_ASSERT_EQUAL_STRING("device/01P00A123456789/report", topic.c_str());
   TEST_ASSERT_TRUE(bambuReportTopic("").empty());
   TEST_ASSERT_TRUE(bambuReportTopic("bad/#").empty());
 }
