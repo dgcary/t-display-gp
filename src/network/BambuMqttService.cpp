@@ -74,7 +74,7 @@ bool BambuMqttService::begin(BambuConfig& config,
   status_.passwordSet = !config_.password.empty();
   status_.tokenSet = !config_.accessToken.empty();
   status_.session = config_.enabled ? BambuSessionState::MQTT_CONNECTING
-                                    : BambuSessionState::DISABLED;
+                                    : BambuSessionState::INTEGRATION_DISABLED;
   sessionModel_.setAutomaticReloginAvailable(!config_.password.empty());
   activeInstance_ = this;
 
@@ -137,7 +137,7 @@ void BambuMqttService::taskLoop() {
 
     if (!config.enabled) {
       disconnectMqtt();
-      setSession(BambuSessionState::DISABLED);
+      setSession(BambuSessionState::INTEGRATION_DISABLED);
       vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
       continue;
     }

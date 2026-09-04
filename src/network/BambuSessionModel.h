@@ -3,7 +3,7 @@
 #include <cstdint>
 
 enum class BambuSessionState {
-  DISABLED = 0,
+  INTEGRATION_DISABLED = 0,
   UNCONFIGURED,
   PRINTER_SELECTION_REQUIRED,
   MQTT_CONNECTING,
