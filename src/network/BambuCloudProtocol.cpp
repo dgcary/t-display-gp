@@ -11,6 +11,7 @@
 namespace {
 constexpr size_t LOGIN_BODY_MAX = 8192;
 constexpr size_t DEVICE_BODY_MAX = 16384;
+constexpr size_t PROFILE_BODY_MAX = 4096;
 constexpr size_t JWT_TOKEN_MAX = BambuConfigLimits::ACCESS_TOKEN;
 constexpr size_t JWT_PAYLOAD_MAX = 2048;
 constexpr size_t TFA_KEY_MAX = 512;
@@ -95,7 +96,7 @@ bool decodeBase64Url(const std::string& encoded, std::string& decoded) {
   uint32_t buffer = 0;
   unsigned bits = 0;
   for (char c : encoded) {
-    if (c == '=') return false;  // JWT compact serialization omits padding.
+    if (c == '=') return false;
     const int value = decodeBase64UrlChar(c);
     if (value < 0) return false;
 
@@ -113,7 +114,6 @@ bool decodeBase64Url(const std::string& encoded, std::string& decoded) {
     }
   }
 
-  // Any unused low bits in canonical base64url must be zero.
   if (bits > 0 && buffer != 0) return false;
   decoded = std::move(candidate);
   return true;
@@ -137,6 +137,12 @@ bool readJwtUid(JsonObjectConst root, std::string& uid) {
     }
   }
   return false;
+}
+
+bool normalizeUserId(std::string& uid) {
+  if (uid.empty()) return false;
+  if (uid.rfind("u_", 0) != 0) uid.insert(0, "u_");
+  return uid.size() <= BambuConfigLimits::CLOUD_USER_ID;
 }
 
 bool isSafeSerial(const std::string& serial) {
@@ -226,10 +232,36 @@ bool extractBambuUserIdFromJwt(const std::string& token, std::string& userId) {
   if (root.isNull()) return false;
 
   std::string uid;
-  if (!readJwtUid(root, uid)) return false;
-  if (uid.rfind("u_", 0) != 0) uid.insert(0, "u_");
-  if (uid.size() > BambuConfigLimits::CLOUD_USER_ID) return false;
+  if (!readJwtUid(root, uid) || !normalizeUserId(uid)) return false;
 
+  userId = std::move(uid);
+  return true;
+}
+
+bool parseBambuProfileUserId(const std::string& body, std::string& userId) {
+  if (body.empty() || body.size() > PROFILE_BODY_MAX) return false;
+
+  DynamicJsonDocument doc(6144);
+  if (deserializeJson(doc, body)) return false;
+  JsonObjectConst root = doc.as<JsonObjectConst>();
+  if (root.isNull()) return false;
+
+  std::string uid;
+  if (root["uidStr"].is<const char*>()) {
+    if (!readBoundedString(root["uidStr"], BambuConfigLimits::CLOUD_USER_ID, uid)) return false;
+  } else if (root["uid"].is<const char*>()) {
+    if (!readBoundedString(root["uid"], BambuConfigLimits::CLOUD_USER_ID, uid)) return false;
+  } else if (root["uid"].is<long long>()) {
+    const long long value = root["uid"].as<long long>();
+    if (value < 0) return false;
+    uid = std::to_string(value);
+  } else if (root["uid"].is<unsigned long long>()) {
+    uid = std::to_string(root["uid"].as<unsigned long long>());
+  } else {
+    return false;
+  }
+
+  if (!normalizeUserId(uid)) return false;
   userId = std::move(uid);
   return true;
 }
