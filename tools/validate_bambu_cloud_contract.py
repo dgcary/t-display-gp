@@ -82,7 +82,10 @@ if CLIENT_HEADER.exists() and CLIENT_SOURCE.exists():
 if MQTT_HEADER.exists() and MQTT_SOURCE.exists():
     mqtt_header = MQTT_HEADER.read_text(encoding="utf-8")
     mqtt_source = MQTT_SOURCE.read_text(encoding="utf-8")
-    for marker in ("class BambuMqttService", "begin(", "snapshot()", "status()"):
+    for marker in (
+        "class BambuMqttService", "begin(", "snapshot()", "status()",
+        "configSnapshot()", "replaceConfig(", "externalConfigRevision_",
+    ):
         if marker not in mqtt_header:
             errors.append(f"BambuMqttService.h missing marker: {marker}")
     for marker in (
@@ -99,6 +102,10 @@ if MQTT_HEADER.exists() and MQTT_SOURCE.exists():
     for control in ('"pause"', '"resume"', '"stop"', '"temperature"'):
         if control in mqtt_source:
             errors.append(f"Bambu MQTT V1 contains forbidden printer-control command: {control}")
+    if "externalConfig_" in mqtt_header or "externalConfig_" in mqtt_source:
+        errors.append("Bambu MQTT service must not mutate a shared external BambuConfig across cores")
+    if "*externalConfig_" in mqtt_source:
+        errors.append("Bambu MQTT service must own its config; external std::string config writes are a data race")
 
 if APP_HEADER.exists() and APP_SOURCE.exists() and SCREEN_SOURCE.exists() and APP_SHELL.exists() and MAIN.exists():
     app_header = APP_HEADER.read_text(encoding="utf-8")
@@ -109,6 +116,10 @@ if APP_HEADER.exists() and APP_SOURCE.exists() and SCREEN_SOURCE.exists() and AP
     for marker in ("AppId::BAMBU", 'return "Bambu Lab"', "BambuMqttService&"):
         if marker not in app_header:
             errors.append(f"BambuApp.h missing marker: {marker}")
+    if "BambuConfig& config" in app_header or "BambuConfig& config_" in app_header:
+        errors.append("BambuApp must not retain the mutable global BambuConfig; read service snapshot instead")
+    if "service_.configSnapshot()" not in app_source:
+        errors.append("BambuApp must obtain printer metadata from the mutex-protected service config snapshot")
     if "BAMBU" not in shell:
         errors.append("AppShell.h missing AppId::BAMBU")
     for marker in ('{AppId::BAMBU, "Bambu Lab"}', "&bambuApp", 'case AppId::BAMBU: return "BAMBU";'):
@@ -127,6 +138,7 @@ if PORTAL_HEADER.exists() and PORTAL_SOURCE.exists() and PORTAL_MODEL_SOURCE.exi
         '"/api/ha/status"', '"/api/ha/config"', '"/api/bambu/status"',
         '"/api/bambu/login"', '"/api/bambu/printers"', '"/api/bambu/config"', '"/api/bambu/logout"',
         'doc["password_set"]', 'doc["token_set"]', "clearBambuPortalCredentials",
+        "bambuService->configSnapshot()", "bambuService->replaceConfig(",
     ):
         joined = portal_header + "\n" + portal_source + "\n" + portal_model
         if marker not in joined:
@@ -134,6 +146,8 @@ if PORTAL_HEADER.exists() and PORTAL_SOURCE.exists() and PORTAL_MODEL_SOURCE.exi
     for forbidden in ('doc["password"]', 'doc["accessToken"]', 'doc["access_token"]', 'doc["token"]'):
         if forbidden in portal_source:
             errors.append(f"Bambu status/config response may expose a secret key: {forbidden}")
+    if "BambuConfig* bambuConfig" in portal_source or "BambuConfigStore* bambuStore" in portal_source:
+        errors.append("Integrations portal must not retain unsynchronized mutable Bambu config/store pointers")
     if "setInsecure" in portal_source:
         errors.append("Integrations portal must not weaken Bambu TLS verification")
     if (ROOT / "src" / "network" / "HomeAssistantConfigPortal.cpp").exists() or (ROOT / "src" / "network" / "HomeAssistantConfigPortal.h").exists():
@@ -173,4 +187,4 @@ if errors:
         print(f"ERROR: {error}")
     sys.exit(1)
 
-print("Bambu Cloud auth + persistent MQTT + read-only app + unified portal security contract: OK")
+print("Bambu Cloud auth + persistent MQTT + read-only app + unified portal + config ownership contract: OK")
