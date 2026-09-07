@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <new>
 #include <string>
+#include <string_view>
 
 #include "BambuCloudProtocol.h"
 #include "NetworkArbiter.h"
@@ -89,9 +90,7 @@ BambuMqttStatus BambuMqttService::status() const {
   return copy;
 }
 
-BambuConfig BambuMqttService::configSnapshot() const {
-  return configCopy();
-}
+BambuConfig BambuMqttService::configSnapshot() const { return configCopy(); }
 
 bool BambuMqttService::replaceConfig(const BambuConfig& config) {
   if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) return false;
@@ -113,10 +112,7 @@ bool BambuMqttService::replaceConfig(const BambuConfig& config) {
   return saved;
 }
 
-void BambuMqttService::taskThunk(void* arg) {
-  static_cast<BambuMqttService*>(arg)->taskLoop();
-}
-
+void BambuMqttService::taskThunk(void* arg) { static_cast<BambuMqttService*>(arg)->taskLoop(); }
 void BambuMqttService::mqttCallbackThunk(char* topic, uint8_t* payload, unsigned int length) {
   if (activeInstance_) activeInstance_->handleMessage(topic, payload, length);
 }
@@ -126,14 +122,12 @@ void BambuMqttService::taskLoop() {
     const uint32_t nowMs = millis();
     uint32_t revision = 0U;
     const BambuConfig config = configCopy(&revision);
-
     if (revision != observedExternalConfigRevision_) {
       observedExternalConfigRevision_ = revision;
       disconnectMqtt();
       mqttAttempted_ = false;
       tokenRejected_ = false;
     }
-
     if (!config.enabled) {
       disconnectMqtt();
       setSession(BambuSessionState::INTEGRATION_DISABLED);
@@ -159,12 +153,9 @@ void BambuMqttService::taskLoop() {
       vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
       continue;
     }
-
     if (!mqtt_ || !mqtt_->connected()) {
       setConnectivity(false);
-      if (!mqttAttempted_ || elapsed(nowMs, lastMqttAttemptMs_, BAMBU_MQTT_RECONNECT_MS)) {
-        connectMqtt(nowMs);
-      }
+      if (!mqttAttempted_ || elapsed(nowMs, lastMqttAttemptMs_, BAMBU_MQTT_RECONNECT_MS)) connectMqtt(nowMs);
       vTaskDelay(pdMS_TO_TICKS(BAMBU_TASK_SLEEP_MS));
       continue;
     }
@@ -173,16 +164,12 @@ void BambuMqttService::taskLoop() {
   }
 }
 
-void BambuMqttService::handleMessage(const char* topic,
-                                     const uint8_t* payload,
-                                     unsigned int length) {
+void BambuMqttService::handleMessage(const char* topic, const uint8_t* payload, unsigned int length) {
   const BambuConfig config = configCopy();
   const BambuPrinterConfig* active = activeBambuPrinter(config);
   if (!active) return;
   const std::string expected = bambuReportTopic(active->serial);
-  if (!topic || expected.empty() || expected != topic || !payload || length == 0U ||
-      length > BambuStateLimits::REPORT_JSON) return;
-
+  if (!topic || expected.empty() || expected != topic || !payload || length == 0U || length > BambuStateLimits::REPORT_JSON) return;
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) return;
   const std::string_view json(reinterpret_cast<const char*>(payload), length);
   if (applyBambuReport(json, millis(), state_)) {
@@ -204,23 +191,14 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
     setSession(BambuSessionState::UNCONFIGURED);
     return false;
   }
-
   disconnectMqtt();
   tls_ = new (std::nothrow) WiFiClientSecure();
-  if (!tls_) {
-    setSession(BambuSessionState::BUFFER_ERROR);
-    return false;
-  }
+  if (!tls_) { setSession(BambuSessionState::BUFFER_ERROR); return false; }
   tls_->setCACertBundle(rootca_crt_bundle_start);
   tls_->setHandshakeTimeout(BuildConfig::HTTP_TLS_HANDSHAKE_TIMEOUT_SEC);
   tls_->setTimeout(15);
-
   mqtt_ = new (std::nothrow) PubSubClient(*tls_);
-  if (!mqtt_) {
-    disconnectMqtt();
-    setSession(BambuSessionState::BUFFER_ERROR);
-    return false;
-  }
+  if (!mqtt_) { disconnectMqtt(); setSession(BambuSessionState::BUFFER_ERROR); return false; }
   mqtt_->setServer(bambuBrokerForRegion(config.region), BAMBU_MQTT_PORT);
   mqtt_->setCallback(mqttCallbackThunk);
   mqtt_->setKeepAlive(BAMBU_MQTT_KEEPALIVE_SEC);
@@ -229,29 +207,20 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
     setSession(BambuSessionState::BUFFER_ERROR);
     return false;
   }
-
   setSession(BambuSessionState::MQTT_CONNECTING);
   NetworkRequestGuard guard(sharedNetworkArbiter());
-  if (!guard.locked()) {
-    disconnectMqtt();
-    setSession(BambuSessionState::NETWORK_ERROR);
-    return false;
-  }
+  if (!guard.locked()) { disconnectMqtt(); setSession(BambuSessionState::NETWORK_ERROR); return false; }
 
   char clientId[32];
   std::snprintf(clientId, sizeof(clientId), "tdgp_%08lx%04x",
-                static_cast<unsigned long>(esp_random()),
-                static_cast<unsigned>(esp_random() & 0xFFFFU));
+                static_cast<unsigned long>(esp_random()), static_cast<unsigned>(esp_random() & 0xFFFFU));
   if (!mqtt_->connect(clientId, config.cloudUserId.c_str(), config.accessToken.c_str())) {
     const int rc = mqtt_->state();
     if (rc == 4 || rc == 5) tokenRejected_ = true;
-    setSession((rc == 4 || rc == 5) ? BambuSessionState::TOKEN_INVALID
-                                     : BambuSessionState::NETWORK_ERROR,
-               rc);
+    setSession((rc == 4 || rc == 5) ? BambuSessionState::TOKEN_INVALID : BambuSessionState::NETWORK_ERROR, rc);
     disconnectMqtt();
     return false;
   }
-
   const std::string reportTopic = bambuReportTopic(active->serial);
   if (reportTopic.empty() || !mqtt_->subscribe(reportTopic.c_str())) {
     setSession(BambuSessionState::NETWORK_ERROR, mqtt_->state());
@@ -261,11 +230,9 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   const std::string requestTopic = "device/" + active->serial + "/request";
   char request[144];
   std::snprintf(request, sizeof(request),
-                "{\"pushing\":{\"sequence_id\":\"%lu\",\"command\":\"pushall\","
-                "\"version\":1,\"push_target\":1}}",
+                "{\"pushing\":{\"sequence_id\":\"%lu\",\"command\":\"pushall\",\"version\":1,\"push_target\":1}}",
                 static_cast<unsigned long>(pushallSequence_++));
   mqtt_->publish(requestTopic.c_str(), request);
-
   tokenRejected_ = false;
   setConnectivity(true);
   setSession(BambuSessionState::ONLINE, 0);
