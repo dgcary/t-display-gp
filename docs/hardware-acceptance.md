@@ -101,6 +101,12 @@ T-Display 继续作为用户现有 HA server 的只读 REST client。
 
 若账号要求 2FA/email code：应明确显示需要二次认证/无人值守续期不可用；不得持续快速重试或绕过。此项可按账号实际情况记 PASS/NOT APPLICABLE。
 
+## Bambu config concurrency / stale-write protection
+
+运行时 Bambu 配置必须由 `BambuMqttService` 单点持有，Portal/UI 只通过线程安全 snapshot/update 访问。自动测试必须证明：Portal external update 发生后，基于旧 revision 的后台 token/user ID/printer discovery 写回会被拒绝，不能覆盖新的 NVS/runtime config，也不能重新发布旧 printer list。
+
+真机若能安全制造时序：在后台正在连接、重新登录或发现打印机期间，于 `:8081` 提交较新的有效 Bambu 配置；后续晚到的旧 Cloud 结果不得把页面/重启后的配置恢复到旧值。因为保存会很快重启且不应为了制造竞态反复错误登录，无法稳定复现时允许标记 `NOT TESTED`，不要进行可能触发账号锁定的实验。
+
 ## Bambu Cloud MQTT / remote reachability
 
 Cloud brokers：China `cn.mqtt.bambulab.com:8883`；US/EU `us.mqtt.bambulab.com:8883`。
@@ -175,6 +181,7 @@ Cloud brokers：China `cn.mqtt.bambulab.com:8883`；US/EU `us.mqtt.bambulab.com:
 - inactive Weather/HA 不因 late completion 重绘当前 TFT；
 - Bambu Cloud MQTT 是独立后台服务，App transition 不控制其连接；
 - Bambu MQTT connect/reconnect handshake 才参与 NetworkArbiter；建立后持久 socket 不长期持有 arbiter；
+- Bambu mutable config 只有一个 service owner；Portal update 优先于旧后台结果；
 - Bad Apple 不新增网络/worker/arbiter traffic；
 - DeviceInfo local-only。
 
@@ -214,6 +221,7 @@ HOME ASSISTANT HTTPS CA: PASS/FAIL/NOT TESTED
 HA SECRET LEAK: PASS/FAIL
 BAMBU LOGIN: PASS/FAIL/2FA BLOCKED/NOT TESTED
 BAMBU PRINTER DISCOVERY: PASS/FAIL/NOT TESTED
+BAMBU CONFIG STALE-WRITE: PASS/FAIL/NOT TESTED
 BAMBU CLOUD MQTT: PASS/FAIL/NOT TESTED
 BAMBU REMOTE-NETWORK TEST: PASS/FAIL/NOT TESTED
 BAMBU LIVE FIELDS: PASS/FAIL/PARTIAL/NOT TESTED
