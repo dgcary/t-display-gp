@@ -12,6 +12,25 @@ bool emailLooksValid(const std::string& email) {
   return email.find('.', at + 1) != std::string::npos;
 }
 
+bool mainlandPhoneLooksValid(const std::string& account) {
+  size_t offset = 0U;
+  if (account.size() == 14U && account.rfind("+86", 0U) == 0U) offset = 3U;
+  else if (account.size() == 13U && account.rfind("86", 0U) == 0U) offset = 2U;
+  else if (account.size() != 11U) return false;
+
+  if (account.size() - offset != 11U) return false;
+  if (account[offset] != '1' || account[offset + 1U] < '3' || account[offset + 1U] > '9') return false;
+  for (size_t i = offset + 2U; i < account.size(); ++i) {
+    if (account[i] < '0' || account[i] > '9') return false;
+  }
+  return true;
+}
+
+bool accountLooksValid(const BambuConfig& config) {
+  if (emailLooksValid(config.email)) return true;
+  return config.region == BambuRegion::CHINA && mainlandPhoneLooksValid(config.email);
+}
+
 const char* regionName(BambuRegion region) {
   return region == BambuRegion::CHINA ? "china" : "us_eu";
 }
@@ -56,7 +75,7 @@ BambuConfigValidationResult validateBambuConfig(const BambuConfig& config) {
   if (config.printerSerial.size() > BambuConfigLimits::PRINTER_SERIAL) return {BambuConfigError::SERIAL_TOO_LONG};
   if (config.printerName.size() > BambuConfigLimits::PRINTER_NAME) return {BambuConfigError::NAME_TOO_LONG};
 
-  if (!config.email.empty() && !emailLooksValid(config.email)) return {BambuConfigError::EMAIL_INVALID};
+  if (!config.email.empty() && !accountLooksValid(config)) return {BambuConfigError::EMAIL_INVALID};
   if (!config.enabled) return {};
   if (config.email.empty()) return {BambuConfigError::EMAIL_REQUIRED};
   if (config.password.empty() && config.accessToken.empty()) return {BambuConfigError::CREDENTIAL_REQUIRED};
