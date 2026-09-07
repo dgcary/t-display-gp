@@ -97,6 +97,21 @@ printerSerial
 printerName
 ```
 
+`email` is retained as the storage/schema/form key for backward compatibility, but its semantic meaning is the **Bambu account identifier**. Validation is region-aware:
+
+```text
+CHINA  -> mainland phone account (11 digits, optional +86/86 prefix) OR email
+US_EU  -> email
+```
+
+Password login must submit that identifier to Bambu Cloud as:
+
+```json
+{"account":"<identifier>","password":"<password>"}
+```
+
+The China phone path must not be blocked by HTML `type=email` validation or firmware email-only validation. The password/token remain secrets regardless of account identifier type.
+
 The local shared Integrations portal is:
 
 ```text
@@ -122,6 +137,8 @@ Portal-originated replacements are authoritative and increment an external confi
 ## Cloud HTTPS
 
 Short-lived operations cover password login, user identity resolution and bound-printer discovery. They use `WiFiClientSecure` with CA bundle verification and acquire the shared `NetworkArbiter` for the complete request. `setInsecure()` is forbidden.
+
+For China password accounts the same login endpoint accepts the phone identifier through JSON `account`; no email-specific transport endpoint is required for ordinary password login. If Bambu Cloud itself responds with a verification/2FA challenge, V1 reports that requirement rather than bypassing it.
 
 Responses are bounded and parsed into narrow typed results. Password/token/full auth bodies must not be printed to serial.
 
@@ -171,7 +188,7 @@ Malformed JSON fails without mutating the snapshot. Partial reports update only 
 
 ## Token renewal / 2FA
 
-MQTT authentication rc 4/5 or an otherwise invalid token moves the service into token-invalid/relogin flow. If a saved password exists, the service performs verified HTTPS login, resolves/stores replacement user ID/token and reconnects MQTT.
+MQTT authentication rc 4/5 or an otherwise invalid token moves the service into token-invalid/relogin flow. If a saved password exists, the service performs verified HTTPS login with the persisted account identifier, resolves/stores replacement user ID/token and reconnects MQTT.
 
 Failed unattended attempts use bounded backoff:
 
@@ -179,7 +196,7 @@ Failed unattended attempts use bounded backoff:
 60 s -> 300 s -> 900 s -> 1800 s -> 1800 s ...
 ```
 
-If login requires a second factor/email code, V1 enters an explicit 2FA-required state and stops unattended renewal rather than bypassing or hammering the service.
+If login requires a second factor/email/SMS code, V1 enters an explicit 2FA-required state and stops unattended renewal rather than bypassing or hammering the service.
 
 # Shared worker / concurrency contract
 
