@@ -68,6 +68,8 @@ Bambu HTTPS 与 MQTT 都使用 CA 校验；Bambu 凭据路径禁止 `setInsecure
 
 MQTT 是设备级后台服务，不跟随 Bambu 页面启停。离开 Bambu 后连接继续维护，返回页面应看到最新 cache。只有 HTTPS 请求和 MQTT connect/reconnect handshake 使用 `NetworkArbiter`；已建立的持久 MQTT socket 不长期占用 arbiter，从而不阻塞 Stock/Weather/HA。
 
+`BambuMqttService` 是运行时 Bambu 配置的唯一可变所有者。Portal 与 UI 只能通过 mutex 保护的 snapshot/update 接口访问配置；后台登录、User ID 与打印机发现产生的持久化写回必须携带取得快照时的 external revision。若期间用户已经在 `:8081` 提交更新，旧后台结果会被判定为 stale 并丢弃，不允许覆盖较新的账号、Token 或打印机选择。
+
 Access Token 失效且已保存密码时，固件自动重新登录并持久化新 Token/User ID，然后重新连接 MQTT。失败退避为约 **1 min → 5 min → 15 min → 30 min（封顶）**。若账号要求 2FA/email-code，V1 明确显示需要二次认证并停止无人值守续期，不尝试绕过。
 
 Bambu 页面优先显示打印机名/连接状态、打印进度、ETA、层数、喷嘴/热床/腔体温度、任务名、当前耗材/AMS 信息（字段可用时）。
@@ -135,6 +137,7 @@ FreeRTOS queues 传 request/result pointer，不 raw-copy 含 `std::string` 的�
 - AppConfig schema v2 / `stockticker` NVS。
 - HA 使用独立 `ha_config` blob。
 - Bambu 使用独立 `bambucloud` NVS namespace/blob。
+- Bambu runtime config 由 `BambuMqttService` 单点持有；Portal external update 递增 revision，后台衍生写回必须 revision-match 才能提交。
 - 普通 firmware upgrade 保留 NVS。
 - 端口 8081 只有一个 `IntegrationConfigPortal`，同时提供既有 HA routes 和 Bambu routes。
 - No secret logging。
