@@ -2,34 +2,12 @@
 
 #include <ArduinoJson.h>
 
+#include <cctype>
+#include <utility>
+
 namespace {
-constexpr int CONFIG_SCHEMA = 1;
-
-bool emailLooksValid(const std::string& email) {
-  const size_t at = email.find('@');
-  if (at == std::string::npos || at == 0 || at + 1 >= email.size()) return false;
-  if (email.find_first_of(" \t\r\n") != std::string::npos) return false;
-  return email.find('.', at + 1) != std::string::npos;
-}
-
-bool mainlandPhoneLooksValid(const std::string& account) {
-  size_t offset = 0U;
-  if (account.size() == 14U && account.rfind("+86", 0U) == 0U) offset = 3U;
-  else if (account.size() == 13U && account.rfind("86", 0U) == 0U) offset = 2U;
-  else if (account.size() != 11U) return false;
-
-  if (account.size() - offset != 11U) return false;
-  if (account[offset] != '1' || account[offset + 1U] < '3' || account[offset + 1U] > '9') return false;
-  for (size_t i = offset + 2U; i < account.size(); ++i) {
-    if (account[i] < '0' || account[i] > '9') return false;
-  }
-  return true;
-}
-
-bool accountLooksValid(const BambuConfig& config) {
-  if (emailLooksValid(config.email)) return true;
-  return config.region == BambuRegion::CHINA && mainlandPhoneLooksValid(config.email);
-}
+constexpr int CONFIG_SCHEMA_V1 = 1;
+constexpr int CONFIG_SCHEMA_V2 = 2;
 
 const char* regionName(BambuRegion region) {
   return region == BambuRegion::CHINA ? "china" : "us_eu";
@@ -65,21 +43,116 @@ bool readBoundedString(JsonVariantConst value, size_t maxLen, std::string& out) 
   out.assign(text, len);
   return true;
 }
+
+bool safeSerial(const std::string& serial) {
+  if (serial.empty() || serial.size() > BambuConfigLimits::PRINTER_SERIAL) return false;
+  for (unsigned char c : serial) {
+    if (!(std::isalnum(c) || c == '_' || c == '-')) return false;
+  }
+  return true;
+}
+
+void updateLegacyActiveAliases(BambuConfig& config) {
+  config.printerSerial.clear();
+  config.printerName.clear();
+  if (config.printerCount == 0 || config.activePrinterIndex >= config.printerCount) return;
+  config.printerSerial = config.printers[config.activePrinterIndex].serial;
+  config.printerName = config.printers[config.activePrinterIndex].name;
+}
+
+bool decodeV1(JsonObjectConst root, BambuConfig& decoded) {
+  if (!root["enabled"].is<bool>() || !root["region"].is<const char*>()) return false;
+  decoded.enabled = root["enabled"].as<bool>();
+  if (!parseRegion(root["region"].as<const char*>(), decoded.region)) return false;
+  if (!readBoundedString(root["access_token"], BambuConfigLimits::ACCESS_TOKEN, decoded.accessToken)) return false;
+  if (!readBoundedString(root["cloud_user_id"], BambuConfigLimits::CLOUD_USER_ID, decoded.cloudUserId)) return false;
+
+  std::string serial;
+  std::string name;
+  if (!readBoundedString(root["printer_serial"], BambuConfigLimits::PRINTER_SERIAL, serial)) return false;
+  if (!readBoundedString(root["printer_name"], BambuConfigLimits::PRINTER_NAME, name)) return false;
+  if (!serial.empty()) {
+    decoded.printerCount = 1;
+    decoded.activePrinterIndex = 0;
+    decoded.printers[0].serial = std::move(serial);
+    decoded.printers[0].name = std::move(name);
+  }
+
+  // Account/password from schema v1 are intentionally not migrated. Manual
+  // token mode removes long-lived account credentials from the new config.
+  decoded.email.clear();
+  decoded.password.clear();
+  updateLegacyActiveAliases(decoded);
+
+  if (decoded.enabled && !validateBambuConfig(decoded).ok()) {
+    // Preserve usable token/printer data for the portal but do not boot an
+    // incomplete legacy config into MQTT.
+    decoded.enabled = false;
+  }
+  return validateBambuConfig(decoded).ok();
+}
+
+bool decodeV2(JsonObjectConst root, BambuConfig& decoded) {
+  if (!root["enabled"].is<bool>() || !root["region"].is<const char*>() ||
+      !root["printers"].is<JsonArrayConst>() || !root["active_printer"].is<size_t>()) {
+    return false;
+  }
+  decoded.enabled = root["enabled"].as<bool>();
+  if (!parseRegion(root["region"].as<const char*>(), decoded.region)) return false;
+  if (!readBoundedString(root["access_token"], BambuConfigLimits::ACCESS_TOKEN, decoded.accessToken)) return false;
+  if (!readBoundedString(root["cloud_user_id"], BambuConfigLimits::CLOUD_USER_ID, decoded.cloudUserId)) return false;
+
+  JsonArrayConst printers = root["printers"].as<JsonArrayConst>();
+  if (printers.size() > BambuConfigLimits::PRINTER_COUNT) return false;
+  for (JsonVariantConst item : printers) {
+    if (!item.is<JsonObjectConst>()) return false;
+    JsonObjectConst object = item.as<JsonObjectConst>();
+    BambuPrinterConfig& printer = decoded.printers[decoded.printerCount];
+    if (!readBoundedString(object["serial"], BambuConfigLimits::PRINTER_SERIAL, printer.serial)) return false;
+    if (!readBoundedString(object["name"], BambuConfigLimits::PRINTER_NAME, printer.name)) return false;
+    ++decoded.printerCount;
+  }
+  decoded.activePrinterIndex = root["active_printer"].as<size_t>();
+  updateLegacyActiveAliases(decoded);
+  return validateBambuConfig(decoded).ok();
+}
 }  // namespace
 
 BambuConfigValidationResult validateBambuConfig(const BambuConfig& config) {
-  if (config.email.size() > BambuConfigLimits::EMAIL) return {BambuConfigError::EMAIL_TOO_LONG};
-  if (config.password.size() > BambuConfigLimits::PASSWORD) return {BambuConfigError::PASSWORD_TOO_LONG};
   if (config.accessToken.size() > BambuConfigLimits::ACCESS_TOKEN) return {BambuConfigError::TOKEN_TOO_LONG};
   if (config.cloudUserId.size() > BambuConfigLimits::CLOUD_USER_ID) return {BambuConfigError::USER_ID_TOO_LONG};
-  if (config.printerSerial.size() > BambuConfigLimits::PRINTER_SERIAL) return {BambuConfigError::SERIAL_TOO_LONG};
-  if (config.printerName.size() > BambuConfigLimits::PRINTER_NAME) return {BambuConfigError::NAME_TOO_LONG};
+  if (config.printerCount > BambuConfigLimits::PRINTER_COUNT) return {BambuConfigError::TOO_MANY_PRINTERS};
 
-  if (!config.email.empty() && !accountLooksValid(config)) return {BambuConfigError::EMAIL_INVALID};
+  for (size_t i = 0; i < config.printerCount; ++i) {
+    const BambuPrinterConfig& printer = config.printers[i];
+    if (printer.serial.empty()) return {BambuConfigError::SERIAL_REQUIRED};
+    if (printer.serial.size() > BambuConfigLimits::PRINTER_SERIAL) return {BambuConfigError::SERIAL_TOO_LONG};
+    if (!safeSerial(printer.serial)) return {BambuConfigError::SERIAL_INVALID};
+    if (printer.name.size() > BambuConfigLimits::PRINTER_NAME) return {BambuConfigError::NAME_TOO_LONG};
+    for (size_t earlier = 0; earlier < i; ++earlier) {
+      if (config.printers[earlier].serial == printer.serial) return {BambuConfigError::DUPLICATE_SERIAL};
+    }
+  }
+
+  if (config.printerCount == 0) {
+    if (config.activePrinterIndex != 0) return {BambuConfigError::ACTIVE_PRINTER_INVALID};
+  } else if (config.activePrinterIndex >= config.printerCount) {
+    return {BambuConfigError::ACTIVE_PRINTER_INVALID};
+  }
+
   if (!config.enabled) return {};
-  if (config.email.empty()) return {BambuConfigError::EMAIL_REQUIRED};
-  if (config.password.empty() && config.accessToken.empty()) return {BambuConfigError::CREDENTIAL_REQUIRED};
+  if (config.accessToken.empty()) return {BambuConfigError::TOKEN_REQUIRED};
+  if (config.cloudUserId.empty()) return {BambuConfigError::USER_ID_REQUIRED};
+  if (config.printerCount == 0) return {BambuConfigError::PRINTER_REQUIRED};
   return {};
+}
+
+const BambuPrinterConfig* activeBambuPrinter(const BambuConfig& config) {
+  if (config.printerCount == 0 || config.printerCount > BambuConfigLimits::PRINTER_COUNT ||
+      config.activePrinterIndex >= config.printerCount) {
+    return nullptr;
+  }
+  return &config.printers[config.activePrinterIndex];
 }
 
 const char* bambuBrokerForRegion(BambuRegion region) {
@@ -90,15 +163,18 @@ bool BambuConfigCodec::encode(const BambuConfig& config, std::string& out) {
   if (!validateBambuConfig(config).ok()) return false;
 
   DynamicJsonDocument doc(6144);
-  doc["schema"] = CONFIG_SCHEMA;
+  doc["schema"] = CONFIG_SCHEMA_V2;
   doc["enabled"] = config.enabled;
   doc["region"] = regionName(config.region);
-  doc["email"] = config.email;
-  doc["password"] = config.password;
   doc["access_token"] = config.accessToken;
   doc["cloud_user_id"] = config.cloudUserId;
-  doc["printer_serial"] = config.printerSerial;
-  doc["printer_name"] = config.printerName;
+  doc["active_printer"] = config.activePrinterIndex;
+  JsonArray printers = doc.createNestedArray("printers");
+  for (size_t i = 0; i < config.printerCount; ++i) {
+    JsonObject printer = printers.createNestedObject();
+    printer["serial"] = config.printers[i].serial;
+    printer["name"] = config.printers[i].name;
+  }
 
   std::string encoded;
   serializeJson(doc, encoded);
@@ -113,21 +189,13 @@ bool BambuConfigCodec::decode(const std::string& encoded, BambuConfig& out) {
   DynamicJsonDocument doc(6144);
   if (deserializeJson(doc, encoded)) return false;
   JsonObjectConst root = doc.as<JsonObjectConst>();
-  if (root.isNull()) return false;
-  if (!root["schema"].is<int>() || root["schema"].as<int>() != CONFIG_SCHEMA) return false;
-  if (!root["enabled"].is<bool>() || !root["region"].is<const char*>()) return false;
+  if (root.isNull() || !root["schema"].is<int>()) return false;
 
   BambuConfig decoded;
-  decoded.enabled = root["enabled"].as<bool>();
-  if (!parseRegion(root["region"].as<const char*>(), decoded.region)) return false;
-  if (!readBoundedString(root["email"], BambuConfigLimits::EMAIL, decoded.email)) return false;
-  if (!readBoundedString(root["password"], BambuConfigLimits::PASSWORD, decoded.password)) return false;
-  if (!readBoundedString(root["access_token"], BambuConfigLimits::ACCESS_TOKEN, decoded.accessToken)) return false;
-  if (!readBoundedString(root["cloud_user_id"], BambuConfigLimits::CLOUD_USER_ID, decoded.cloudUserId)) return false;
-  if (!readBoundedString(root["printer_serial"], BambuConfigLimits::PRINTER_SERIAL, decoded.printerSerial)) return false;
-  if (!readBoundedString(root["printer_name"], BambuConfigLimits::PRINTER_NAME, decoded.printerName)) return false;
-  if (!validateBambuConfig(decoded).ok()) return false;
-
+  const int schema = root["schema"].as<int>();
+  const bool ok = schema == CONFIG_SCHEMA_V1 ? decodeV1(root, decoded)
+                                             : (schema == CONFIG_SCHEMA_V2 ? decodeV2(root, decoded) : false);
+  if (!ok) return false;
   out = std::move(decoded);
   return true;
 }

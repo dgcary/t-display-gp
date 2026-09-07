@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <string>
 
@@ -10,15 +11,18 @@ enum class BambuRegion {
 
 enum class BambuConfigError {
   NONE = 0,
-  EMAIL_REQUIRED,
-  CREDENTIAL_REQUIRED,
-  EMAIL_INVALID,
-  EMAIL_TOO_LONG,
-  PASSWORD_TOO_LONG,
+  TOKEN_REQUIRED,
+  USER_ID_REQUIRED,
+  PRINTER_REQUIRED,
   TOKEN_TOO_LONG,
   USER_ID_TOO_LONG,
+  TOO_MANY_PRINTERS,
+  SERIAL_REQUIRED,
+  SERIAL_INVALID,
   SERIAL_TOO_LONG,
   NAME_TOO_LONG,
+  DUPLICATE_SERIAL,
+  ACTIVE_PRINTER_INVALID,
   ENCODED_TOO_LONG,
   MALFORMED,
 };
@@ -28,28 +32,45 @@ struct BambuConfigValidationResult {
   bool ok() const { return error == BambuConfigError::NONE; }
 };
 
-struct BambuConfig {
-  bool enabled = false;
-  BambuRegion region = BambuRegion::US_EU;
-  std::string email;
-  std::string password;
-  std::string accessToken;
-  std::string cloudUserId;
-  std::string printerSerial;
-  std::string printerName;
+struct BambuPrinterConfig {
+  std::string serial;
+  std::string name;
 };
 
 namespace BambuConfigLimits {
-constexpr size_t EMAIL = 160;
-constexpr size_t PASSWORD = 256;
 constexpr size_t ACCESS_TOKEN = 1536;
 constexpr size_t CLOUD_USER_ID = 96;
 constexpr size_t PRINTER_SERIAL = 32;
 constexpr size_t PRINTER_NAME = 64;
+constexpr size_t PRINTER_COUNT = 4;
 constexpr size_t ENCODED = 4096;
+
+// Transitional source-compatibility bounds for schema-v1 auth code while the
+// portal/service migration lands. Schema v2 never persists these fields.
+constexpr size_t EMAIL = 160;
+constexpr size_t PASSWORD = 256;
 }  // namespace BambuConfigLimits
 
+struct BambuConfig {
+  bool enabled = false;
+  BambuRegion region = BambuRegion::US_EU;
+  std::string accessToken;
+  std::string cloudUserId;
+  std::array<BambuPrinterConfig, BambuConfigLimits::PRINTER_COUNT> printers{};
+  size_t printerCount = 0;
+  size_t activePrinterIndex = 0;
+
+  // Transitional in-memory aliases used only by the old portal/service until
+  // their migration in the same feature branch. They are never encoded by
+  // schema v2 and are cleared when decoding legacy credentials.
+  std::string email;
+  std::string password;
+  std::string printerSerial;
+  std::string printerName;
+};
+
 BambuConfigValidationResult validateBambuConfig(const BambuConfig& config);
+const BambuPrinterConfig* activeBambuPrinter(const BambuConfig& config);
 const char* bambuBrokerForRegion(BambuRegion region);
 
 class BambuConfigCodec {
