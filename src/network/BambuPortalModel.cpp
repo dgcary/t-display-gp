@@ -1,41 +1,66 @@
 #include "BambuPortalModel.h"
 
-std::string effectiveBambuPortalPassword(const BambuConfig& existing,
-                                         const BambuPortalCredentials& input) {
-  return input.password.empty() ? existing.password : input.password;
+#include <algorithm>
+
+namespace {
+void clearLegacyAliases(BambuConfig& config) {
+  config.email.clear();
+  config.password.clear();
+  config.printerSerial.clear();
+  config.printerName.clear();
 }
 
-BambuConfig mergeBambuPortalCredentials(const BambuConfig& existing,
-                                         const BambuPortalCredentials& input) {
+void updateLegacyActiveAlias(BambuConfig& config) {
+  config.printerSerial.clear();
+  config.printerName.clear();
+  const BambuPrinterConfig* active = activeBambuPrinter(config);
+  if (!active) return;
+  config.printerSerial = active->serial;
+  config.printerName = active->name;
+}
+}  // namespace
+
+BambuConfig mergeBambuPortalConfig(const BambuConfig& existing,
+                                    const BambuPortalConfigInput& input) {
   BambuConfig merged = existing;
-  const bool identityChanged = existing.region != input.region || existing.email != input.email;
+  const bool regionChanged = existing.region != input.region;
 
   merged.enabled = input.enabled;
   merged.region = input.region;
-  merged.email = input.email;
 
-  if (!input.password.empty()) {
-    if (input.rememberPassword) merged.password = input.password;
-    else merged.password.clear();
-  }
-
-  if (identityChanged) {
+  if (!input.accessToken.empty()) {
+    merged.accessToken = input.accessToken;
+    merged.cloudUserId.clear();
+  } else if (regionChanged) {
     merged.accessToken.clear();
     merged.cloudUserId.clear();
-    merged.printerSerial.clear();
-    merged.printerName.clear();
   }
+
+  merged.printers = {};
+  merged.printerCount = std::min(input.printerCount, BambuConfigLimits::PRINTER_COUNT);
+  merged.activePrinterIndex = 0;
+  for (size_t i = 0; i < merged.printerCount; ++i) {
+    merged.printers[i] = input.printers[i];
+    if (!input.activePrinterSerial.empty() &&
+        merged.printers[i].serial == input.activePrinterSerial) {
+      merged.activePrinterIndex = i;
+    }
+  }
+
+  clearLegacyAliases(merged);
+  updateLegacyActiveAlias(merged);
   return merged;
 }
 
 BambuConfig clearBambuPortalCredentials(const BambuConfig& existing) {
   BambuConfig cleared = existing;
   cleared.enabled = false;
-  cleared.password.clear();
   cleared.accessToken.clear();
   cleared.cloudUserId.clear();
-  cleared.printerSerial.clear();
-  cleared.printerName.clear();
+  cleared.printers = {};
+  cleared.printerCount = 0;
+  cleared.activePrinterIndex = 0;
+  clearLegacyAliases(cleared);
   return cleared;
 }
 
@@ -43,10 +68,12 @@ BambuPortalStatus buildBambuPortalStatus(const BambuConfig& config) {
   BambuPortalStatus status;
   status.enabled = config.enabled;
   status.region = config.region;
-  status.email = config.email;
-  status.printerSerial = config.printerSerial;
-  status.printerName = config.printerName;
-  status.passwordSet = !config.password.empty();
   status.tokenSet = !config.accessToken.empty();
+  status.printerCount = config.printerCount;
+  const BambuPrinterConfig* active = activeBambuPrinter(config);
+  if (active) {
+    status.activePrinterSerial = active->serial;
+    status.activePrinterName = active->name;
+  }
   return status;
 }
