@@ -8,6 +8,8 @@ std::string effectiveBambuPortalPassword(const BambuConfig& existing,
 BambuConfig mergeBambuPortalCredentials(const BambuConfig& existing,
                                          const BambuPortalCredentials& input) {
   BambuConfig merged = existing;
+  const bool identityChanged = existing.region != input.region || existing.email != input.email;
+
   merged.enabled = input.enabled;
   merged.region = input.region;
   merged.email = input.email;
@@ -15,6 +17,13 @@ BambuConfig mergeBambuPortalCredentials(const BambuConfig& existing,
   if (!input.password.empty()) {
     if (input.rememberPassword) merged.password = input.password;
     else merged.password.clear();
+  }
+
+  if (identityChanged) {
+    merged.accessToken.clear();
+    merged.cloudUserId.clear();
+    merged.printerSerial.clear();
+    merged.printerName.clear();
   }
   return merged;
 }
