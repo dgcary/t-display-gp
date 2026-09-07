@@ -68,8 +68,8 @@ void BambuSessionModel::onReloginSuccess() {
 }
 
 void BambuSessionModel::onReloginFailure(uint32_t nowMs, BambuReloginFailure reason) {
-  if (reason == BambuReloginFailure::TWO_FACTOR_REQUIRED) {
-    state_ = BambuSessionState::TWO_FACTOR_REQUIRED;
+  if (reason == BambuReloginFailure::VERIFICATION_REQUIRED) {
+    state_ = BambuSessionState::VERIFICATION_REQUIRED;
     reloginScheduled_ = false;
     reloginDelayMs_ = 0U;
     return;

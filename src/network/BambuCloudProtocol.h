@@ -5,9 +5,14 @@
 
 enum class BambuLoginDisposition {
   TOKEN,
-  NEED_EMAIL_CODE,
+  NEED_VERIFICATION_CODE,
   NEED_TFA,
   ERROR,
+};
+
+enum class BambuVerificationChannel {
+  EMAIL,
+  SMS,
 };
 
 struct BambuLoginReply {
@@ -24,6 +29,7 @@ struct BambuCloudDevice {
 };
 
 bool parseBambuLoginReply(int httpStatus, const std::string& body, BambuLoginReply& out);
+BambuVerificationChannel bambuVerificationChannelForAccount(const std::string& account);
 bool extractBambuUserIdFromJwt(const std::string& token, std::string& userId);
 bool parseBambuProfileUserId(const std::string& body, std::string& userId);
 bool parseBambuDeviceList(const std::string& body, std::vector<BambuCloudDevice>& out);

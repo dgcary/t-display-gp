@@ -196,7 +196,7 @@ bool parseBambuLoginReply(int httpStatus, const std::string& body, BambuLoginRep
   }
 
   if (loginType == "verifyCode") {
-    candidate.disposition = BambuLoginDisposition::NEED_EMAIL_CODE;
+    candidate.disposition = BambuLoginDisposition::NEED_VERIFICATION_CODE;
     out = std::move(candidate);
     return true;
   }
@@ -212,6 +212,11 @@ bool parseBambuLoginReply(int httpStatus, const std::string& body, BambuLoginRep
   }
 
   return false;
+}
+
+BambuVerificationChannel bambuVerificationChannelForAccount(const std::string& account) {
+  return account.find('@') == std::string::npos ? BambuVerificationChannel::SMS
+                                                 : BambuVerificationChannel::EMAIL;
 }
 
 bool extractBambuUserIdFromJwt(const std::string& token, std::string& userId) {
