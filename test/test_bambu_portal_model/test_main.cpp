@@ -5,121 +5,119 @@
 void setUp() {}
 void tearDown() {}
 
+namespace {
 BambuConfig seededConfig() {
   BambuConfig cfg;
   cfg.enabled = true;
-  cfg.region = BambuRegion::US_EU;
-  cfg.email = "user@example.com";
-  cfg.password = "saved-password";
+  cfg.region = BambuRegion::CHINA;
   cfg.accessToken = "saved-token";
-  cfg.cloudUserId = "42";
-  cfg.printerSerial = "01SAMPLE";
-  cfg.printerName = "P1S";
+  cfg.cloudUserId = "u_42";
+  cfg.printerCount = 2;
+  cfg.printers[0].serial = "01P00A123456789";
+  cfg.printers[0].name = "P1S";
+  cfg.printers[1].serial = "03900A987654321";
+  cfg.printers[1].name = "A1 mini";
+  cfg.activePrinterIndex = 0;
   return cfg;
 }
 
-void test_blank_password_preserves_existing_secret() {
-  BambuConfig existing = seededConfig();
-  BambuPortalCredentials input;
+BambuPortalConfigInput seededInput() {
+  BambuPortalConfigInput input;
   input.enabled = true;
   input.region = BambuRegion::CHINA;
-  input.email = "new@example.com";
-  input.password = "";
-  input.rememberPassword = false;
+  input.printerCount = 2;
+  input.printers[0].serial = "01P00A123456789";
+  input.printers[0].name = "P1S";
+  input.printers[1].serial = "03900A987654321";
+  input.printers[1].name = "A1 mini";
+  input.activePrinterSerial = "01P00A123456789";
+  return input;
+}
+}  // namespace
 
-  BambuConfig merged = mergeBambuPortalCredentials(existing, input);
-  TEST_ASSERT_EQUAL_STRING("saved-password", merged.password.c_str());
-  TEST_ASSERT_EQUAL_STRING("new@example.com", merged.email.c_str());
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(BambuRegion::CHINA), static_cast<int>(merged.region));
+void test_blank_token_preserves_existing_token_and_user_id() {
+  const BambuConfig existing = seededConfig();
+  BambuPortalConfigInput input = seededInput();
+  input.accessToken.clear();
+
+  const BambuConfig merged = mergeBambuPortalConfig(existing, input);
+  TEST_ASSERT_EQUAL_STRING("saved-token", merged.accessToken.c_str());
+  TEST_ASSERT_EQUAL_STRING("u_42", merged.cloudUserId.c_str());
 }
 
-void test_new_password_can_be_used_without_persisting_it() {
-  BambuConfig existing = seededConfig();
-  BambuPortalCredentials input;
-  input.enabled = true;
+void test_replacement_token_invalidates_old_user_id() {
+  const BambuConfig existing = seededConfig();
+  BambuPortalConfigInput input = seededInput();
+  input.accessToken = "replacement-token";
+
+  const BambuConfig merged = mergeBambuPortalConfig(existing, input);
+  TEST_ASSERT_EQUAL_STRING("replacement-token", merged.accessToken.c_str());
+  TEST_ASSERT_TRUE(merged.cloudUserId.empty());
+}
+
+void test_region_change_without_new_token_invalidates_old_identity() {
+  const BambuConfig existing = seededConfig();
+  BambuPortalConfigInput input = seededInput();
   input.region = BambuRegion::US_EU;
-  input.email = existing.email;
-  input.password = "one-shot-password";
-  input.rememberPassword = false;
+  input.accessToken.clear();
 
-  BambuConfig merged = mergeBambuPortalCredentials(existing, input);
-  TEST_ASSERT_TRUE(merged.password.empty());
-  TEST_ASSERT_EQUAL_STRING("one-shot-password", effectiveBambuPortalPassword(existing, input).c_str());
-}
-
-void test_remembered_new_password_replaces_old_password() {
-  BambuConfig existing = seededConfig();
-  BambuPortalCredentials input;
-  input.enabled = true;
-  input.region = BambuRegion::US_EU;
-  input.email = existing.email;
-  input.password = "replacement";
-  input.rememberPassword = true;
-
-  BambuConfig merged = mergeBambuPortalCredentials(existing, input);
-  TEST_ASSERT_EQUAL_STRING("replacement", merged.password.c_str());
-}
-
-void test_account_or_region_change_invalidates_old_cloud_identity() {
-  BambuConfig existing = seededConfig();
-  BambuPortalCredentials input;
-  input.enabled = true;
-  input.region = BambuRegion::CHINA;
-  input.email = "13800138000";
-  input.password = "replacement";
-  input.rememberPassword = true;
-
-  BambuConfig merged = mergeBambuPortalCredentials(existing, input);
+  const BambuConfig merged = mergeBambuPortalConfig(existing, input);
   TEST_ASSERT_TRUE(merged.accessToken.empty());
   TEST_ASSERT_TRUE(merged.cloudUserId.empty());
-  TEST_ASSERT_TRUE(merged.printerSerial.empty());
-  TEST_ASSERT_TRUE(merged.printerName.empty());
 }
 
-void test_same_account_and_region_preserve_cloud_identity() {
-  BambuConfig existing = seededConfig();
-  BambuPortalCredentials input;
-  input.enabled = true;
-  input.region = existing.region;
-  input.email = existing.email;
-  input.password = "replacement";
-  input.rememberPassword = true;
+void test_multi_printer_rows_and_active_selection_replace_local_list() {
+  const BambuConfig existing = seededConfig();
+  BambuPortalConfigInput input = seededInput();
+  input.printers[0].name = "Office P1S";
+  input.printers[1].name = "Desk A1 mini";
+  input.activePrinterSerial = "03900A987654321";
 
-  BambuConfig merged = mergeBambuPortalCredentials(existing, input);
-  TEST_ASSERT_EQUAL_STRING("saved-token", merged.accessToken.c_str());
-  TEST_ASSERT_EQUAL_STRING("42", merged.cloudUserId.c_str());
-  TEST_ASSERT_EQUAL_STRING("01SAMPLE", merged.printerSerial.c_str());
+  const BambuConfig merged = mergeBambuPortalConfig(existing, input);
+  TEST_ASSERT_EQUAL_UINT32(2, merged.printerCount);
+  TEST_ASSERT_EQUAL_UINT32(1, merged.activePrinterIndex);
+  TEST_ASSERT_EQUAL_STRING("Office P1S", merged.printers[0].name.c_str());
+  TEST_ASSERT_EQUAL_STRING("Desk A1 mini", merged.printers[1].name.c_str());
+  TEST_ASSERT_EQUAL_STRING("03900A987654321", activeBambuPrinter(merged)->serial.c_str());
 }
 
-void test_logout_clears_cloud_secrets_and_printer_selection_only() {
-  BambuConfig existing = seededConfig();
-  BambuConfig cleared = clearBambuPortalCredentials(existing);
+void test_missing_active_serial_falls_back_to_first_configured_printer() {
+  const BambuConfig existing = seededConfig();
+  BambuPortalConfigInput input = seededInput();
+  input.activePrinterSerial = "not-present";
+
+  const BambuConfig merged = mergeBambuPortalConfig(existing, input);
+  TEST_ASSERT_EQUAL_UINT32(0, merged.activePrinterIndex);
+}
+
+void test_clear_credentials_clears_token_identity_and_printers() {
+  const BambuConfig existing = seededConfig();
+  const BambuConfig cleared = clearBambuPortalCredentials(existing);
   TEST_ASSERT_FALSE(cleared.enabled);
-  TEST_ASSERT_EQUAL_STRING("user@example.com", cleared.email.c_str());
-  TEST_ASSERT_TRUE(cleared.password.empty());
   TEST_ASSERT_TRUE(cleared.accessToken.empty());
   TEST_ASSERT_TRUE(cleared.cloudUserId.empty());
-  TEST_ASSERT_TRUE(cleared.printerSerial.empty());
-  TEST_ASSERT_TRUE(cleared.printerName.empty());
+  TEST_ASSERT_EQUAL_UINT32(0, cleared.printerCount);
+  TEST_ASSERT_NULL(activeBambuPrinter(cleared));
 }
 
-void test_status_exposes_only_secret_presence_booleans() {
-  BambuConfig existing = seededConfig();
-  BambuPortalStatus status = buildBambuPortalStatus(existing);
-  TEST_ASSERT_TRUE(status.passwordSet);
+void test_status_exposes_token_presence_and_active_printer_only() {
+  const BambuConfig existing = seededConfig();
+  const BambuPortalStatus status = buildBambuPortalStatus(existing);
+  TEST_ASSERT_TRUE(status.enabled);
   TEST_ASSERT_TRUE(status.tokenSet);
-  TEST_ASSERT_EQUAL_STRING("user@example.com", status.email.c_str());
-  TEST_ASSERT_EQUAL_STRING("01SAMPLE", status.printerSerial.c_str());
+  TEST_ASSERT_EQUAL_UINT32(2, status.printerCount);
+  TEST_ASSERT_EQUAL_STRING("01P00A123456789", status.activePrinterSerial.c_str());
+  TEST_ASSERT_EQUAL_STRING("P1S", status.activePrinterName.c_str());
 }
 
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_blank_password_preserves_existing_secret);
-  RUN_TEST(test_new_password_can_be_used_without_persisting_it);
-  RUN_TEST(test_remembered_new_password_replaces_old_password);
-  RUN_TEST(test_account_or_region_change_invalidates_old_cloud_identity);
-  RUN_TEST(test_same_account_and_region_preserve_cloud_identity);
-  RUN_TEST(test_logout_clears_cloud_secrets_and_printer_selection_only);
-  RUN_TEST(test_status_exposes_only_secret_presence_booleans);
+  RUN_TEST(test_blank_token_preserves_existing_token_and_user_id);
+  RUN_TEST(test_replacement_token_invalidates_old_user_id);
+  RUN_TEST(test_region_change_without_new_token_invalidates_old_identity);
+  RUN_TEST(test_multi_printer_rows_and_active_selection_replace_local_list);
+  RUN_TEST(test_missing_active_serial_falls_back_to_first_configured_printer);
+  RUN_TEST(test_clear_credentials_clears_token_identity_and_printers);
+  RUN_TEST(test_status_exposes_token_presence_and_active_printer_only);
   return UNITY_END();
 }
