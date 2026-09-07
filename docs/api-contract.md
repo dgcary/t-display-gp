@@ -115,6 +115,10 @@ POST /api/bambu/logout
 
 Status/config responses may expose only secret-presence booleans such as `password_set` and `token_set`; raw password/token values are forbidden. Login/device-list response bodies are not logged. Blank password preserves the stored password under the current portal merge semantics; logout clears password, access token, cloud user ID and printer selection.
 
+Runtime ownership is explicit: `BambuMqttService` is the sole mutable owner of Bambu config after startup. Portal and UI obtain copies through mutex-protected snapshot/update APIs; no cross-core mutable `BambuConfig` reference is retained.
+
+Portal-originated replacements are authoritative and increment an external config revision. Background HTTPS operations capture that revision together with their config snapshot. Any background writeback of refreshed token/user ID, auto-selected printer, or discovered-printer cache must compare the captured revision under the same mutex immediately before commit. If the current revision differs, the result is `STALE` and must be discarded without modifying NVS/runtime config/cache. This prevents an in-flight old Cloud response from reverting newer user configuration.
+
 ## Cloud HTTPS
 
 Short-lived operations cover password login, user identity resolution and bound-printer discovery. They use `WiFiClientSecure` with CA bundle verification and acquire the shared `NetworkArbiter` for the complete request. `setInsecure()` is forbidden.
@@ -189,6 +193,8 @@ Bad Apple -> local flash playback
 
 The shared AppDataWorker has typed WEATHER / HOME_ASSISTANT result queues so delayed results cannot cross-consume. FreeRTOS queues pass pointers to C++ request/result objects rather than byte-copying objects containing `std::string`.
 
+Bambu config concurrency uses a single-owner + revision/CAS-style rule: externally submitted Portal config wins over any older in-flight background derivation. Internal token/user/printer persistence is allowed only when the external revision still equals the revision captured with the source snapshot.
+
 All ordinary short-lived external HTTP/TLS work serializes through `NetworkArbiter`. Bambu persistent MQTT holds it only during connect/reconnect handshake, never for the session lifetime.
 
 # Integrations portal
@@ -215,4 +221,4 @@ Bambu routes are listed above. The local portal itself is HTTP and therefore tru
 
 No credentials/full auth bodies in logs.
 
-Weather failure cannot alter Stock health; Stock failures cannot clear Weather/HA/Bambu caches; HA failures preserve entity cache; Bambu network loss preserves last printer snapshot; inactive Weather/HA late results never redraw the current app; Bad Apple cannot change provider/network health.
+Weather failure cannot alter Stock health; Stock failures cannot clear Weather/HA/Bambu caches; HA failures preserve entity cache; Bambu network loss preserves last printer snapshot; inactive Weather/HA late results never redraw the current app; stale Bambu background Cloud results cannot overwrite newer Portal configuration; Bad Apple cannot change provider/network health.
