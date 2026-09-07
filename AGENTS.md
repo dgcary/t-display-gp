@@ -119,11 +119,19 @@ V1 is Cloud-first/read-only:
 - account/device setup occurs through local Integrations page at `http://<device-ip>:8081/`;
 - never hard-code/log/return account password or access token.
 
+Bambu account contract:
+
+- `CHINA`: password login accepts a mainland mobile account (`1[3-9]xxxxxxxxx`, with optional `+86` or `86` prefix) or an email account;
+- `US_EU`: account is an email address;
+- the persisted field is still named `email` for existing NVS/schema compatibility, but semantically it is the Bambu account identifier;
+- password login sends the identifier as Bambu Cloud JSON field `account`, never as a required `email` field;
+- do not force HTML `type=email` validation in the portal because it rejects valid China phone accounts before Cloud login.
+
 Bambu config is separate from AppConfig and HA config and persists:
 
 ```text
 region
-email
+email (legacy field name for account identifier; China phone/email, US_EU email)
 password (optional, for unattended renewal)
 accessToken
 cloudUserId
@@ -177,7 +185,7 @@ Failed unattended relogin is bounded:
 60 s -> 300 s -> 900 s -> 1800 s -> 1800 s ...
 ```
 
-If account flow requires 2FA/email code, expose a clear terminal status and stop unattended retry; never attempt to bypass the second factor.
+If account flow requires 2FA/email/SMS code, expose a clear terminal status and stop unattended retry; never attempt to bypass the second factor.
 
 ## Integrations portal
 
@@ -249,6 +257,7 @@ Real T-Display-S3 evidence must verify at minimum:
 - Weather current + 今/明, no 后天, no dividers, Bad Apple 168×126 / ~10 FPS / loop / exit-reenter behavior.
 - HA regression through existing server with no secret leak.
 - Bambu config through local :8081 page without secret echo.
+- for a China-region account, the portal accepts the real phone identifier and password without browser-side email rejection; Global accounts retain email login.
 - successful non-2FA Cloud login, printer discovery/selection and Cloud MQTT state.
 - remote printer data works without printer-LAN reachability when Internet remains available.
 - Bambu progress/ETA/layers/temps/job/filament update without UI freeze.
