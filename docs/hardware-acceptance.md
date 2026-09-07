@@ -1,6 +1,6 @@
 # T-Display-S3 Hardware Acceptance
 
-只用于 **LILYGO T-Display-S3 真机**。Host test / firmware build 不能代替实体板验收。
+只用于 **LILYGO T-Display-S3 真机**。Host tests / CI build 不能替代实体板验收。
 
 每次记录：branch、完整 source SHA、Actions run、artifact、firmware SHA256、日期、Wi-Fi、串口和结果。
 
@@ -12,15 +12,14 @@
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
-python tools/validate_nixie_clock_contract.py
+python tools/validate_app_shell_contract.py
 python tools/validate_dashboard_apps_contract.py
+python tools/validate_bambu_cloud_contract.py
 python tools/validate_bad_apple_contract.py
 pio test -e native
 python tools/prepare_bad_apple_asset.py
 pio run -e lilygo-t-display-s3
 ```
-
-Bad Apple 构建阶段需要 ffmpeg。生成器必须验证锁定 source Git blob SHA1，并对全部 2190 帧的 delta 编解码 round-trip 成功后才允许 ESP build。
 
 Codex 下载 exact-SHA `tdisplay-gp-firmware-<SOURCE_SHA>` 并确认：
 
@@ -29,136 +28,165 @@ manifest source_sha == approved SHA
 actual firmware.bin SHA256 == manifest firmware_sha256
 ```
 
-正常升级仅写 `firmware.bin` 到 manifest `firmware_offset`（当前通常 `0x10000`），Bad Apple 媒体已包含在 application image 内。不得 erase NVS，不重写 bootloader/partition table。Serial 115200。
+正常升级仅写 `firmware.bin` 到 manifest `firmware_offset`（当前通常 `0x10000`）。不得 erase NVS，不重写 bootloader/partition table。Serial 115200。
 
-## Display / Input
+## Display / Input / Startup
 
 - 320×170 landscape rotation 3，无裁切/花屏/残留。
 - 中文可读。
-- 菜单六项：股票、天气、辉光时钟、智能家居、加密货币、设备信息。
+- 菜单恰好五项且顺序正确：**股票、天气、Bambu Lab、智能家居、设备信息**。
 - 40 ms debounce、700 ms long、long release 不产生额外 short。
-
-## 默认启动 / Navigation
-
-重启必须直接进入 **NixieClock**。
-
-自动 idle 跳转已取消。分别在以下页面无按键停留 >60 s：
-
-```text
-Menu             -> still Menu
-Weather          -> still Weather
-Home Assistant   -> still Home Assistant
-Crypto           -> still Crypto
-DeviceInfo       -> still DeviceInfo
-Stock            -> still Stock
-Nixie            -> still Nixie
-```
-
-期间网络刷新/数据变化不得自动切换 App。App 只允许由用户明确按键导航切换。
-
-## NixieClock
-
-- 未同步时明确 waiting，不显示伪有效 1970/00:00。
-- 同步后 HH:MM、日期、weekday、seconds 正确。
-- 暖橙辉光，colon ~500 ms。
-- 无 500 ms 整屏 black flash；minute change 无整屏闪烁。
-- 不产生由 Nixie 触发的 `[md]` / `[appdata]`。
-- `[sys] app=NIXIE_CLOCK`。
+- 重启直接进入 **Stock**。
+- Menu / Stock / Weather / Bambu / Home Assistant / DeviceInfo 任一页面无按键停留 >60 s 仍保持该页面；网络刷新不得自动切 App。
 
 ## Weather / Bad Apple
 
-先配置有效地点并确认 `[appdata] type=WEATHER` 正常。
+左侧：current condition/temp/apparent/humidity/wind/rain/update 可读；底部只显示紧凑 **今 / 明**，不得显示“后天”。
 
-左侧信息必须满足：
+右侧：
 
-- current condition、temperature、apparent temperature、humidity、wind、precipitation probability、updated time 可读且不被视频覆盖。
-- 底部仅显示紧凑的 **“今” / “明”** 两行 high-low/condition。
-- **不得显示“后天”** 卡片/行。
+- 168×126，约 x=152,y=27 至屏幕右侧/接近底部；
+- 无贯穿顶部横向分隔线；无天气/视频之间竖向分隔线；
+- Bad Apple 黑白轮廓可辨认，约 10 FPS，不能 100 ms 整屏闪黑；
+- 前台约 220 s 后完整序列回到开头继续循环；
+- 离开 Weather 后停止视频后台重绘；重新进入从开头播放；
+- 播放不增加 network/AppDataWorker 请求；
+- Weather 5 min 无 watchdog/panic/reboot/freeze，heap 不持续单向下降。
 
-右侧视频必须满足：
+天气成功后断网：旧 cache 保留，无 tight retry；Bad Apple 本地视频继续播放。
 
-- 可视区域为 **168×126**，从约 `x=152, y=27` 铺到屏幕右侧/接近底部，无越界。
-- **不得出现贯穿顶部的横向分隔线，也不得出现左侧天气与视频之间的竖向分隔线。**
-- 黑白 Bad Apple silhouette 动画可辨认，不应只是噪点/全黑/全白。
-- 帧率体感约 10 FPS，连续播放；不能每 100 ms 整屏闪黑/清屏。
-- 保持 Weather 前台约 **220 s**，确认完整约 219 s 序列后能回到开头并继续循环。
-- 长按 GPIO0 离开 Weather 后，当前页面不得再被 Bad Apple 后台重绘/污染。
-- 再次进入 Weather 时从视频开头重新播放。
-- 视频播放不应触发额外 `[net]` / `[appdata]` 请求；Open-Meteo 仍仅按原刷新策略工作。
-- Weather 播放 5 min 期间无 watchdog/panic/reboot/freeze，heap 不持续单向下降。
+## Unified Integrations portal
 
-天气网络回归：成功取得天气后安全断网，旧 cache 保留且无 tight retry；Bad Apple 本地视频仍可继续播放，因为媒体已经在 firmware.bin 内。
-
-## Home Assistant
-
-**使用用户已有 Home Assistant Server；T-Display 只是 REST client。**
-
-T-Display 客户端配置页：
+打开：
 
 ```text
 http://<device-ip>:8081/
 ```
 
-配置 existing HA Base URL、Long-Lived Access Token、1–4 entity IDs、optional labels、30–300 s refresh；HTTPS 才填 CA PEM。`:8081` 不是 HA Server。
+必须只有一个共享 Integrations 页面，并同时出现 Home Assistant 与 Bambu Lab Cloud 配置区。
 
-HTTP 环境（如用户现有 LAN HA）：
+本地 8081 为 HTTP，只在可信 LAN 使用。
+
+## Home Assistant regression
+
+T-Display 继续作为用户现有 HA server 的只读 REST client。
+
+- HTTP 模式无需 CA、能读取配置实体；仅可信 LAN。
+- HTTPS 模式若测试：正确 CA 成功，错误/缺失 CA 不允许 insecure fallback。
+- 1–4 entity state/unit/label 可见，失败后保留 last-valid state。
+- `/api/ha/status` 不含 Token/CA 内容，只允许存在性标志。
+- Serial 不出现 HA Token/Authorization header。
+
+## Bambu Lab Cloud — secret safety
+
+**账号密码只在本地 `:8081` 页面直接输入，不发给 ChatGPT/Codex，不放入串口报告/截图。**
+
+检查：
+
+- Bambu status 不回显 password/access token，只显示 `password_set` / `token_set` 等存在性；
+- 密码框留空保存不会意外把已保存密码变成明文返回；
+- logout 能清除密码、Token、cloud user ID 和打印机选择；
+- Serial 不出现密码、Token、完整 Authorization/Cloud response body。
+
+## Bambu Lab Cloud — login / printer discovery
+
+对非 2FA 账号：
+
+1. 选正确 region；
+2. 本地输入邮箱/密码；
+3. 登录成功；
+4. printer picker 能列出账号绑定设备；
+5. 保存选中打印机并重启/应用；
+6. Bambu 页面从 UNCONFIGURED/CONNECTING 进入在线/有效状态。
+
+若账号要求 2FA/email code：应明确显示需要二次认证/无人值守续期不可用；不得持续快速重试或绕过。此项可按账号实际情况记 PASS/NOT APPLICABLE。
+
+## Bambu Cloud MQTT / remote reachability
+
+Cloud brokers：China `cn.mqtt.bambulab.com:8883`；US/EU `us.mqtt.bambulab.com:8883`。
+
+验证：
+
+- 选中设备后订阅 `device/<serial>/report`，打印机状态能持续更新；
+- V1 仅允许 read-only `pushall` 状态同步，不测试/执行任何打印机控制命令；
+- **关键远程场景：** 在不破坏其他网络的前提下，让 T-Display 无法直达打印机 LAN、但仍可访问 Internet，确认仍能通过 Bambu Cloud 获取打印机状态；
+- 不要修改公司/家庭网络基础设施来强行制造场景；可使用安全的独立热点/不同网络完成远程验证。
+
+## Bambu screen live state
+
+在打印中观察：
+
+- friendly printer name + connection/print state；
+- progress 百分比/进度条；
+- ETA/remaining minutes；
+- layer current/total；
+- nozzle current/target；
+- bed current/target；
+- chamber temp（机型/报告提供时）；
+- job/subtask name；
+- active filament/AMS slot/type/color（报告提供时）。
+
+缺失字段可以显示占位，不得用垃圾值导致崩溃。Partial report 不应清空旧的有效字段。
+
+## Bambu background freshness
+
+1. 在 Bambu 页面确认初始状态。
+2. 切到 Stock/Weather/HA/DeviceInfo，停留足够时间让打印进度发生变化。
+3. 返回 Bambu。
+4. 应直接看到更新后的 cache；不应因为离开 Bambu 而断开 MQTT 或重新从零开始等待完整状态。
+5. MQTT connected 时 Stock/Weather/HA 仍可正常进行各自短生命周期网络请求，不得被永久阻塞。
+
+## Wi-Fi loss / recovery
+
+在可控条件下中断 T-Display Wi-Fi 后恢复：
+
+- last valid printer state 保留；
+- connectivity 显示 offline/connecting；
+- Wi-Fi 恢复后 Cloud MQTT 自动重连；
+- 无 watchdog、panic、unexpected reboot、freeze；
+- 无明显单向 heap leak。
+
+## Token renewal
+
+只在**安全且不会造成账号锁定**的方式下测试。
+
+期望：Token 无效/MQTT auth rc 4/5，且已保存密码时，进入自动 relogin，取得新 Token/User ID 并重新连接。失败退避约：
 
 ```text
-http://homeassistant.local:8123
-http://<ha-ip>:8123
+1 min -> 5 min -> 15 min -> 30 min max
 ```
 
-确认无需 CA 即可读取实体，UI 显示 state/unit/label，日志出现 `mode=HA_HTTP` 和 `[appdata] type=HOME_ASSISTANT`。HTTP Token 在 LAN 明文，仅可信 LAN 测试。
-
-若有 HTTPS 环境：配置正确 CA 后读取成功且 `mode=HA_CA`；错误/缺失 CA 不得 insecure fallback。
-
-Secret 检查：
-
-- `/api/ha/status` 不含 Token/CA 内容，只允许 `ha_token_set` / `ha_ca_set`。
-- Serial 不出现 Token/Authorization header。
-
-成功取得 cache 后中断 HA/网络，已有实体保留 last state。V1 不测试写控制，因为明确 read-only。
-
-## Crypto
-
-- BTC / ETH / SOL 三行。
-- USDT price + 24h change。
-- `[appdata] type=CRYPTO`。
-- `[net] host=data-api.binance.vision ...`。
-- 前台停留 >60s 正常刷新，无 tight loop，且不得自动切到 Nixie。
-- 成功后安全断网，last complete snapshot 保留。
-- 退出 Crypto 后不启动新 Crypto cycles。
-
-## DeviceInfo
-
-真实 LAN IP、SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM、`Web: http://<IP>/`；不显示 secrets。
+不要为了测试而连续提交错误密码或反复撞 Bambu Cloud。若无法安全制造 Token 失效，标记 `NOT TESTED`，不影响普通 Cloud MQTT smoke，但影响“完整自动续期验收”的结论。
 
 ## Stock regression
 
-Stock >60s 保持 Stock，直到用户主动离开。切股一次一只；正红负绿；quote/intraday 信息和图表正常；Tencent 默认 primary；每个新 intraday cycle 先 Tencent；quote/intraday health 独立。
+- Stock >60 s 保持 Stock；
+- 切股/颜色/quote/intraday/chart 正常；
+- Tencent 默认 primary，EastMoney fallback 逻辑未回归；
+- quote/intraday health 独立；
+- cache 保留。
 
-正常常见：`Q:TX I:TX`。Tencent intraday 最终失败且 EastMoney 健康时应有 `[md] ... fallback=TX->EM` 并可出现 `I:EM`。Quote failover/recovery 逻辑不回归。
+## Shared worker / concurrency
 
-## Shared worker / NetworkArbiter
+快速切 Weather/HA/Bambu/Menu/Stock/DeviceInfo：
 
-快速切 Weather/HA/Crypto/Menu/Nixie/Stock：
-
-- actual external HTTP/TLS max one at once。
-- Weather/HA/Crypto 共用一个 AppDataWorker，但 late results 不串 App。
-- inactive app late completion 不 redraw current TFT。
-- 显式离开 remote app 后，不允许 inactive app 启动新的 request cycle。
-- Bad Apple 播放不得新增 FreeRTOS worker/AppDataWorker request/NetworkArbiter traffic。
-- Nixie/DeviceInfo 不占 AppDataWorker/NetworkArbiter。
+- Stock 使用专用 MarketDataWorker；
+- Weather/HA 共用一个 AppDataWorker，late results 不串 App；
+- inactive Weather/HA 不因 late completion 重绘当前 TFT；
+- Bambu Cloud MQTT 是独立后台服务，App transition 不控制其连接；
+- Bambu MQTT connect/reconnect handshake 才参与 NetworkArbiter；建立后持久 socket 不长期持有 arbiter；
+- Bad Apple 不新增网络/worker/arbiter traffic；
+- DeviceInfo local-only。
 
 ## Stability
 
-收集 `[sys]`：
+收集 `[sys]` 应只出现：
 
 ```text
-app=MENU|STOCK|WEATHER|NIXIE_CLOCK|HOME_ASSISTANT|CRYPTO|DEVICE_INFO
+MENU|STOCK|WEATHER|BAMBU|HOME_ASSISTANT|DEVICE_INFO
 ```
 
-至少覆盖开机、Stock 10 min、Weather Bad Apple >=5 min、Weather network cache test、HA success、Crypto >=2 cycles、Nixie 5 min、100 transitions、Wi-Fi interruption/recovery。
+正式 full acceptance 至少覆盖：Stock 10 min、Weather >=5 min、HA success、Bambu active print/background freshness、Wi-Fi interruption/recovery、100 transitions。
 
 100 次跨 App/menu transition：watchdog=0、unexpected reboot=0、freeze=0、short-after-long=0、明显 heap leak=0、background wrong-screen redraw=0。
 
@@ -171,24 +199,34 @@ PORT:
 FIRMWARE SHA256:
 FLASH: PASS/FAIL
 DISPLAY/INPUT: PASS/FAIL
-NIXIE DEFAULT START: PASS/FAIL
+STOCK DEFAULT START: PASS/FAIL
+FIVE-APP MENU: PASS/FAIL
 NO AUTO-IDLE SWITCH: PASS/FAIL
 WEATHER LEFT LAYOUT: PASS/FAIL
 WEATHER NO DIVIDERS: PASS/FAIL
-BAD APPLE 168x126: PASS/FAIL
-BAD APPLE ~10FPS: PASS/FAIL
-BAD APPLE ~219S LOOP: PASS/FAIL
+BAD APPLE 168x126 / ~10FPS: PASS/FAIL
+BAD APPLE ~219S LOOP: PASS/FAIL/NOT TESTED
 BAD APPLE EXIT/REENTER: PASS/FAIL
 WEATHER NETWORK/CACHE: PASS/FAIL
+UNIFIED :8081 PORTAL: PASS/FAIL
 HOME ASSISTANT HTTP: PASS/FAIL/NOT TESTED
 HOME ASSISTANT HTTPS CA: PASS/FAIL/NOT TESTED
 HA SECRET LEAK: PASS/FAIL
-CRYPTO: PASS/FAIL
+BAMBU LOGIN: PASS/FAIL/2FA BLOCKED/NOT TESTED
+BAMBU PRINTER DISCOVERY: PASS/FAIL/NOT TESTED
+BAMBU CLOUD MQTT: PASS/FAIL/NOT TESTED
+BAMBU REMOTE-NETWORK TEST: PASS/FAIL/NOT TESTED
+BAMBU LIVE FIELDS: PASS/FAIL/PARTIAL/NOT TESTED
+BAMBU BACKGROUND FRESHNESS: PASS/FAIL/NOT TESTED
+BAMBU SECRET LEAK: PASS/FAIL
+BAMBU WIFI RECOVERY: PASS/FAIL/NOT TESTED
+BAMBU TOKEN AUTO-RELOGIN: PASS/FAIL/NOT TESTED
+BAMBU 2FA BEHAVIOR: PASS/FAIL/NOT APPLICABLE/NOT TESTED
 STOCK/TENCENT: PASS/FAIL
 TX->EM FALLBACK: PASS/FAIL/NOT TRIGGERED
-100-TRANSITION SOAK: PASS/FAIL
+100-TRANSITION SOAK: PASS/FAIL/NOT TESTED
 HEAP/STABILITY: PASS/FAIL
 FULL HARDWARE ACCEPTANCE: PASS/FAIL/PARTIAL
 ```
 
-FAIL 附原始串口、复现步骤、时间点和照片/截图（适用时）。
+FAIL 附原始串口、复现步骤、时间点和照片/截图（适用时），但先主动删去/打码任何 secret。

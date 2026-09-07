@@ -13,7 +13,7 @@ Do not silently change target/pins/display/orientation.
 
 ## Development / deployment split
 
-Web ChatGPT owns source inspection, design, implementation, regression tests, GitHub commits/PR updates, validators, native tests, real ESP32-S3 PlatformIO compile, exact-SHA artifact verification.
+Web ChatGPT owns source inspection, design, implementation, regression tests, GitHub commits/PR updates, validators, native tests, real ESP32-S3 PlatformIO compile and exact-SHA artifact verification.
 
 Required development checks:
 
@@ -21,21 +21,22 @@ Required development checks:
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
-python tools/validate_nixie_clock_contract.py
+python tools/validate_app_shell_contract.py
 python tools/validate_dashboard_apps_contract.py
+python tools/validate_bambu_cloud_contract.py
 python tools/validate_bad_apple_contract.py
 pio test -e native
 python tools/prepare_bad_apple_asset.py
 pio run -e lilygo-t-display-s3
 ```
 
-`prepare_bad_apple_asset.py` requires ffmpeg plus access to its pinned source when `.badapple-cache/source.mp4` is absent. It verifies the source Git blob SHA1 and the complete generated delta round-trip before emitting ignored `src/generated/BadAppleAsset.*` build inputs.
+Bad Apple generation requires ffmpeg plus access to its pinned source when cache is absent. Generator must verify source Git blob SHA1 and complete frame-delta round-trip.
 
-CI publishes `tdisplay-gp-firmware-<SOURCE_SHA>` containing firmware.bin, partitions.bin, bootloader.bin, firmware-manifest.txt.
+CI publishes `tdisplay-gp-firmware-<SOURCE_SHA>` with firmware.bin, partitions.bin, bootloader.bin and firmware-manifest.txt.
 
-Codex only downloads exact artifact, verifies manifest/hash, flashes application image, monitors serial and performs physical tests. Normal deployment does not recompile, erase NVS, or rewrite bootloader/partitions.
+Codex only downloads exact artifact, verifies manifest/hash, flashes application image, monitors serial and performs physical tests. Normal deployment does not recompile, erase NVS or rewrite bootloader/partitions.
 
-## Hardware/input
+## Hardware / input
 
 - GPIO15 display power HIGH before TFT init.
 - GPIO38 backlight.
@@ -47,185 +48,217 @@ normal app: GPIO0 short prev; GPIO14 short next; GPIO0 long menu; GPIO14 long no
 menu:       GPIO0 short prev; GPIO14 short next; GPIO0 long no-op; GPIO14 long enter
 ```
 
-## Current App shell
+## Current app shell
 
 ```text
 StockApp
 WeatherApp
-NixieClockApp
+BambuApp
 HomeAssistantApp
-CryptoApp
 DeviceInfoApp
 ```
 
-### Startup / navigation
+Menu order is exactly:
 
-**Startup = `NIXIE_CLOCK`.**
+```text
+股票 / 天气 / Bambu Lab / 智能家居 / 设备信息
+```
 
-There is **no automatic idle-to-Nixie behavior**.
+Startup = **STOCK**. There is **no automatic idle switching**. MENU / STOCK / WEATHER / BAMBU / HOME_ASSISTANT / DEVICE_INFO remain active until explicit navigation. Network/data activity never changes the active app.
 
-- MENU / STOCK / WEATHER / NIXIE_CLOCK / HOME_ASSISTANT / CRYPTO / DEVICE_INFO remain active indefinitely until explicit user navigation.
-- `AppManager` must not maintain a global inactivity timer or switch apps because of elapsed idle time.
-- network/data activity never changes the active app.
-
-## App lifecycle
-
-- `main.cpp` only common boot/service/AppManager wiring; app logic stays in app/controller/provider boundaries.
-- only active app gets normal input/tick/render.
-- app exit preserves valid cache/state.
-- inactive late results never redraw TFT.
-- menu must not hard-code exact count behavior.
+`main.cpp` is common boot/service/AppManager wiring only; app business logic stays in app/controller/provider/service boundaries.
 
 ## Stock
 
 - Tencent quote + intraday primary; EastMoney secondary/fallback.
 - quote and intraday health independent.
 - quote traffic outranks intraday; waiting intraday latest-wins.
-- every new intraday cycle starts Tencent.
-- Tencent transient intraday retry bounded/deferred max 3 and yields to quote.
-- EastMoney intraday failure terminal for cycle; full cycle failure waits normal refresh.
-- quote failover after 3 Tencent failures in existing window; while secondary probe Tencent at existing interval; 2 consecutive successes recover.
-- Stock exit pauses new/pending MarketDataWorker execution but does not force-kill already executing HTTPS.
-- Stock remains active until the user explicitly leaves it.
-- parsers remain fail-closed; failures preserve cache.
+- parsers fail closed and preserve last-valid cache.
+- Stock keeps the dedicated `MarketDataWorker`.
 
-## Weather
+## Weather / Bad Apple
 
 - Open-Meteo V1; provider keeps current + 3-day structured data.
-- default 15 min; 5–60 min configurable.
-- schedule from last attempt, no tight retry.
-- failure preserves cache and cannot poison Stock health.
-- remote fetch is active-only through the existing shared AppDataWorker.
-- Weather UI shows current data plus compact **Today/Tomorrow only**; `dayAfter` may remain in provider/cache but must not be rendered.
-- right-side Bad Apple viewport is fixed **x=152, y=27, 168×126**.
-- do not draw a full-width header divider or a vertical left/video separator; the Bad Apple viewport and its boundary must remain free of UI divider lines.
-- Bad Apple playback contract: **2190 frames, 10 FPS, ~219 s, 1-bit monochrome, silent, loop**.
-- Weather entry resets playback to frame 0. Weather exit stops animation scheduling/rendering.
-- 10 FPS updates redraw only the video viewport; do not full-screen clear at frame cadence.
-- playback is local flash data only: no new task, AppDataWorker request, NetworkArbiter acquisition, HTTP or TLS.
-- runtime keeps only one 1-bit frame buffer (2646 bytes) plus a small RGB565 row buffer.
-- generated media uses first-frame + XOR sparse delta encoding. Build-time conversion is pinned by source commit and Git blob SHA1 and must verify every encoded frame round-trip.
-- original MP4 and generated `BadAppleAsset.*` are build inputs/cache and are not committed.
-- repository/source-code licensing does not grant rights to the underlying Bad Apple!! PV/music; media rights remain with their respective holders.
-
-## Nixie
-
-- default startup; not an automatic idle destination.
-- local-only: no HTTPClient/WiFiClientSecure/HttpTransport/AppDataWorker/NetworkArbiter dependency.
-- reuse common system clock via `DeviceLayer::localDateTime()`; no independent NTP client/task.
-- valid HH:MM/date/weekday/seconds; invalid time explicit waiting.
-- ~1 s sample, ~500 ms colon phase; partial refresh, not periodic full-screen clear.
-
-## DeviceInfo
-
-Local-only. Show IP, SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM and `Web: http://<IP>/`; no password/token display.
+- default 15 min; 5–60 min configurable; active-only shared AppDataWorker request.
+- failure preserves cache.
+- UI shows current + Today/Tomorrow only; `dayAfter` is not rendered.
+- fixed viewport x=152, y=27, 168×126.
+- no full-width header divider and no vertical left/video separator.
+- 2190 frames, 10 FPS, ~219 s, 1-bit monochrome, silent, loop.
+- Weather entry resets playback to frame 0; exit stops animation refresh.
+- redraw only video viewport; no 10 FPS whole-screen clear.
+- local flash only: no playback task, HTTP, TLS, AppDataWorker request or NetworkArbiter acquisition.
+- one packed frame buffer (2646 bytes) plus small RGB565 row buffer.
+- original MP4 and generated asset files are build/cache inputs, not committed.
+- project license does not relicense the Bad Apple!! PV/music.
 
 ## Home Assistant
 
-**The user's existing Home Assistant is the server. T-Display-S3 is only a REST API client. Do not implement a second HA server on the board.**
+The user's existing Home Assistant is the server. T-Display-S3 is only a read-only REST client; do not implement a second HA server.
 
-V1:
-
-- read-only, no `/api/services` writes/control.
 - 1–4 entity IDs, optional labels.
 - sequential `GET <base_url>/api/states/<entity_id>`.
-- `Authorization: Bearer <Long-Lived Access Token>`.
-- refresh 30–300 s, default 30; active-only.
-- per-entity last-valid cache survives errors.
-- HA config stored in separate `ha_config` NVS blob; AppConfig remains schema v2.
-- T-Display client config page `http://<device-ip>:8081/`; this is not HA server.
-- status may expose `ha_token_set` / `ha_ca_set`, never Token/CA contents.
-- serial never logs Token/full Authorization.
+- Bearer Long-Lived Access Token.
+- refresh 30–300 s, default 30 s; active-only.
+- per-entity last-valid cache.
+- separate HA config storage.
+- HTTP mode is trusted-LAN cleartext.
+- HTTPS requires configured CA + `setCACert()`; `setInsecure()` forbidden in credentialed HA HTTPS.
+- status may expose only secret-presence flags, never Token/CA contents.
 
-Transport:
+Weather and HA share exactly **one** `AppDataWorker`. Do not create per-app workers.
+
+## Bambu Lab Cloud
+
+Bambu is a **device-level background integration**, not an AppDataWorker request and not active-app-only.
+
+V1 is Cloud-first/read-only:
+
+- no printer-LAN MQTT 8883 dependency or public exposure;
+- no pause/resume/stop/light/temperature/camera control;
+- account/device setup occurs through local Integrations page at `http://<device-ip>:8081/`;
+- never hard-code/log/return account password or access token.
+
+Bambu config is separate from AppConfig and HA config and persists:
 
 ```text
-http://  -> WiFiClient; trusted-LAN cleartext mode; CA not required
-https:// -> WiFiClientSecure + configured setCACert(); setInsecure forbidden
+region
+email
+password (optional, for unattended renewal)
+accessToken
+cloudUserId
+printerSerial
+printerName
+enabled
 ```
 
-Unknown schemes invalid. HTTPS without valid CA invalid. Both modes acquire NetworkArbiter, reuse false, bounded HA body 4 KiB. HTTP explicitly exposes Bearer token to LAN observers and must be documented as trusted-LAN only.
+Cloud brokers:
 
-## Crypto
+```text
+CHINA -> cn.mqtt.bambulab.com:8883
+US_EU -> us.mqtt.bambulab.com:8883
+```
 
-- BTCUSDT / ETHUSDT / SOLUSDT.
-- provider `data-api.binance.vision`, `/api/v3/ticker/24hr`, one request for 3 symbols.
-- no Binance API credential.
-- fixed V1 refresh 60 s; active-only.
-- parser maps by symbol, rejects unknown/duplicate/missing/malformed rows; update only after all 3 validate.
-- failure preserves last complete snapshot.
+MQTT credential/topic contract:
 
-## Shared AppDataWorker
+```text
+username = cloudUserId
+password = accessToken
+subscribe = device/<serial>/report
+```
 
-Do not create per-app workers.
+The sole permitted V1 publish is the read-only `pushall` state-sync request to `device/<serial>/request`. No printer-control publish path may be added.
 
-- Stock keeps specialized MarketDataWorker.
-- Weather / HA / Crypto share exactly one AppDataWorker request queue/task.
-- typed result queues by AppDataRequestType prevent cross-app delayed-result loss.
-- FreeRTOS queues pass pointers to C++ request/results; do not raw byte-copy objects containing std::string.
-- Nixie/DeviceInfo use no network worker.
-- Bad Apple playback is not a worker and never adds requests to AppDataWorker.
+### TLS / NetworkArbiter
 
-## NetworkArbiter / transport
+- Bambu login/profile/device discovery HTTPS uses CA verification. `setInsecure()` is forbidden.
+- Bambu MQTT uses `WiFiClientSecure` + CA bundle. `setInsecure()` is forbidden.
+- Short-lived Bambu HTTPS calls acquire the shared `NetworkArbiter` for the full request.
+- MQTT connect/reconnect handshake acquires the arbiter; once connected, release it. Persistent MQTT keepalive/report traffic owns its dedicated socket and must not hold the arbiter for the lifetime of the connection.
+- App transitions must never disconnect MQTT.
 
-All actual external HTTP/TLS operations serialize through shared NetworkArbiter, max one at once.
+### MQTT service / state
 
-Public Stock/Weather/Crypto HttpTransport remains:
+- exactly one MQTT service execution context owns connect/subscribe/callback-state mutation/`mqtt.loop()`.
+- receive buffer target is **40960 bytes**; allocation failure is non-fatal and visible as BUFFER_ERROR.
+- disconnect/network loss must preserve last valid printer snapshot.
+- malformed/partial reports update only valid present fields and never destroy last valid state.
+- BambuApp/BambuScreen are passive readers/renderers and must not connect/disconnect/publish.
 
-- connect 1500 ms.
-- HTTP/read setting 2500 ms.
-- TLS handshake 5 s cap.
-- retained body max 32 KiB.
-- HTTPClient reuse false.
-- don't pass millisecond read constant to seconds-based WiFiClientSecure::setTimeout in Arduino-ESP32 2.0.14.
-- public-data clients keep existing setInsecure trust model unless separately redesigned.
+### Token renewal
 
-HA HTTPS credential path is the exception: CA verification required, no setInsecure.
+MQTT auth rc 4/5 or invalid token -> if a saved password exists, automatic HTTPS relogin -> persist replacement token/user ID -> reconnect MQTT.
+
+Failed unattended relogin is bounded:
+
+```text
+60 s -> 300 s -> 900 s -> 1800 s -> 1800 s ...
+```
+
+If account flow requires 2FA/email code, expose a clear terminal status and stop unattended retry; never attempt to bypass the second factor.
+
+## Integrations portal
+
+There is exactly one `WebServer{8081}` owner: `IntegrationConfigPortal`.
+
+Preserve HA routes:
+
+```text
+/api/ha/status
+/api/ha/config
+```
+
+Bambu routes:
+
+```text
+/api/bambu/status
+/api/bambu/login
+/api/bambu/printers
+/api/bambu/config
+/api/bambu/logout
+```
+
+Blank Bambu password input preserves stored password unless the flow explicitly elects not to remember/clears it. Logout clears password, token, user ID and printer selection. Status may expose only booleans such as `password_set` / `token_set`; no raw secret values.
+
+## DeviceInfo
+
+Local-only. Show IP, SSID/RSSI/MAC, uptime/time, heap/min heap, PSRAM and Web address; no credentials.
+
+## Shared workers / network concurrency
+
+```text
+Stock -> dedicated MarketDataWorker
+Weather + HomeAssistant -> exactly one shared AppDataWorker
+Bambu -> one persistent MQTT service/task
+DeviceInfo -> local-only
+Bad Apple -> local flash playback
+```
+
+All short-lived external HTTP/TLS operations serialize through `NetworkArbiter`, max one at once. Bambu persistent MQTT is the deliberate exception after connection establishment: its dedicated socket stays alive without holding arbiter.
+
+FreeRTOS queues pass pointers to C++ objects; do not raw-copy non-trivial `std::string` objects.
 
 ## Config
 
 - AppConfig schema v2, namespace `stockticker`.
-- v1 migration preserves stocks/names/refresh; Weather default disabled/15 min.
-- Nixie adds no config fields.
 - HA separate `ha_config` blob.
-- Bad Apple adds no runtime config/NVS fields.
+- Bambu separate `bambucloud` namespace/blob.
 - normal firmware upgrade preserves NVS.
-- configuration changes reboot-apply atomically.
+- configuration changes reboot-apply atomically where currently implemented.
 
 ## Diagnostics
 
 ```text
 [md]      Stock
-[appdata] WEATHER / HOME_ASSISTANT / CRYPTO
-[net]     actual transport; HA mode=HA_HTTP or HA_CA
-[sys]     MENU|STOCK|WEATHER|NIXIE_CLOCK|HOME_ASSISTANT|CRYPTO|DEVICE_INFO
+[appdata] WEATHER / HOME_ASSISTANT
+[net]     actual short-lived transport; HA mode=HA_HTTP or HA_CA
+[sys]     MENU|STOCK|WEATHER|BAMBU|HOME_ASSISTANT|DEVICE_INFO
 ```
 
-No full bodies/credentials by default.
+Do not invent secret-bearing Bambu diagnostics. Password, access token, Authorization headers and full auth/device response bodies must never be logged.
 
 ## Physical acceptance
 
-Real T-Display-S3 evidence must verify:
+Real T-Display-S3 evidence must verify at minimum:
 
-- 320×170 + Chinese.
-- boot Nixie.
-- Nixie local time/partial animation/no network.
-- six-app menu/input.
-- every app/menu remains on the selected view during >60 s inactivity; no automatic switch to Nixie.
-- Weather left text remains readable; Today/Tomorrow are shown and day-after is absent.
-- Weather has no full-width top divider and no vertical divider at the Bad Apple boundary.
-- Weather right 168×126 Bad Apple animation progresses near 10 FPS, shows multiple recognizable silhouette scenes, loops around 219 s, and causes no 10 FPS full-screen flicker.
-- leaving Weather stops Bad Apple redraw; re-entering Weather restarts at frame 0.
-- HA connects as client to existing user server over configured HTTP or CA-verified HTTPS; 1–4 entities render; no secret leak.
-- Crypto BTC/ETH/SOL live.
-- Stock Tencent/EastMoney behavior unchanged.
-- caches survive transitions/failures.
-- >=100 transitions, no watchdog/reboot/freeze/monotonic heap leak.
+- 320×170 Chinese UI and five-app menu/input.
+- boot Stock; no auto-idle switching.
+- Weather current + 今/明, no 后天, no dividers, Bad Apple 168×126 / ~10 FPS / loop / exit-reenter behavior.
+- HA regression through existing server with no secret leak.
+- Bambu config through local :8081 page without secret echo.
+- successful non-2FA Cloud login, printer discovery/selection and Cloud MQTT state.
+- remote printer data works without printer-LAN reachability when Internet remains available.
+- Bambu progress/ETA/layers/temps/job/filament update without UI freeze.
+- leaving Bambu does not stop MQTT; returning shows fresh cached state.
+- Stock/Weather/HA remain usable while MQTT stays connected.
+- Wi-Fi loss/recovery reconnects without watchdog/panic/reboot or monotonic heap loss.
+- token invalid -> saved-password relogin/reconnect when safely testable; 2FA behavior is explicit when applicable.
+- >=100 app/menu transitions for formal full acceptance.
 
 See `docs/hardware-acceptance.md`.
 
 ## Safety
 
-Scope is this repository and connected T-Display-S3. Do not modify unrelated servers/network/DHCP/Wi-Fi infrastructure. Never hard-code passwords, GitHub secrets, HA tokens or account credentials.
+Scope is this repository and connected T-Display-S3. Do not modify unrelated servers/network/DHCP/Wi-Fi infrastructure. Never hard-code passwords, GitHub secrets, HA tokens or Bambu credentials.
 
 When lifecycle/input/config/provider/transport/build/deployment/UI changes, keep README.md, AGENTS.md, docs/deployment.md, docs/api-contract.md and docs/hardware-acceptance.md aligned in the same PR.

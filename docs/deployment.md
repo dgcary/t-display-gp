@@ -2,29 +2,28 @@
 
 ## Fixed responsibility split
 
-**Web ChatGPT:** GitHub source/design/code/tests, validators, native tests, Bad Apple asset generation, real ESP32-S3 PlatformIO compile, exact-SHA Artifact verification.
+**Web ChatGPT:** GitHub source/design/code/tests, validators, native tests, Bad Apple asset generation, real ESP32-S3 PlatformIO compile, exact-SHA Artifact verification and Draft PR maintenance.
 
-**Codex:** exact-SHA Artifact download/hash check, flash prebuilt application, serial monitor, physical UI/network/navigation/soak test, evidence return. Codex does not use a local rebuild as the normal deployment gate.
+**Codex:** exact-SHA Artifact download/hash check, flash prebuilt application, serial monitor, physical UI/network/Bambu Cloud/navigation/soak testing and evidence return. Codex does not use a local rebuild as the normal deployment gate.
 
 ## Development checks
 
-Bad Apple asset generation requires ffmpeg. CI installs it explicitly.
+Bad Apple generation requires ffmpeg.
 
 ```bash
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
-python tools/validate_nixie_clock_contract.py
+python tools/validate_app_shell_contract.py
 python tools/validate_dashboard_apps_contract.py
+python tools/validate_bambu_cloud_contract.py
 python tools/validate_bad_apple_contract.py
 pio test -e native
 python tools/prepare_bad_apple_asset.py
 pio run -e lilygo-t-display-s3
 ```
 
-The asset generator downloads a pinned conversion source only when `.badapple-cache/source.mp4` is absent, verifies its Git blob SHA1, generates 168×126 / 10 FPS / 2190-frame packed data, verifies every delta round-trip, and writes ignored `src/generated/BadAppleAsset.*` files for the ESP build. The source MP4 is not part of the repository or deployment artifact.
-
-CI additionally runs Windows native and uploads `tdisplay-gp-firmware-<SOURCE_SHA>` containing firmware.bin, partitions.bin, bootloader.bin and firmware-manifest.txt.
+CI additionally runs Windows native and uploads `tdisplay-gp-firmware-<SOURCE_SHA>` containing `firmware.bin`, `partitions.bin`, `bootloader.bin` and `firmware-manifest.txt`.
 
 ## Flash
 
@@ -35,89 +34,107 @@ manifest source_sha == approved SHA
 actual firmware.bin SHA256 == manifest firmware_sha256
 ```
 
-Normal upgrade writes only `firmware.bin` at manifest `firmware_offset` (currently normally `0x10000`). The Bad Apple asset is already compiled into firmware.bin; there is no separate media/filesystem flash step. Do not erase NVS or rewrite bootloader/partitions. Serial 115200.
+Normal upgrade writes only `firmware.bin` at manifest `firmware_offset` (currently normally `0x10000`). Do not erase NVS or rewrite bootloader/partitions. Serial 115200.
+
+Bad Apple media is compiled into firmware.bin; there is no separate media/filesystem flash.
 
 ## Expected firmware behavior
 
-Startup: **NixieClock**.
+Startup: **Stock**.
 
 Menu:
 
 ```text
-股票 / 天气 / 辉光时钟 / 智能家居 / 加密货币 / 设备信息
+股票 / 天气 / Bambu Lab / 智能家居 / 设备信息
 ```
 
-Navigation:
-
-```text
-No automatic idle-to-Nixie switch.
-Menu/Stock/Weather/Nixie/HomeAssistant/Crypto/DeviceInfo remain active until explicit button navigation.
-```
+No automatic idle switch. Each app/menu remains active until explicit button navigation.
 
 ## Weather / Bad Apple
 
-Open-Meteo network behavior is unchanged and still retains current + 3-day structured data. The visible Weather layout is now:
+Visible Weather layout:
 
 ```text
-left: current condition/temp/apparent/humidity/wind/rain/update + compact 今/明 rows
-right: x=152..319, y=27..152, Bad Apple 168×126 monochrome video
+left: current weather + compact 今/明
+right: x=152..319, y=27..152, Bad Apple 168×126
 ```
 
-The day-after forecast is intentionally not rendered. The Weather screen does not draw the previous full-width header divider or the vertical separator beside the video, so the Bad Apple viewport stays visually clean. Bad Apple playback is 2190 frames at 10 FPS (~219 s), silent and looping. It restarts at frame 0 when Weather is entered, redraws only the video viewport at frame cadence, and stops video updates immediately after leaving Weather. Playback uses local flash data and requires no runtime network/task/worker.
+No day-after forecast is rendered. No full-width top divider and no vertical separator beside the video. Bad Apple is 2190 frames at 10 FPS (~219 s), silent, looping, local flash only. Entering Weather restarts at frame 0; leaving stops video refresh. Frame cadence redraws only the video viewport.
 
-The project/source-code license does not relicense the underlying Bad Apple!! PV/music; original media rights remain with their respective rights holders.
+## Integrations page
 
-## Home Assistant deployment/config
-
-**Use the user's existing Home Assistant server. T-Display is only a REST client.**
-
-T-Display HA-client configuration page:
+HA and Bambu share exactly one local configuration server:
 
 ```text
 http://<device-ip>:8081/
 ```
 
-This page is not an HA server. Configure existing HA Base URL, Long-Lived Access Token, 1–4 entity IDs, optional labels, refresh 30–300 s and CA only when using HTTPS.
+This page is local HTTP and should be used only on a trusted LAN.
 
-HTTP examples:
+### Home Assistant
+
+T-Display remains a read-only client of the user's existing HA server. Configure Base URL, Long-Lived Access Token, 1–4 entity IDs, labels, refresh interval and CA only for HTTPS.
+
+HA HTTP sends Bearer Token in cleartext on the LAN; HTTPS requires strict CA verification. Do not expose HA Token/CA contents in status or serial output.
+
+### Bambu Lab Cloud
+
+Configure locally on the same Integrations page:
+
+- region: China or US/EU/Global;
+- Bambu account email;
+- password;
+- remember-password choice;
+- bound printer selection after successful login.
+
+**Do not paste the Bambu password or access token into ChatGPT/Codex prompts, serial captures or screenshots.** Enter them directly in the local page. The firmware must never return them from status endpoints or print them to serial.
+
+Cloud endpoint behavior:
 
 ```text
-http://homeassistant.local:8123
-http://<ha-ip>:8123
+HTTPS login/profile/device discovery: CA verified
+China MQTT: cn.mqtt.bambulab.com:8883
+US/EU MQTT: us.mqtt.bambulab.com:8883
+subscribe: device/<serial>/report
 ```
 
-HTTP requires no CA but sends Bearer Token cleartext on LAN; trusted LAN only.
+The service may send the single read-only `pushall` state-sync request to `device/<serial>/request`; it must not publish printer-control commands.
 
-HTTPS requires PEM CA and uses strict `setCACert`, never insecure fallback.
+MQTT receive buffer is 40960 bytes. Buffer allocation failure is a recoverable visible error, not a reboot condition.
 
-## Crypto
+Bambu MQTT remains connected in the background when the user leaves the Bambu app. Connect/reconnect handshakes acquire `NetworkArbiter`; after success the persistent socket releases arbiter and continues independently so Stock/Weather/HA remain usable.
 
-Binance market-data-only `data-api.binance.vision`, BTCUSDT/ETHUSDT/SOLUSDT, no API key, 60 s active-only refresh.
+If Cloud auth becomes invalid and a password is saved, the service automatically logs in again, replaces token/user ID and reconnects. Failed renewal backs off approximately 1/5/15/30 minutes. Accounts requiring 2FA/email code cannot complete unattended renewal in V1; the UI should show the requirement instead of retrying continuously.
 
-## Serial evidence
+## Codex smoke / physical acceptance
+
+Use the final exact-SHA artifact only.
+
+1. Verify manifest source SHA and firmware SHA256; flash only application image at manifest offset. Preserve NVS.
+2. Confirm boot goes directly to Stock.
+3. Confirm menu has exactly five apps in the intended order and input semantics remain correct.
+4. Leave representative pages/menu >60 s and confirm no automatic app switch.
+5. Weather: current data readable, only 今/明, no dividers, Bad Apple 168×126, ~10 FPS, no whole-screen flicker. For full acceptance observe ~219 s loop and exit/re-enter reset.
+6. Open `http://<device-ip>:8081/` and confirm one combined HA+Bambu Integrations page.
+7. HA regression: existing HTTP or CA-verified HTTPS server remains readable; no secret leak.
+8. Bambu: enter credentials directly in the local page, login, obtain printer list, select printer and confirm Cloud MQTT online.
+9. When practical, verify Cloud data while T-Display cannot reach printer LAN but still has Internet access.
+10. During an active print verify progress, ETA, layers, nozzle/bed/chamber temperatures, job and filament/AMS fields update where available.
+11. Leave Bambu for another app, wait for printer state to change, return and confirm cached state is fresh; MQTT must not be tied to active app.
+12. While MQTT stays connected, verify Stock/Weather/HA remain responsive.
+13. Interrupt/recover Wi-Fi and confirm Bambu reconnects without watchdog, panic, reboot or monotonic heap loss.
+14. If safely testable, verify invalid/expired token triggers saved-password automatic relogin. Do not deliberately trigger account lockout. Mark NOT TESTED when unsafe/impractical.
+15. For formal full acceptance perform >=100 app/menu transitions and collect concise serial/system evidence.
+
+## Expected diagnostics
 
 ```text
-[md] Stock
-[appdata] WEATHER / HOME_ASSISTANT / CRYPTO
-[net] HA mode=HA_HTTP or HA_CA
-[sys] MENU/STOCK/WEATHER/NIXIE_CLOCK/HOME_ASSISTANT/CRYPTO/DEVICE_INFO
+[md]      Stock
+[appdata] WEATHER / HOME_ASSISTANT
+[net]     short-lived HTTP/TLS transport; HA_HTTP or HA_CA where applicable
+[sys]     MENU/STOCK/WEATHER/BAMBU/HOME_ASSISTANT/DEVICE_INFO
 ```
 
-Never expose HA Token.
+Bambu credentials and full authentication bodies must never appear in diagnostics.
 
-## Codex smoke
-
-1. flash exact verified app image only at manifest application offset.
-2. boot Nixie; time sync/animation correct.
-3. six-app menu/input.
-4. leave Menu/Weather/HA/Crypto/DeviceInfo/Stock on screen for >60 s and confirm there is no automatic app switch.
-5. enter Weather: current data readable; only 今/明 forecasts appear; right-side Bad Apple fills 168×126; no full-width top divider or vertical video separator; playback progresses near 10 FPS with no whole-screen flicker.
-6. keep Weather open for ~220 s and confirm the full sequence loops; leave Weather and confirm video redraw stops; re-enter and confirm it restarts from beginning.
-7. Weather live/cache/network regression.
-8. DeviceInfo/Web.
-9. HA client reads user's existing server; secret leak check.
-10. Crypto live/cache.
-11. Stock Tencent/EastMoney regression.
-12. >=100 transitions, no watchdog/reboot/freeze/heap leak.
-
-Detailed physical criteria: `docs/hardware-acceptance.md`.
+Detailed criteria: `docs/hardware-acceptance.md`.
