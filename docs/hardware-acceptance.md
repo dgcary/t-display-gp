@@ -67,6 +67,8 @@ http://<device-ip>:8081/
 
 本地 8081 为 HTTP，只在可信 LAN 使用。
 
+Bambu 账号输入框必须是通用账号输入，不得使用浏览器 `type=email` 强制阻止中国区手机号。页面应明确提示 **中国区手机号 / Global 邮箱**。
+
 ## Home Assistant regression
 
 T-Display 继续作为用户现有 HA server 的只读 REST client。
@@ -93,13 +95,16 @@ T-Display 继续作为用户现有 HA server 的只读 REST client。
 对非 2FA 账号：
 
 1. 选正确 region；
-2. 本地输入邮箱/密码；
-3. 登录成功；
-4. printer picker 能列出账号绑定设备；
-5. 保存选中打印机并重启/应用；
-6. Bambu 页面从 UNCONFIGURED/CONNECTING 进入在线/有效状态。
+2. **China：本地输入中国大陆手机号 + 密码（该账号若使用邮箱也可输入邮箱）；Global：输入邮箱 + 密码**；
+3. 点击登录后，本地表单/固件不得因为“不是邮箱”而拒绝合法中国手机号；
+4. Cloud 登录成功；
+5. printer picker 能列出账号绑定设备；
+6. 保存选中打印机并重启/应用；
+7. Bambu 页面从 UNCONFIGURED/CONNECTING 进入在线/有效状态。
 
-若账号要求 2FA/email code：应明确显示需要二次认证/无人值守续期不可用；不得持续快速重试或绕过。此项可按账号实际情况记 PASS/NOT APPLICABLE。
+China 手机号验收至少覆盖真实的 11 位大陆移动号码格式；固件也接受 `+86`/`86` 前缀。账号字符串最终应作为 Cloud 登录 JSON 的 `account` 字段提交。
+
+若账号要求 2FA/email/SMS code：应明确显示需要二次认证/无人值守续期不可用；不得持续快速重试或绕过。此项可按账号实际情况记 PASS/NOT APPLICABLE。
 
 ## Bambu config concurrency / stale-write protection
 
@@ -156,7 +161,7 @@ Cloud brokers：China `cn.mqtt.bambulab.com:8883`；US/EU `us.mqtt.bambulab.com:
 
 只在**安全且不会造成账号锁定**的方式下测试。
 
-期望：Token 无效/MQTT auth rc 4/5，且已保存密码时，进入自动 relogin，取得新 Token/User ID 并重新连接。失败退避约：
+期望：Token 无效/MQTT auth rc 4/5，且已保存密码时，进入自动 relogin，使用已保存的账号标识（China 可为手机号）取得新 Token/User ID 并重新连接。失败退避约：
 
 ```text
 1 min -> 5 min -> 15 min -> 30 min max
@@ -219,6 +224,7 @@ UNIFIED :8081 PORTAL: PASS/FAIL
 HOME ASSISTANT HTTP: PASS/FAIL/NOT TESTED
 HOME ASSISTANT HTTPS CA: PASS/FAIL/NOT TESTED
 HA SECRET LEAK: PASS/FAIL
+BAMBU CHINA PHONE LOGIN: PASS/FAIL/NOT APPLICABLE
 BAMBU LOGIN: PASS/FAIL/2FA BLOCKED/NOT TESTED
 BAMBU PRINTER DISCOVERY: PASS/FAIL/NOT TESTED
 BAMBU CONFIG STALE-WRITE: PASS/FAIL/NOT TESTED
