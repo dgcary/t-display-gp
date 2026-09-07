@@ -22,9 +22,9 @@ void test_client_exposes_verification_submit_resend_and_tfa_methods() {
   auto submitCode = &BambuCloudClient::submitVerificationCode;
   auto requestCode = &BambuCloudClient::requestVerificationCode;
   auto submitTfa = &BambuCloudClient::submitTfaCode;
-  TEST_ASSERT_NOT_NULL(reinterpret_cast<void*>(submitCode));
-  TEST_ASSERT_NOT_NULL(reinterpret_cast<void*>(requestCode));
-  TEST_ASSERT_NOT_NULL(reinterpret_cast<void*>(submitTfa));
+  TEST_ASSERT_TRUE(submitCode != nullptr);
+  TEST_ASSERT_TRUE(requestCode != nullptr);
+  TEST_ASSERT_TRUE(submitTfa != nullptr);
 }
 
 int main() {
