@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +86,7 @@ if MQTT_HEADER.exists() and MQTT_SOURCE.exists():
     for marker in (
         "class BambuMqttService", "begin(", "snapshot()", "status()",
         "configSnapshot()", "replaceConfig(", "externalConfigRevision_",
+        "ConfigCommitResult", "expectedExternalRevision",
     ):
         if marker not in mqtt_header:
             errors.append(f"BambuMqttService.h missing marker: {marker}")
@@ -92,6 +94,8 @@ if MQTT_HEADER.exists() and MQTT_SOURCE.exists():
         "PubSubClient", "WiFiClientSecure", "setCACertBundle", "rootca_crt_bundle_start",
         "setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)", "sharedNetworkArbiter",
         "bambuBrokerForRegion", "bambuReportTopic", "device/", "/request", "pushall", "mqtt_->loop()",
+        "externalConfigRevision_ != expectedExternalRevision", "ConfigCommitResult::STALE",
+        "publishDiscoveredPrintersIfCurrent",
     ):
         if marker not in mqtt_source:
             errors.append(f"BambuMqttService.cpp missing MQTT marker: {marker}")
@@ -106,6 +110,10 @@ if MQTT_HEADER.exists() and MQTT_SOURCE.exists():
         errors.append("Bambu MQTT service must not mutate a shared external BambuConfig across cores")
     if "*externalConfig_" in mqtt_source:
         errors.append("Bambu MQTT service must own its config; external std::string config writes are a data race")
+    if re.search(r"persistConfig\(\s*(?:config|updated)\s*\)", mqtt_source):
+        errors.append("background Bambu config persistence must carry the external revision that produced its snapshot")
+    if "if (externalConfigRevision_ != expectedExternalRevision)" not in mqtt_source:
+        errors.append("background Bambu writes must reject stale snapshots after a portal config update")
 
 if APP_HEADER.exists() and APP_SOURCE.exists() and SCREEN_SOURCE.exists() and APP_SHELL.exists() and MAIN.exists():
     app_header = APP_HEADER.read_text(encoding="utf-8")
@@ -187,4 +195,4 @@ if errors:
         print(f"ERROR: {error}")
     sys.exit(1)
 
-print("Bambu Cloud auth + persistent MQTT + read-only app + unified portal + config ownership contract: OK")
+print("Bambu Cloud auth + persistent MQTT + read-only app + unified portal + config ownership + stale-write contract: OK")
