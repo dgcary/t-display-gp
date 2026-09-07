@@ -160,6 +160,8 @@ The sole permitted V1 publish is the read-only `pushall` state-sync request to `
 ### MQTT service / state
 
 - exactly one MQTT service execution context owns connect/subscribe/callback-state mutation/`mqtt.loop()`.
+- `BambuMqttService` is also the sole mutable runtime owner of `BambuConfig`; UI/Portal must use mutex-protected snapshot/update APIs and must not retain mutable config references across cores.
+- Portal-originated config replacement increments an external revision and is authoritative. Any background login/identity/discovery result derived from an older snapshot must verify that revision before mutating runtime config, discovered-printer cache, or NVS; stale results are discarded rather than overwriting newer user configuration.
 - receive buffer target is **40960 bytes**; allocation failure is non-fatal and visible as BUFFER_ERROR.
 - disconnect/network loss must preserve last valid printer snapshot.
 - malformed/partial reports update only valid present fields and never destroy last valid state.
@@ -223,6 +225,7 @@ FreeRTOS queues pass pointers to C++ objects; do not raw-copy non-trivial `std::
 - AppConfig schema v2, namespace `stockticker`.
 - HA separate `ha_config` blob.
 - Bambu separate `bambucloud` namespace/blob.
+- Bambu runtime config updates are serialized through `BambuMqttService`; background persistence is revision-guarded against stale snapshots.
 - normal firmware upgrade preserves NVS.
 - configuration changes reboot-apply atomically where currently implemented.
 
@@ -253,6 +256,7 @@ Real T-Display-S3 evidence must verify at minimum:
 - Stock/Weather/HA remain usable while MQTT stays connected.
 - Wi-Fi loss/recovery reconnects without watchdog/panic/reboot or monotonic heap loss.
 - token invalid -> saved-password relogin/reconnect when safely testable; 2FA behavior is explicit when applicable.
+- if practical, changing Bambu configuration while a background Cloud operation is in flight must leave the newer Portal configuration authoritative; no late background result may revert it.
 - >=100 app/menu transitions for formal full acceptance.
 
 See `docs/hardware-acceptance.md`.
