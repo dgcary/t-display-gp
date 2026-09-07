@@ -123,12 +123,14 @@ Bambu routes:
 ```text
 GET  /api/bambu/status
 POST /api/bambu/login
+POST /api/bambu/verify
+POST /api/bambu/verification/resend
 GET  /api/bambu/printers
 POST /api/bambu/config
 POST /api/bambu/logout
 ```
 
-Status/config responses may expose only secret-presence booleans such as `password_set` and `token_set`; raw password/token values are forbidden. Login/device-list response bodies are not logged. Blank password preserves the stored password under the current portal merge semantics; logout clears password, access token, cloud user ID and printer selection.
+Status/config responses may expose only secret-presence booleans such as `password_set` and `token_set`; raw password/token values are forbidden. Verification status may expose only non-secret metadata such as whether verification is required, its typed channel (`sms`, `email`, `tfa`) and local resend delay. Password login/device-list/verification response bodies are not logged. Blank password preserves the stored password under the current portal merge semantics; logout clears password, access token, cloud user ID and printer selection.
 
 Runtime ownership is explicit: `BambuMqttService` is the sole mutable owner of Bambu config after startup. Portal and UI obtain copies through mutex-protected snapshot/update APIs; no cross-core mutable `BambuConfig` reference is retained.
 
@@ -136,11 +138,25 @@ Portal-originated replacements are authoritative and increment an external confi
 
 ## Cloud HTTPS
 
-Short-lived operations cover password login, user identity resolution and bound-printer discovery. They use `WiFiClientSecure` with CA bundle verification and acquire the shared `NetworkArbiter` for the complete request. `setInsecure()` is forbidden.
+Short-lived operations cover password login, verification-code submission, explicit SMS/email resend, user identity resolution and bound-printer discovery. They use `WiFiClientSecure` with CA bundle verification and acquire the shared `NetworkArbiter` for the complete request. `setInsecure()` is forbidden.
 
-For China password accounts the same login endpoint accepts the phone identifier through JSON `account`; no email-specific transport endpoint is required for ordinary password login. If Bambu Cloud itself responds with a verification/2FA challenge, V1 reports that requirement rather than bypassing it.
+For China password accounts the same login endpoint accepts the phone identifier through JSON `account`; no email-specific transport endpoint is required for ordinary password login.
 
-Responses are bounded and parsed into narrow typed results. Password/token/full auth bodies must not be printed to serial.
+Bambu login responses are parsed into a typed authentication result. A Cloud challenge is represented as one of:
+
+```text
+SMS_CODE
+EMAIL_CODE
+TFA
+```
+
+The current challenge is owned by `BambuMqttService` and exists only in RAM while verification is pending. Challenge material such as `tfaKey` is never added to `BambuConfig`, never persisted to NVS and never returned by the status API. The one-time verification code supplied by the user is likewise never persisted or logged.
+
+If a challenge is returned, the service enters `VERIFICATION_REQUIRED` and unattended relogin stops. The local `:8081` page then allows one-time code submission through `/api/bambu/verify`. SMS/email challenges may be explicitly resent through `/api/bambu/verification/resend`; resend is user-initiated only and guarded by a local 60-second cooldown. TFA challenges use the authenticator code and do not have a resend operation.
+
+On successful verification, the replacement access token is revision-guarded and persisted first. The background service then resumes user-ID resolution, printer discovery/selection handling and Cloud MQTT connection. A subsequent reboot with a still-valid persisted token does not require another verification round unless Bambu Cloud challenges the account again.
+
+Responses are bounded and parsed into narrow typed results. Password/token/verification code/challenge secrets/full auth bodies must not be printed to serial.
 
 ## Cloud MQTT
 
@@ -186,9 +202,9 @@ lastUpdateMs
 
 Malformed JSON fails without mutating the snapshot. Partial reports update only fields that are present and valid; absent or invalid fields preserve last valid values. Disconnects mark connectivity but do not clear the cached printer state.
 
-## Token renewal / 2FA
+## Token renewal / verification
 
-MQTT authentication rc 4/5 or an otherwise invalid token moves the service into token-invalid/relogin flow. If a saved password exists, the service performs verified HTTPS login with the persisted account identifier, resolves/stores replacement user ID/token and reconnects MQTT.
+MQTT authentication rc 4/5 or an otherwise invalid token moves the service into token-invalid/relogin flow. If a saved password exists, the service performs verified HTTPS login with the persisted account identifier, resolves/stores replacement user ID/token and reconnects MQTT when no further challenge is required.
 
 Failed unattended attempts use bounded backoff:
 
@@ -196,7 +212,7 @@ Failed unattended attempts use bounded backoff:
 60 s -> 300 s -> 900 s -> 1800 s -> 1800 s ...
 ```
 
-If login requires a second factor/email/SMS code, V1 enters an explicit 2FA-required state and stops unattended renewal rather than bypassing or hammering the service.
+If relogin instead returns an SMS/email/TFA challenge, the service enters `VERIFICATION_REQUIRED` and stops unattended retry. The user can complete that one verification step locally through `:8081`; after success the new token is persisted and the normal background identity/discovery/MQTT path resumes. The firmware does not bypass second factors and does not automatically hammer resend endpoints.
 
 # Shared worker / concurrency contract
 
@@ -225,7 +241,7 @@ HA routes remain compatible:
 /api/ha/config
 ```
 
-Bambu routes are listed above. The local portal itself is HTTP and therefore trusted-LAN-only.
+Bambu routes are listed above. The local portal itself is HTTP and therefore trusted-LAN-only. Verification UI is rendered only while the service reports a pending challenge.
 
 # Diagnostics / cache isolation
 
@@ -236,6 +252,6 @@ Bambu routes are listed above. The local portal itself is HTTP and therefore tru
 [sys]     MENU|STOCK|WEATHER|BAMBU|HOME_ASSISTANT|DEVICE_INFO
 ```
 
-No credentials/full auth bodies in logs.
+No credentials/full auth bodies/verification codes/challenge secrets in logs.
 
 Weather failure cannot alter Stock health; Stock failures cannot clear Weather/HA/Bambu caches; HA failures preserve entity cache; Bambu network loss preserves last printer snapshot; inactive Weather/HA late results never redraw the current app; stale Bambu background Cloud results cannot overwrite newer Portal configuration; Bad Apple cannot change provider/network health.
