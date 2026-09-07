@@ -69,6 +69,8 @@ http://<device-ip>:8081/
 
 Bambu 账号输入框必须是通用账号输入，不得使用浏览器 `type=email` 强制阻止中国区手机号。页面应明确提示 **中国区手机号 / Global 邮箱**。
 
+若 Cloud 返回验证 challenge，验证码区域仅在 `verification_required` 时出现。SMS/email 可显示手动重发按钮与本地冷却；TFA 不应提供重发动作。
+
 ## Home Assistant regression
 
 T-Display 继续作为用户现有 HA server 的只读 REST client。
@@ -81,36 +83,43 @@ T-Display 继续作为用户现有 HA server 的只读 REST client。
 
 ## Bambu Lab Cloud — secret safety
 
-**账号密码只在本地 `:8081` 页面直接输入，不发给 ChatGPT/Codex，不放入串口报告/截图。**
+**账号密码和一次性验证码只在本地 `:8081` 页面直接输入，不发给 ChatGPT/Codex，不放入串口报告/截图。**
 
 检查：
 
 - Bambu status 不回显 password/access token，只显示 `password_set` / `token_set` 等存在性；
+- verification status 只允许返回 `verification_required`、typed channel 和 resend delay 等非秘密元数据；
+- `tfaKey`/challenge secret 不得出现在 NVS、status API、串口或截图；
+- 一次性 verification code 不持久化、不回显、不打印；
 - 密码框留空保存不会意外把已保存密码变成明文返回；
 - logout 能清除密码、Token、cloud user ID 和打印机选择；
-- Serial 不出现密码、Token、完整 Authorization/Cloud response body。
+- Serial 不出现密码、Token、验证码、完整 Authorization/Cloud auth response body。
 
-## Bambu Lab Cloud — login / printer discovery
-
-对非 2FA 账号：
+## Bambu Lab Cloud — login / verification / printer discovery
 
 1. 选正确 region；
 2. **China：本地输入中国大陆手机号 + 密码（该账号若使用邮箱也可输入邮箱）；Global：输入邮箱 + 密码**；
 3. 点击登录后，本地表单/固件不得因为“不是邮箱”而拒绝合法中国手机号；
-4. Cloud 登录成功；
-5. printer picker 能列出账号绑定设备；
-6. 保存选中打印机并重启/应用；
-7. Bambu 页面从 UNCONFIGURED/CONNECTING 进入在线/有效状态。
+4. 若 Cloud 无 challenge：直接继续登录成功；
+5. 若 Cloud 返回 challenge：状态进入 `VERIFICATION_REQUIRED`，并正确区分 SMS / email / TFA；
+6. 在本地 `:8081` 输入一次验证码并提交。成功后应保存 replacement token，并自动继续 user ID / printer discovery / MQTT 恢复；
+7. SMS/email 若测试重发，只手动触发一次，并确认 60 秒本地 cooldown 防止连续重发；TFA 不应允许 resend；
+8. printer picker 能列出账号绑定设备；
+9. 保存选中打印机并重启/应用；
+10. Bambu 页面从 UNCONFIGURED/VERIFY/CONNECTING 进入在线/有效状态；
+11. 成功验证后正常重启、保留 NVS；若 stored token 仍有效，不应再次要求验证码。
 
 China 手机号验收至少覆盖真实的 11 位大陆移动号码格式；固件也接受 `+86`/`86` 前缀。账号字符串最终应作为 Cloud 登录 JSON 的 `account` 字段提交。
 
-若账号要求 2FA/email/SMS code：应明确显示需要二次认证/无人值守续期不可用；不得持续快速重试或绕过。此项可按账号实际情况记 PASS/NOT APPLICABLE。
+Cloud challenge 是正常的人工恢复流程，不是“2FA blocked”失败。不得绕过第二因素，也不得自动/高频重发验证码。
 
 ## Bambu config concurrency / stale-write protection
 
 运行时 Bambu 配置必须由 `BambuMqttService` 单点持有，Portal/UI 只通过线程安全 snapshot/update 访问。自动测试必须证明：Portal external update 发生后，基于旧 revision 的后台 token/user ID/printer discovery 写回会被拒绝，不能覆盖新的 NVS/runtime config，也不能重新发布旧 printer list。
 
-真机若能安全制造时序：在后台正在连接、重新登录或发现打印机期间，于 `:8081` 提交较新的有效 Bambu 配置；后续晚到的旧 Cloud 结果不得把页面/重启后的配置恢复到旧值。因为保存会很快重启且不应为了制造竞态反复错误登录，无法稳定复现时允许标记 `NOT TESTED`，不要进行可能触发账号锁定的实验。
+verification 成功产生的新 token 也属于 revision-guarded writeback：若 challenge 期间用户已经提交更新配置，旧 challenge 结果不得覆盖较新的 Portal 配置。
+
+真机若能安全制造时序：在后台正在连接、重新登录、验证或发现打印机期间，于 `:8081` 提交较新的有效 Bambu 配置；后续晚到的旧 Cloud 结果不得把页面/重启后的配置恢复到旧值。因为保存会很快重启且不应为了制造竞态反复错误登录，无法稳定复现时允许标记 `NOT TESTED`，不要进行可能触发账号锁定的实验。
 
 ## Bambu Cloud MQTT / remote reachability
 
@@ -157,17 +166,21 @@ Cloud brokers：China `cn.mqtt.bambulab.com:8883`；US/EU `us.mqtt.bambulab.com:
 - 无 watchdog、panic、unexpected reboot、freeze；
 - 无明显单向 heap leak。
 
-## Token renewal
+## Token renewal / verification recovery
 
 只在**安全且不会造成账号锁定**的方式下测试。
 
-期望：Token 无效/MQTT auth rc 4/5，且已保存密码时，进入自动 relogin，使用已保存的账号标识（China 可为手机号）取得新 Token/User ID 并重新连接。失败退避约：
+期望：Token 无效/MQTT auth rc 4/5，且已保存密码时，进入自动 relogin，使用已保存的账号标识（China 可为手机号）取得新 Token/User ID 并重新连接。
+
+若自动 relogin 无 challenge，整个流程无人干预完成。若 Cloud 在 renewal 阶段要求 SMS/email/TFA，则 unattended flow 停在 `VERIFICATION_REQUIRED`，不会继续撞登录/重发接口；用户在 `:8081` 提交一次验证码后，服务保存 replacement token 并自动恢复 identity/discovery/MQTT。
+
+失败退避约：
 
 ```text
 1 min -> 5 min -> 15 min -> 30 min max
 ```
 
-不要为了测试而连续提交错误密码或反复撞 Bambu Cloud。若无法安全制造 Token 失效，标记 `NOT TESTED`，不影响普通 Cloud MQTT smoke，但影响“完整自动续期验收”的结论。
+不要为了测试而连续提交错误密码、错误验证码或反复撞 Bambu Cloud。若无法安全制造 Token 失效，标记 `NOT TESTED`，不影响普通 Cloud MQTT smoke，但影响“完整自动续期/验证恢复验收”的结论。
 
 ## Stock regression
 
@@ -186,7 +199,7 @@ Cloud brokers：China `cn.mqtt.bambulab.com:8883`；US/EU `us.mqtt.bambulab.com:
 - inactive Weather/HA 不因 late completion 重绘当前 TFT；
 - Bambu Cloud MQTT 是独立后台服务，App transition 不控制其连接；
 - Bambu MQTT connect/reconnect handshake 才参与 NetworkArbiter；建立后持久 socket 不长期持有 arbiter；
-- Bambu mutable config 只有一个 service owner；Portal update 优先于旧后台结果；
+- Bambu mutable config 和 verification challenge 只有一个 service owner；Portal update 优先于旧后台结果；
 - Bad Apple 不新增网络/worker/arbiter traffic；
 - DeviceInfo local-only。
 
@@ -198,7 +211,7 @@ Cloud brokers：China `cn.mqtt.bambulab.com:8883`；US/EU `us.mqtt.bambulab.com:
 MENU|STOCK|WEATHER|BAMBU|HOME_ASSISTANT|DEVICE_INFO
 ```
 
-正式 full acceptance 至少覆盖：Stock 10 min、Weather >=5 min、HA success、Bambu active print/background freshness、Wi-Fi interruption/recovery、100 transitions。
+正式 full acceptance 至少覆盖：Stock 10 min、Weather >=5 min、HA success、Bambu login/verification（适用时）、active print/background freshness、Wi-Fi interruption/recovery、100 transitions。
 
 100 次跨 App/menu transition：watchdog=0、unexpected reboot=0、freeze=0、short-after-long=0、明显 heap leak=0、background wrong-screen redraw=0。
 
@@ -225,7 +238,11 @@ HOME ASSISTANT HTTP: PASS/FAIL/NOT TESTED
 HOME ASSISTANT HTTPS CA: PASS/FAIL/NOT TESTED
 HA SECRET LEAK: PASS/FAIL
 BAMBU CHINA PHONE LOGIN: PASS/FAIL/NOT APPLICABLE
-BAMBU LOGIN: PASS/FAIL/2FA BLOCKED/NOT TESTED
+BAMBU LOGIN: PASS/FAIL/VERIFICATION_REQUIRED/NOT TESTED
+BAMBU VERIFICATION FLOW: PASS/FAIL/NOT APPLICABLE/NOT TESTED
+BAMBU VERIFICATION SECRET LEAK: PASS/FAIL
+BAMBU VERIFICATION RESEND COOLDOWN: PASS/FAIL/NOT APPLICABLE/NOT TESTED
+BAMBU TOKEN REBOOT REUSE: PASS/FAIL/NOT TESTED
 BAMBU PRINTER DISCOVERY: PASS/FAIL/NOT TESTED
 BAMBU CONFIG STALE-WRITE: PASS/FAIL/NOT TESTED
 BAMBU CLOUD MQTT: PASS/FAIL/NOT TESTED
@@ -235,7 +252,6 @@ BAMBU BACKGROUND FRESHNESS: PASS/FAIL/NOT TESTED
 BAMBU SECRET LEAK: PASS/FAIL
 BAMBU WIFI RECOVERY: PASS/FAIL/NOT TESTED
 BAMBU TOKEN AUTO-RELOGIN: PASS/FAIL/NOT TESTED
-BAMBU 2FA BEHAVIOR: PASS/FAIL/NOT APPLICABLE/NOT TESTED
 STOCK/TENCENT: PASS/FAIL
 TX->EM FALLBACK: PASS/FAIL/NOT TRIGGERED
 100-TRANSITION SOAK: PASS/FAIL/NOT TESTED
@@ -243,4 +259,4 @@ HEAP/STABILITY: PASS/FAIL
 FULL HARDWARE ACCEPTANCE: PASS/FAIL/PARTIAL
 ```
 
-FAIL 附原始串口、复现步骤、时间点和照片/截图（适用时），但先主动删去/打码任何 secret。
+FAIL 附原始串口、复现步骤、时间点和照片/截图（适用时），但先主动删去/打码任何 password、token、verification code、challenge secret。
