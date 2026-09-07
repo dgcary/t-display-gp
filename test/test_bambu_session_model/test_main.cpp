@@ -89,16 +89,19 @@ void test_success_resets_backoff_before_mqtt_reconnect() {
   TEST_ASSERT_EQUAL_UINT32(60000U, model.reloginDelayMs());
 }
 
-void test_two_factor_required_is_terminal_for_automatic_renewal() {
+void test_verification_required_is_terminal_until_user_submits_code() {
   BambuSessionModel model;
   model.setAutomaticReloginAvailable(true);
   model.onMqttAuthFailure(500U);
   model.onReloginStarted();
-  model.onReloginFailure(600U, BambuReloginFailure::TWO_FACTOR_REQUIRED);
+  model.onReloginFailure(600U, BambuReloginFailure::VERIFICATION_REQUIRED);
 
-  TEST_ASSERT_EQUAL(BambuSessionState::TWO_FACTOR_REQUIRED, model.state());
+  TEST_ASSERT_EQUAL(BambuSessionState::VERIFICATION_REQUIRED, model.state());
   TEST_ASSERT_FALSE(model.shouldRelogin(600U));
   TEST_ASSERT_FALSE(model.shouldRelogin(0xFFFFFFFFU));
+
+  model.onReloginSuccess();
+  TEST_ASSERT_EQUAL(BambuSessionState::MQTT_CONNECTING, model.state());
 }
 
 void test_backoff_deadline_is_wrap_safe() {
@@ -119,7 +122,7 @@ int main() {
   RUN_TEST(test_mqtt_auth_failure_stays_token_invalid_without_saved_password);
   RUN_TEST(test_failed_automatic_relogin_uses_capped_backoff_sequence);
   RUN_TEST(test_success_resets_backoff_before_mqtt_reconnect);
-  RUN_TEST(test_two_factor_required_is_terminal_for_automatic_renewal);
+  RUN_TEST(test_verification_required_is_terminal_until_user_submits_code);
   RUN_TEST(test_backoff_deadline_is_wrap_safe);
   return UNITY_END();
 }

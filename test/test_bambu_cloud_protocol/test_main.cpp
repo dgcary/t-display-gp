@@ -18,12 +18,21 @@ void test_login_reply_extracts_access_token() {
   TEST_ASSERT_TRUE(out.tfaKey.empty());
 }
 
-void test_login_reply_detects_email_code_challenge() {
+void test_login_reply_detects_generic_verification_code_challenge() {
   static BambuLoginReply out;
   out = {};
   TEST_ASSERT_TRUE(parseBambuLoginReply(200, R"({"loginType":"verifyCode"})", out));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(BambuLoginDisposition::NEED_EMAIL_CODE),
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(BambuLoginDisposition::NEED_VERIFICATION_CODE),
                         static_cast<int>(out.disposition));
+}
+
+void test_verification_channel_is_inferred_from_account_shape() {
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(BambuVerificationChannel::EMAIL),
+                        static_cast<int>(bambuVerificationChannelForAccount("user@example.com")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(BambuVerificationChannel::SMS),
+                        static_cast<int>(bambuVerificationChannelForAccount("13800138000")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(BambuVerificationChannel::SMS),
+                        static_cast<int>(bambuVerificationChannelForAccount("+8613800138000")));
 }
 
 void test_login_reply_detects_tfa_by_key_when_login_type_is_empty() {
@@ -112,7 +121,8 @@ void test_report_topic_is_bounded_to_one_device_serial() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_login_reply_extracts_access_token);
-  RUN_TEST(test_login_reply_detects_email_code_challenge);
+  RUN_TEST(test_login_reply_detects_generic_verification_code_challenge);
+  RUN_TEST(test_verification_channel_is_inferred_from_account_shape);
   RUN_TEST(test_login_reply_detects_tfa_by_key_when_login_type_is_empty);
   RUN_TEST(test_login_reply_maps_http_error_and_malformed_input_fails_closed);
   RUN_TEST(test_extract_user_id_from_jwt_payload);
