@@ -147,7 +147,7 @@ A Cloud verification challenge is an expected recoverable state, not a bypass ta
 [md]      Stock
 [appdata] WEATHER / HOME_ASSISTANT
 [net]     short-lived HTTP/TLS transport; HA_HTTP or HA_CA where applicable
-[sys]     MENU/STOCK|WEATHER|BAMBU|HOME_ASSISTANT|DEVICE_INFO
+[sys]     MENU|STOCK|WEATHER|BAMBU|HOME_ASSISTANT|DEVICE_INFO
 ```
 
 Bambu credentials, verification codes, challenge secrets and full authentication bodies must never appear in diagnostics.
