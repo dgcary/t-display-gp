@@ -20,6 +20,14 @@ BambuConfig enabledConfig() {
   cfg.activePrinterIndex = 0;
   return cfg;
 }
+
+BambuConfig twoPrinterConfig() {
+  BambuConfig cfg = enabledConfig();
+  cfg.printerCount = 2;
+  cfg.printers[1].serial = "03900A987654321";
+  cfg.printers[1].name = "A1 mini";
+  return cfg;
+}
 }  // namespace
 
 void test_disabled_default_is_valid() {
@@ -48,10 +56,7 @@ void test_enabled_requires_token_user_id_and_printer() {
 }
 
 void test_active_printer_helper_returns_selected_slot() {
-  BambuConfig cfg = enabledConfig();
-  cfg.printerCount = 2;
-  cfg.printers[1].serial = "03900A987654321";
-  cfg.printers[1].name = "A1 mini";
+  BambuConfig cfg = twoPrinterConfig();
   cfg.activePrinterIndex = 1;
 
   const BambuPrinterConfig* active = activeBambuPrinter(cfg);
@@ -60,11 +65,33 @@ void test_active_printer_helper_returns_selected_slot() {
   TEST_ASSERT_EQUAL_STRING("A1 mini", active->name.c_str());
 }
 
-void test_codec_round_trip_preserves_two_printers_and_active_selection() {
+void test_relative_printer_selection_wraps_forward_and_backward() {
+  BambuConfig cfg = twoPrinterConfig();
+  TEST_ASSERT_EQUAL_UINT32(0, cfg.activePrinterIndex);
+
+  TEST_ASSERT_TRUE(selectRelativeBambuPrinter(cfg, 1));
+  TEST_ASSERT_EQUAL_UINT32(1, cfg.activePrinterIndex);
+
+  TEST_ASSERT_TRUE(selectRelativeBambuPrinter(cfg, 1));
+  TEST_ASSERT_EQUAL_UINT32(0, cfg.activePrinterIndex);
+
+  TEST_ASSERT_TRUE(selectRelativeBambuPrinter(cfg, -1));
+  TEST_ASSERT_EQUAL_UINT32(1, cfg.activePrinterIndex);
+}
+
+void test_relative_printer_selection_is_noop_with_fewer_than_two_printers() {
   BambuConfig cfg = enabledConfig();
-  cfg.printerCount = 2;
-  cfg.printers[1].serial = "03900A987654321";
-  cfg.printers[1].name = "A1 mini";
+  TEST_ASSERT_FALSE(selectRelativeBambuPrinter(cfg, 1));
+  TEST_ASSERT_EQUAL_UINT32(0, cfg.activePrinterIndex);
+
+  cfg.printerCount = 0;
+  cfg.enabled = false;
+  TEST_ASSERT_FALSE(selectRelativeBambuPrinter(cfg, -1));
+  TEST_ASSERT_EQUAL_UINT32(0, cfg.activePrinterIndex);
+}
+
+void test_codec_round_trip_preserves_two_printers_and_active_selection() {
+  BambuConfig cfg = twoPrinterConfig();
   cfg.activePrinterIndex = 1;
 
   std::string encoded;
@@ -104,8 +131,7 @@ void test_schema_v1_migrates_token_user_id_and_single_printer() {
 }
 
 void test_duplicate_printer_serial_is_rejected() {
-  BambuConfig cfg = enabledConfig();
-  cfg.printerCount = 2;
+  BambuConfig cfg = twoPrinterConfig();
   cfg.printers[1].serial = cfg.printers[0].serial;
   TEST_ASSERT_FALSE(validateBambuConfig(cfg).ok());
 }
@@ -157,6 +183,8 @@ int main() {
   RUN_TEST(test_disabled_default_is_valid);
   RUN_TEST(test_enabled_requires_token_user_id_and_printer);
   RUN_TEST(test_active_printer_helper_returns_selected_slot);
+  RUN_TEST(test_relative_printer_selection_wraps_forward_and_backward);
+  RUN_TEST(test_relative_printer_selection_is_noop_with_fewer_than_two_printers);
   RUN_TEST(test_codec_round_trip_preserves_two_printers_and_active_selection);
   RUN_TEST(test_schema_v1_migrates_token_user_id_and_single_printer);
   RUN_TEST(test_duplicate_printer_serial_is_rejected);
