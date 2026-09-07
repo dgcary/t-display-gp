@@ -116,7 +116,21 @@ BambuConfig BambuMqttService::configSnapshot() const {
 }
 
 bool BambuMqttService::replaceConfig(const BambuConfig& config) {
-  return storeConfig(config, true);
+  if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) return false;
+  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
+
+  const bool saved = store_->save(config);
+  if (saved) {
+    config_ = config;
+    status_.configured = config_.enabled && !config_.email.empty();
+    status_.passwordSet = !config_.password.empty();
+    status_.tokenSet = !config_.accessToken.empty();
+    ++externalConfigRevision_;
+    discoveredPrinters_.clear();
+  }
+
+  xSemaphoreGive(mutex_);
+  return saved;
 }
 
 std::vector<BambuCloudDevice> BambuMqttService::discoveredPrinters() const {
@@ -238,7 +252,8 @@ bool BambuMqttService::ensureCloudIdentity(uint32_t nowMs) {
     return performRelogin(nowMs);
   }
 
-  config = configCopy();
+  uint32_t externalRevision = 0U;
+  config = configCopy(&externalRevision);
   if (config.accessToken.empty()) {
     setSession(sessionModel_.state());
     return false;
@@ -257,7 +272,9 @@ bool BambuMqttService::ensureCloudIdentity(uint32_t nowMs) {
       return false;
     }
     config.cloudUserId = user.userId;
-    if (!persistConfig(config)) {
+    const ConfigCommitResult committed = persistConfig(config, externalRevision);
+    if (committed == ConfigCommitResult::STALE) return false;
+    if (committed != ConfigCommitResult::SAVED) {
       setSession(BambuSessionState::LOGIN_FAILED);
       return false;
     }
@@ -266,7 +283,8 @@ bool BambuMqttService::ensureCloudIdentity(uint32_t nowMs) {
 }
 
 bool BambuMqttService::discoverPrinterIfNeeded() {
-  BambuConfig config = configCopy();
+  uint32_t externalRevision = 0U;
+  BambuConfig config = configCopy(&externalRevision);
   if (!config.printerSerial.empty()) return true;
 
   const BambuCloudPrintersResult found = cloud_->fetchPrinters(config.accessToken, config.region);
@@ -277,10 +295,7 @@ bool BambuMqttService::discoverPrinterIfNeeded() {
     return false;
   }
 
-  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-    discoveredPrinters_ = found.printers;
-    xSemaphoreGive(mutex_);
-  }
+  if (!publishDiscoveredPrintersIfCurrent(found.printers, externalRevision)) return false;
 
   if (found.printers.empty()) {
     setSession(BambuSessionState::UNCONFIGURED);
@@ -293,7 +308,9 @@ bool BambuMqttService::discoverPrinterIfNeeded() {
 
   config.printerSerial = found.printers[0].serial;
   config.printerName = found.printers[0].name;
-  if (!persistConfig(config)) {
+  const ConfigCommitResult committed = persistConfig(config, externalRevision);
+  if (committed == ConfigCommitResult::STALE) return false;
+  if (committed != ConfigCommitResult::SAVED) {
     setSession(BambuSessionState::LOGIN_FAILED);
     return false;
   }
@@ -382,7 +399,8 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
 }
 
 bool BambuMqttService::performRelogin(uint32_t nowMs) {
-  const BambuConfig config = configCopy();
+  uint32_t externalRevision = 0U;
+  const BambuConfig config = configCopy(&externalRevision);
   if (config.password.empty()) {
     setSession(BambuSessionState::TOKEN_INVALID);
     return false;
@@ -410,7 +428,9 @@ bool BambuMqttService::performRelogin(uint32_t nowMs) {
   BambuConfig updated = config;
   updated.accessToken = login.accessToken;
   updated.cloudUserId = user.userId;
-  if (!persistConfig(updated)) {
+  const ConfigCommitResult committed = persistConfig(updated, externalRevision);
+  if (committed == ConfigCommitResult::STALE) return false;
+  if (committed != ConfigCommitResult::SAVED) {
     sessionModel_.onReloginFailure(nowMs, BambuReloginFailure::SERVICE_ERROR);
     setSession(sessionModel_.state());
     return false;
@@ -469,9 +489,34 @@ BambuConfig BambuMqttService::configCopy(uint32_t* externalRevision) const {
   return copy;
 }
 
-bool BambuMqttService::storeConfig(const BambuConfig& config, bool externalUpdate) {
-  if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) return false;
+bool BambuMqttService::publishDiscoveredPrintersIfCurrent(
+    const std::vector<BambuCloudDevice>& printers,
+    uint32_t expectedExternalRevision) {
+  if (!mutex_) return false;
   if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
+  if (externalConfigRevision_ != expectedExternalRevision) {
+    xSemaphoreGive(mutex_);
+    return false;
+  }
+  discoveredPrinters_ = printers;
+  xSemaphoreGive(mutex_);
+  return true;
+}
+
+BambuMqttService::ConfigCommitResult BambuMqttService::persistConfig(
+    const BambuConfig& config,
+    uint32_t expectedExternalRevision) {
+  if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) {
+    return ConfigCommitResult::ERROR;
+  }
+  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
+    return ConfigCommitResult::ERROR;
+  }
+
+  if (externalConfigRevision_ != expectedExternalRevision) {
+    xSemaphoreGive(mutex_);
+    return ConfigCommitResult::STALE;
+  }
 
   const bool saved = store_->save(config);
   if (saved) {
@@ -479,16 +524,8 @@ bool BambuMqttService::storeConfig(const BambuConfig& config, bool externalUpdat
     status_.configured = config_.enabled && !config_.email.empty();
     status_.passwordSet = !config_.password.empty();
     status_.tokenSet = !config_.accessToken.empty();
-    if (externalUpdate) {
-      ++externalConfigRevision_;
-      discoveredPrinters_.clear();
-    }
   }
 
   xSemaphoreGive(mutex_);
-  return saved;
-}
-
-bool BambuMqttService::persistConfig(const BambuConfig& config) {
-  return storeConfig(config, false);
+  return saved ? ConfigCommitResult::SAVED : ConfigCommitResult::ERROR;
 }

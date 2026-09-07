@@ -37,6 +37,12 @@ class BambuMqttService {
   std::vector<BambuCloudDevice> discoveredPrinters() const;
 
  private:
+  enum class ConfigCommitResult {
+    SAVED = 0,
+    STALE,
+    ERROR,
+  };
+
   static void taskThunk(void* arg);
   static void mqttCallbackThunk(char* topic, uint8_t* payload, unsigned int length);
 
@@ -50,8 +56,10 @@ class BambuMqttService {
   void setConnectivity(bool connected);
   void setSession(BambuSessionState state, int mqttRc = -1);
   BambuConfig configCopy(uint32_t* externalRevision = nullptr) const;
-  bool storeConfig(const BambuConfig& config, bool externalUpdate);
-  bool persistConfig(const BambuConfig& config);
+  bool publishDiscoveredPrintersIfCurrent(const std::vector<BambuCloudDevice>& printers,
+                                          uint32_t expectedExternalRevision);
+  ConfigCommitResult persistConfig(const BambuConfig& config,
+                                   uint32_t expectedExternalRevision);
 
   BambuConfigStore* store_ = nullptr;
   BambuCloudClient* cloud_ = nullptr;
