@@ -40,7 +40,7 @@ AppDataWorker appDataWorker;
 MenuScreen menuScreen;
 StockApp stockApp(device);
 WeatherApp weatherApp(device, appDataWorker);
-BambuApp bambuApp(device, bambuMqttService, bambuConfig);
+BambuApp bambuApp(device, bambuMqttService);
 HomeAssistantApp homeAssistantApp(device, appDataWorker);
 DeviceInfoApp deviceInfoApp(device);
 MenuApp menuApp({{AppId::STOCK, "股票"},
@@ -107,8 +107,7 @@ void setup() {
     Serial.println("Bambu MQTT service failed to start");
     return;
   }
-  integrationConfigPortal.begin(homeAssistantConfig, bambuConfig, bambuConfigStore,
-                                bambuCloudClient, bambuMqttService);
+  integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService);
   menuScreen.begin(device.display(), device.unicodeFont());
   if (!stockApp.begin(appConfig)) { Serial.println("Stock app failed to start"); return; }
   if (!weatherApp.begin(appConfig)) { Serial.println("Weather app failed to start"); return; }

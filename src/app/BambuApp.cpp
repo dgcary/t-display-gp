@@ -30,7 +30,8 @@ void BambuApp::tick(uint32_t nowMs) {
   if (!hasRefresh_ || static_cast<uint32_t>(nowMs - lastRefreshMs_) >= 500U) {
     model_.state = service_.snapshot();
     model_.service = service_.status();
-    model_.printerName = config_.printerName;
+    const BambuConfig config = service_.configSnapshot();
+    model_.printerName = config.printerName;
     lastRefreshMs_ = nowMs;
     hasRefresh_ = true;
     dirty_ = true;

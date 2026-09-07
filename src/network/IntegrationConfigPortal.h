@@ -3,8 +3,6 @@
 #include <memory>
 
 #include "BambuCloudClient.h"
-#include "BambuConfig.h"
-#include "BambuConfigStore.h"
 #include "BambuMqttService.h"
 #include "HomeAssistantConfig.h"
 
@@ -16,8 +14,6 @@ class IntegrationConfigPortal {
   IntegrationConfigPortal& operator=(const IntegrationConfigPortal&) = delete;
 
   void begin(HomeAssistantConfig& homeAssistantConfig,
-             BambuConfig& bambuConfig,
-             BambuConfigStore& bambuStore,
              BambuCloudClient& bambuCloud,
              BambuMqttService& bambuService);
   void process();

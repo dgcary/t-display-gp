@@ -69,14 +69,12 @@ const char* cloudErrorMessage(BambuCloudError error) {
   }
   return "Bambu Cloud 错误";
 }
-}
+}  // namespace
 
 struct IntegrationConfigPortal::Impl {
   WebServer server{8081};
   HomeAssistantConfigStore haStore;
   HomeAssistantConfig* haConfig = nullptr;
-  BambuConfig* bambuConfig = nullptr;
-  BambuConfigStore* bambuStore = nullptr;
   BambuCloudClient* bambuCloud = nullptr;
   BambuMqttService* bambuService = nullptr;
   std::vector<BambuCloudDevice> printers;
@@ -159,7 +157,7 @@ struct IntegrationConfigPortal::Impl {
 
   void sendBambuStatus() {
     DynamicJsonDocument doc(1536);
-    const BambuConfig current = bambuConfig ? *bambuConfig : BambuConfig{};
+    const BambuConfig current = bambuService ? bambuService->configSnapshot() : BambuConfig{};
     const BambuPortalStatus publicStatus = buildBambuPortalStatus(current);
     const BambuMqttStatus serviceStatus = bambuService ? bambuService->status() : BambuMqttStatus{};
     doc["enabled"] = publicStatus.enabled;
@@ -193,7 +191,7 @@ struct IntegrationConfigPortal::Impl {
   }
 
   void sendPrinters() {
-    BambuConfig current = bambuConfig ? *bambuConfig : BambuConfig{};
+    const BambuConfig current = bambuService ? bambuService->configSnapshot() : BambuConfig{};
     BambuCloudError error = BambuCloudError::NONE;
     if (printers.empty() && !current.accessToken.empty()) refreshPrinters(current, &error);
     DynamicJsonDocument doc(4096);
@@ -212,7 +210,7 @@ struct IntegrationConfigPortal::Impl {
   }
 
   void loginBambu() {
-    if (!bambuConfig || !bambuStore || !bambuCloud) {
+    if (!bambuService || !bambuCloud) {
       server.send(503, "application/json", "{\"message\":\"Bambu 配置服务未就绪\"}");
       return;
     }
@@ -223,7 +221,7 @@ struct IntegrationConfigPortal::Impl {
     input.password = server.arg("password").c_str();
     input.rememberPassword = server.hasArg("remember_password");
 
-    const BambuConfig existing = *bambuConfig;
+    const BambuConfig existing = bambuService->configSnapshot();
     const std::string effectivePassword = effectiveBambuPortalPassword(existing, input);
     if (input.email.empty() || effectivePassword.empty()) {
       server.send(400, "application/json; charset=utf-8", "{\"message\":\"请输入邮箱和密码；密码留空只会保留已经保存过的密码\"}");
@@ -277,11 +275,10 @@ struct IntegrationConfigPortal::Impl {
       updated.printerName = printers.front().name;
     }
 
-    if (!validateBambuConfig(updated).ok() || !bambuStore->save(updated)) {
+    if (!validateBambuConfig(updated).ok() || !bambuService->replaceConfig(updated)) {
       server.send(500, "application/json", "{\"message\":\"Bambu 登录成功但配置保存失败\"}");
       return;
     }
-    *bambuConfig = updated;
 
     DynamicJsonDocument doc(512);
     doc["message"] = printers.size() == 1U ? "登录成功，已自动选择唯一打印机" : "登录成功，请选择打印机后保存";
@@ -292,11 +289,11 @@ struct IntegrationConfigPortal::Impl {
   }
 
   void saveBambu() {
-    if (!bambuConfig || !bambuStore) {
+    if (!bambuService) {
       server.send(503, "application/json", "{\"message\":\"Bambu 配置服务未就绪\"}");
       return;
     }
-    const BambuConfig existing = *bambuConfig;
+    const BambuConfig existing = bambuService->configSnapshot();
     BambuPortalCredentials input;
     input.enabled = server.hasArg("enabled");
     input.region = parseRegion(server.arg("region"));
@@ -322,26 +319,24 @@ struct IntegrationConfigPortal::Impl {
       server.send(400, "application/json; charset=utf-8", "{\"message\":\"Bambu 配置无效：启用时需要邮箱以及密码或有效 Token\"}");
       return;
     }
-    if (!bambuStore->save(updated)) {
+    if (!bambuService->replaceConfig(updated)) {
       server.send(500, "application/json", "{\"message\":\"Bambu 配置保存失败\"}");
       return;
     }
-    *bambuConfig = updated;
     server.send(200, "application/json; charset=utf-8", "{\"message\":\"Bambu 配置已保存，设备将重启\"}");
     scheduleRestart();
   }
 
   void logoutBambu() {
-    if (!bambuConfig || !bambuStore) {
+    if (!bambuService) {
       server.send(503, "application/json", "{\"message\":\"Bambu 配置服务未就绪\"}");
       return;
     }
-    BambuConfig cleared = clearBambuPortalCredentials(*bambuConfig);
-    if (!bambuStore->save(cleared)) {
+    const BambuConfig cleared = clearBambuPortalCredentials(bambuService->configSnapshot());
+    if (!bambuService->replaceConfig(cleared)) {
       server.send(500, "application/json", "{\"message\":\"清除 Bambu 凭据失败\"}");
       return;
     }
-    *bambuConfig = cleared;
     printers.clear();
     server.send(200, "application/json; charset=utf-8", "{\"message\":\"Bambu 凭据已清除，设备将重启\"}");
     scheduleRestart();
@@ -352,13 +347,9 @@ IntegrationConfigPortal::IntegrationConfigPortal() : impl_(new Impl()) {}
 IntegrationConfigPortal::~IntegrationConfigPortal() = default;
 
 void IntegrationConfigPortal::begin(HomeAssistantConfig& homeAssistantConfig,
-                                    BambuConfig& bambuConfig,
-                                    BambuConfigStore& bambuStore,
                                     BambuCloudClient& bambuCloud,
                                     BambuMqttService& bambuService) {
   impl_->haConfig = &homeAssistantConfig;
-  impl_->bambuConfig = &bambuConfig;
-  impl_->bambuStore = &bambuStore;
   impl_->bambuCloud = &bambuCloud;
   impl_->bambuService = &bambuService;
   if (impl_->started) return;
@@ -378,11 +369,13 @@ void IntegrationConfigPortal::begin(HomeAssistantConfig& homeAssistantConfig,
   });
   impl_->server.begin();
   impl_->started = true;
+
+  const BambuConfig current = bambuService.configSnapshot();
   Serial.printf("[integrations] portal=http://%s:8081/ ha_token_set=%s bambu_password_set=%s bambu_token_set=%s\n",
                 WiFi.localIP().toString().c_str(),
                 homeAssistantConfig.token.empty() ? "no" : "yes",
-                bambuConfig.password.empty() ? "no" : "yes",
-                bambuConfig.accessToken.empty() ? "no" : "yes");
+                current.password.empty() ? "no" : "yes",
+                current.accessToken.empty() ? "no" : "yes");
 }
 
 void IntegrationConfigPortal::process() {

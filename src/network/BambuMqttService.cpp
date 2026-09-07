@@ -58,7 +58,7 @@ bool elapsed(uint32_t nowMs, uint32_t sinceMs, uint32_t intervalMs) {
 
 BambuMqttService* BambuMqttService::activeInstance_ = nullptr;
 
-bool BambuMqttService::begin(BambuConfig& config,
+bool BambuMqttService::begin(const BambuConfig& config,
                              BambuConfigStore& store,
                              BambuCloudClient& cloud) {
   if (task_ || activeInstance_) return false;
@@ -66,7 +66,6 @@ bool BambuMqttService::begin(BambuConfig& config,
   mutex_ = xSemaphoreCreateMutex();
   if (!mutex_) return false;
 
-  externalConfig_ = &config;
   store_ = &store;
   cloud_ = &cloud;
   config_ = config;
@@ -76,6 +75,8 @@ bool BambuMqttService::begin(BambuConfig& config,
   status_.session = config_.enabled ? BambuSessionState::MQTT_CONNECTING
                                     : BambuSessionState::INTEGRATION_DISABLED;
   sessionModel_.setAutomaticReloginAvailable(!config_.password.empty());
+  externalConfigRevision_ = 0U;
+  observedExternalConfigRevision_ = 0U;
   activeInstance_ = this;
 
   const BaseType_t created = xTaskCreatePinnedToCore(
@@ -110,6 +111,14 @@ BambuMqttStatus BambuMqttService::status() const {
   return copy;
 }
 
+BambuConfig BambuMqttService::configSnapshot() const {
+  return configCopy();
+}
+
+bool BambuMqttService::replaceConfig(const BambuConfig& config) {
+  return storeConfig(config, true);
+}
+
 std::vector<BambuCloudDevice> BambuMqttService::discoveredPrinters() const {
   std::vector<BambuCloudDevice> copy;
   if (!mutex_) return copy;
@@ -133,7 +142,18 @@ void BambuMqttService::mqttCallbackThunk(char* topic,
 void BambuMqttService::taskLoop() {
   for (;;) {
     const uint32_t nowMs = millis();
-    const BambuConfig config = configCopy();
+    uint32_t externalRevision = 0U;
+    const BambuConfig config = configCopy(&externalRevision);
+
+    if (externalRevision != observedExternalConfigRevision_) {
+      observedExternalConfigRevision_ = externalRevision;
+      // Portal-originated configuration changes are applied only by this task
+      // to keep all MQTT socket operations in one execution context.
+      disconnectMqtt();
+      mqttAttempted_ = false;
+      sessionModel_ = BambuSessionModel{};
+      sessionModel_.setAutomaticReloginAvailable(!config.password.empty());
+    }
 
     if (!config.enabled) {
       disconnectMqtt();
@@ -438,27 +458,37 @@ void BambuMqttService::setSession(BambuSessionState session, int mqttRc) {
   }
 }
 
-BambuConfig BambuMqttService::configCopy() const {
+BambuConfig BambuMqttService::configCopy(uint32_t* externalRevision) const {
   BambuConfig copy;
   if (!mutex_) return copy;
-  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+  if (xSemaphoreTake(mutex_, portMAX_DELAY) == pdTRUE) {
     copy = config_;
+    if (externalRevision) *externalRevision = externalConfigRevision_;
     xSemaphoreGive(mutex_);
   }
   return copy;
 }
 
-bool BambuMqttService::persistConfig(const BambuConfig& config) {
-  if (!store_ || !store_->save(config)) return false;
-  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+bool BambuMqttService::storeConfig(const BambuConfig& config, bool externalUpdate) {
+  if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) return false;
+  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
+
+  const bool saved = store_->save(config);
+  if (saved) {
     config_ = config;
-    if (externalConfig_) *externalConfig_ = config;
     status_.configured = config_.enabled && !config_.email.empty();
     status_.passwordSet = !config_.password.empty();
     status_.tokenSet = !config_.accessToken.empty();
-    xSemaphoreGive(mutex_);
-  } else {
-    return false;
+    if (externalUpdate) {
+      ++externalConfigRevision_;
+      discoveredPrinters_.clear();
+    }
   }
-  return true;
+
+  xSemaphoreGive(mutex_);
+  return saved;
+}
+
+bool BambuMqttService::persistConfig(const BambuConfig& config) {
+  return storeConfig(config, false);
 }

@@ -3,15 +3,14 @@
 #include <cstdint>
 
 #include "AppShell.h"
-#include "BambuConfig.h"
 #include "BambuMqttService.h"
 #include "BambuScreen.h"
 #include "DeviceLayer.h"
 
 class BambuApp final : public IApp {
  public:
-  BambuApp(DeviceLayer& device, BambuMqttService& service, BambuConfig& config)
-      : device_(device), service_(service), config_(config) {}
+  BambuApp(DeviceLayer& device, BambuMqttService& service)
+      : device_(device), service_(service) {}
 
   bool begin();
   AppId id() const override { return AppId::BAMBU; }
@@ -27,7 +26,6 @@ class BambuApp final : public IApp {
  private:
   DeviceLayer& device_;
   BambuMqttService& service_;
-  BambuConfig& config_;
   BambuScreen screen_;
   BambuViewModel model_;
   bool initialized_ = false;

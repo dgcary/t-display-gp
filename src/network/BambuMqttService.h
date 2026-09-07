@@ -29,9 +29,11 @@ struct BambuMqttStatus {
 
 class BambuMqttService {
  public:
-  bool begin(BambuConfig& config, BambuConfigStore& store, BambuCloudClient& cloud);
+  bool begin(const BambuConfig& config, BambuConfigStore& store, BambuCloudClient& cloud);
   BambuState snapshot() const;
   BambuMqttStatus status() const;
+  BambuConfig configSnapshot() const;
+  bool replaceConfig(const BambuConfig& config);
   std::vector<BambuCloudDevice> discoveredPrinters() const;
 
  private:
@@ -47,10 +49,10 @@ class BambuMqttService {
   void disconnectMqtt();
   void setConnectivity(bool connected);
   void setSession(BambuSessionState state, int mqttRc = -1);
-  BambuConfig configCopy() const;
+  BambuConfig configCopy(uint32_t* externalRevision = nullptr) const;
+  bool storeConfig(const BambuConfig& config, bool externalUpdate);
   bool persistConfig(const BambuConfig& config);
 
-  BambuConfig* externalConfig_ = nullptr;
   BambuConfigStore* store_ = nullptr;
   BambuCloudClient* cloud_ = nullptr;
   WiFiClientSecure* tls_ = nullptr;
@@ -62,6 +64,8 @@ class BambuMqttService {
   BambuMqttStatus status_;
   std::vector<BambuCloudDevice> discoveredPrinters_;
   BambuSessionModel sessionModel_;
+  uint32_t externalConfigRevision_ = 0U;
+  uint32_t observedExternalConfigRevision_ = 0U;
   uint32_t lastMqttAttemptMs_ = 0U;
   bool mqttAttempted_ = false;
   uint32_t pushallSequence_ = 1U;
