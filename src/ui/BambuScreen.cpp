@@ -33,7 +33,7 @@ const char* sessionLabel(const BambuViewModel& model) {
     case BambuSessionState::TOKEN_INVALID: return "TOKEN EXPIRED";
     case BambuSessionState::RELOGIN_PENDING: return "RELOGIN WAIT";
     case BambuSessionState::RELOGIN_IN_PROGRESS: return "SIGNING IN";
-    case BambuSessionState::TWO_FACTOR_REQUIRED: return "2FA REQUIRED";
+    case BambuSessionState::VERIFICATION_REQUIRED: return "VERIFY REQUIRED";
     case BambuSessionState::LOGIN_FAILED: return "LOGIN FAILED";
     case BambuSessionState::NETWORK_ERROR: return "OFFLINE";
     case BambuSessionState::BUFFER_ERROR: return "BUFFER ERROR";
