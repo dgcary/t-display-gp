@@ -44,7 +44,7 @@ def forbid(name, markers):
 
 require("config_h", ["struct BambuPrinterConfig", "PRINTER_COUNT = 4", "printers", "printerCount", "activePrinterIndex", "activeBambuPrinter"])
 forbid("config_h", ["std::string email;", "std::string password;", "verificationCode", "tfaKey"])
-require("config_cpp", ["CONFIG_SCHEMA_V2 = 2", "decodeV1", 'doc["printers"]', 'doc["active_printer"]'])
+require("config_cpp", ["CONFIG_SCHEMA_V2 = 2", "decodeV1", 'createNestedArray("printers")', 'doc["active_printer"]'])
 forbid("config_cpp", ['doc["email"]', 'doc["password"]'])
 require("store_cpp", ["legacySchema", "save(parsed)"])
 forbid("store_cpp", ["Serial"])
@@ -65,7 +65,7 @@ for command in ('"pause"', '"resume"', '"stop"', '"temperature"'):
         errors.append(f"Bambu MQTT contains forbidden control command: {command}")
 
 require("portal_model_h", ["BambuPortalConfigInput", "accessToken", "printers", "activePrinterSerial", "mergeBambuPortalConfig"])
-require("portal_cpp", ["WebServer server{8081}", '"/api/ha/status"', '"/api/ha/config"', '"/api/bambu/status"', '"/api/bambu/config"', '"/api/bambu/printers"', '"/api/bambu/discover"', '"/api/bambu/logout"', "Access Token", "打印机 1", "当前打印机", "保存并切换", "用 Token 获取我的打印机", 'doc["token_set"]', 'doc["printer_count"]', 'doc["active_printer_serial"]', "extractBambuUserIdFromJwt", "discoverBambuPrinters", "sendSavedBambuPrinters"])
+require("portal_cpp", ["WebServer server{8081}", '"/api/ha/status"', '"/api/ha/config"', '"/api/bambu/status"', '"/api/bambu/config"', '"/api/bambu/printers"', '"/api/bambu/discover"', '"/api/bambu/logout"', "Access Token", "打印机 ${i}", "当前打印机", "保存并切换", "用 Token 获取我的打印机", 'doc["token_set"]', 'doc["printer_count"]', 'doc["active_printer_serial"]', "extractBambuUserIdFromJwt", "discoverBambuPrinters", "sendSavedBambuPrinters"])
 forbid("portal_cpp", ['"/api/bambu/login"', '"/api/bambu/verify"', '"/api/bambu/verification/resend"', "账号密码", "remember_password", "验证码", 'doc["password_set"]', 'doc["verification_required"]', 'doc["verification_type"]', 'doc["access_token"]', 'doc["token"]', "setInsecure"])
 
 require("app_cpp", ["service_.configSnapshot()", "activeBambuPrinter"])
