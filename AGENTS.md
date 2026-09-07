@@ -117,7 +117,7 @@ V1 is Cloud-first/read-only:
 - no printer-LAN MQTT 8883 dependency or public exposure;
 - no pause/resume/stop/light/temperature/camera control;
 - account/device setup occurs through local Integrations page at `http://<device-ip>:8081/`;
-- never hard-code/log/return account password or access token.
+- never hard-code/log/return account password, verification code, TFA challenge material or access token.
 
 Bambu account contract:
 
@@ -140,6 +140,8 @@ printerName
 enabled
 ```
 
+Verification code and `tfaKey` are **not** config fields and must never be written to NVS. Pending verification challenge state is RAM-only inside `BambuMqttService` and protected by the same mutex/revision model as runtime config.
+
 Cloud brokers:
 
 ```text
@@ -159,7 +161,7 @@ The sole permitted V1 publish is the read-only `pushall` state-sync request to `
 
 ### TLS / NetworkArbiter
 
-- Bambu login/profile/device discovery HTTPS uses CA verification. `setInsecure()` is forbidden.
+- Bambu login/profile/device discovery/verification HTTPS uses CA verification. `setInsecure()` is forbidden.
 - Bambu MQTT uses `WiFiClientSecure` + CA bundle. `setInsecure()` is forbidden.
 - Short-lived Bambu HTTPS calls acquire the shared `NetworkArbiter` for the full request.
 - MQTT connect/reconnect handshake acquires the arbiter; once connected, release it. Persistent MQTT keepalive/report traffic owns its dedicated socket and must not hold the arbiter for the lifetime of the connection.
@@ -168,14 +170,14 @@ The sole permitted V1 publish is the read-only `pushall` state-sync request to `
 ### MQTT service / state
 
 - exactly one MQTT service execution context owns connect/subscribe/callback-state mutation/`mqtt.loop()`.
-- `BambuMqttService` is also the sole mutable runtime owner of `BambuConfig`; UI/Portal must use mutex-protected snapshot/update APIs and must not retain mutable config references across cores.
-- Portal-originated config replacement increments an external revision and is authoritative. Any background login/identity/discovery result derived from an older snapshot must verify that revision before mutating runtime config, discovered-printer cache, or NVS; stale results are discarded rather than overwriting newer user configuration.
+- `BambuMqttService` is also the sole mutable runtime owner of `BambuConfig` and pending verification challenge state; UI/Portal must use mutex-protected APIs and must not retain mutable config/challenge references across cores.
+- Portal-originated config replacement increments an external revision and is authoritative. Any background login/identity/discovery/verification result derived from an older snapshot must verify that revision before mutating runtime config, challenge state, discovered-printer cache, or NVS; stale results are discarded rather than overwriting newer user configuration.
 - receive buffer target is **40960 bytes**; allocation failure is non-fatal and visible as BUFFER_ERROR.
 - disconnect/network loss must preserve last valid printer snapshot.
 - malformed/partial reports update only valid present fields and never destroy last valid state.
 - BambuApp/BambuScreen are passive readers/renderers and must not connect/disconnect/publish.
 
-### Token renewal
+### Token renewal / verification
 
 MQTT auth rc 4/5 or invalid token -> if a saved password exists, automatic HTTPS relogin -> persist replacement token/user ID -> reconnect MQTT.
 
@@ -185,7 +187,19 @@ Failed unattended relogin is bounded:
 60 s -> 300 s -> 900 s -> 1800 s -> 1800 s ...
 ```
 
-If account flow requires 2FA/email/SMS code, expose a clear terminal status and stop unattended retry; never attempt to bypass the second factor.
+If password login returns a Cloud challenge:
+
+- `verifyCode` is a generic verification challenge, not inherently email-only;
+- email account -> Email code; China phone account -> SMS code;
+- authenticator flow -> TFA with RAM-only `tfaKey`;
+- service state becomes `VERIFICATION_REQUIRED` and unattended retry stops until the user acts;
+- user submits the one-time code through `:8081`; code is never persisted and is best-effort wiped after use;
+- successful verification stores the replacement Token, then background identity/device/MQTT recovery resumes;
+- Email/SMS resend is explicit user action only and has a 60-second device-side cooldown; never auto-spam code requests;
+- TFA has no resend action;
+- never bypass a second factor.
+
+A valid stored Token must be reused across reboot without demanding a code. After Token expiry, saved-password relogin is tried first; only if Bambu Cloud demands verification again should the portal ask the user for another one-time code.
 
 ## Integrations portal
 
@@ -203,12 +217,14 @@ Bambu routes:
 ```text
 /api/bambu/status
 /api/bambu/login
+/api/bambu/verify
+/api/bambu/verification/resend
 /api/bambu/printers
 /api/bambu/config
 /api/bambu/logout
 ```
 
-Blank Bambu password input preserves stored password unless the flow explicitly elects not to remember/clears it. Logout clears password, token, user ID and printer selection. Status may expose only booleans such as `password_set` / `token_set`; no raw secret values.
+Verification input is rendered only while challenge state is pending. Blank Bambu password input preserves stored password unless the flow explicitly elects not to remember/clears it. Logout clears password, token, user ID, printer selection and any RAM-only pending challenge. Status may expose only non-secret state such as `password_set`, `token_set`, `verification_required`, `verification_type` and resend cooldown; no raw secret values or `tfaKey`.
 
 ## DeviceInfo
 
@@ -232,8 +248,8 @@ FreeRTOS queues pass pointers to C++ objects; do not raw-copy non-trivial `std::
 
 - AppConfig schema v2, namespace `stockticker`.
 - HA separate `ha_config` blob.
-- Bambu separate `bambucloud` namespace/blob.
-- Bambu runtime config updates are serialized through `BambuMqttService`; background persistence is revision-guarded against stale snapshots.
+- Bambu separate `bambucloud` namespace/blob; verification codes and `tfaKey` are RAM-only and never persisted.
+- Bambu runtime config/challenge updates are serialized through `BambuMqttService`; background persistence is revision-guarded against stale snapshots.
 - normal firmware upgrade preserves NVS.
 - configuration changes reboot-apply atomically where currently implemented.
 
@@ -246,7 +262,7 @@ FreeRTOS queues pass pointers to C++ objects; do not raw-copy non-trivial `std::
 [sys]     MENU|STOCK|WEATHER|BAMBU|HOME_ASSISTANT|DEVICE_INFO
 ```
 
-Do not invent secret-bearing Bambu diagnostics. Password, access token, Authorization headers and full auth/device response bodies must never be logged.
+Bambu challenge diagnostics may expose only non-secret routing facts such as HTTP status, challenge type and booleans (`hasEmailCode/hasSmsCode/hasTfa`). Password, full account identifier, verification code, `tfaKey`, access token, Cookie, Authorization headers and full auth/device response bodies must never be logged.
 
 ## Physical acceptance
 
@@ -258,13 +274,16 @@ Real T-Display-S3 evidence must verify at minimum:
 - HA regression through existing server with no secret leak.
 - Bambu config through local :8081 page without secret echo.
 - for a China-region account, the portal accepts the real phone identifier and password without browser-side email rejection; Global accounts retain email login.
-- successful non-2FA Cloud login, printer discovery/selection and Cloud MQTT state.
+- if China phone password login returns `verifyCode`, safe diagnostics identify `type=sms`, the portal displays SMS verification input, one submitted code obtains/stores Token and Cloud MQTT resumes.
+- if email/TFA challenge is returned, the corresponding typed flow is shown and completed without leaking challenge material.
+- successful Cloud login, printer discovery/selection and Cloud MQTT state.
+- reboot with a still-valid Token restores MQTT without asking for another code.
 - remote printer data works without printer-LAN reachability when Internet remains available.
 - Bambu progress/ETA/layers/temps/job/filament update without UI freeze.
 - leaving Bambu does not stop MQTT; returning shows fresh cached state.
 - Stock/Weather/HA remain usable while MQTT stays connected.
 - Wi-Fi loss/recovery reconnects without watchdog/panic/reboot or monotonic heap loss.
-- token invalid -> saved-password relogin/reconnect when safely testable; 2FA behavior is explicit when applicable.
+- token invalid -> saved-password relogin/reconnect when safely testable; if Cloud re-demands verification, state becomes `verification_required` until one manual code is submitted.
 - if practical, changing Bambu configuration while a background Cloud operation is in flight must leave the newer Portal configuration authoritative; no late background result may revert it.
 - >=100 app/menu transitions for formal full acceptance.
 
@@ -272,6 +291,6 @@ See `docs/hardware-acceptance.md`.
 
 ## Safety
 
-Scope is this repository and connected T-Display-S3. Do not modify unrelated servers/network/DHCP/Wi-Fi infrastructure. Never hard-code passwords, GitHub secrets, HA tokens or Bambu credentials.
+Scope is this repository and connected T-Display-S3. Do not modify unrelated servers/network/DHCP/Wi-Fi infrastructure. Never hard-code passwords, verification codes, GitHub secrets, HA tokens or Bambu credentials.
 
 When lifecycle/input/config/provider/transport/build/deployment/UI changes, keep README.md, AGENTS.md, docs/deployment.md, docs/api-contract.md and docs/hardware-acceptance.md aligned in the same PR.
