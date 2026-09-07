@@ -13,6 +13,8 @@ paths = {
     "portal_cpp": ROOT / "src/network/IntegrationConfigPortal.cpp",
     "portal_model_h": ROOT / "src/network/BambuPortalModel.h",
     "app_cpp": ROOT / "src/app/BambuApp.cpp",
+    "screen_h": ROOT / "src/ui/BambuScreen.h",
+    "screen_cpp": ROOT / "src/ui/BambuScreen.cpp",
     "main": ROOT / "src/main.cpp",
     "build": ROOT / "include/build_config.h",
     "pio": ROOT / "platformio.ini",
@@ -42,9 +44,9 @@ def forbid(name, markers):
             errors.append(f"{paths[name].name} contains obsolete/forbidden marker: {marker}")
 
 
-require("config_h", ["struct BambuPrinterConfig", "PRINTER_COUNT = 4", "printers", "printerCount", "activePrinterIndex", "activeBambuPrinter"])
+require("config_h", ["struct BambuPrinterConfig", "PRINTER_COUNT = 4", "printers", "printerCount", "activePrinterIndex", "activeBambuPrinter", "selectRelativeBambuPrinter"])
 forbid("config_h", ["std::string email;", "std::string password;", "verificationCode", "tfaKey"])
-require("config_cpp", ["CONFIG_SCHEMA_V2 = 2", "decodeV1", 'createNestedArray("printers")', 'doc["active_printer"]'])
+require("config_cpp", ["CONFIG_SCHEMA_V2 = 2", "decodeV1", 'createNestedArray("printers")', 'doc["active_printer"]', "selectRelativeBambuPrinter"])
 forbid("config_cpp", ['doc["email"]', 'doc["password"]'])
 require("store_cpp", ["legacySchema", "save(parsed)"])
 forbid("store_cpp", ["Serial"])
@@ -54,10 +56,10 @@ forbid("client_h", ["BambuCloudLoginResult", "BambuVerificationType", "login(", 
 require("client_cpp", ["WiFiClientSecure", "HTTPClient", "setCACertBundle", "rootca_crt_bundle_start", "sharedNetworkArbiter", '"/v1/user-service/my/profile"', '"/api/v1/iot-service/api/user/bind"', "extractBambuUserIdFromJwt"])
 forbid("client_cpp", ["setInsecure", '"/v1/user-service/user/login"', "sendsmscode", "sendemail/code", '"/api/sign-in/tfa"', '"/api/csrf"', "Serial"])
 
-require("mqtt_h", ["class BambuMqttService", "snapshot()", "status()", "configSnapshot()", "replaceConfig(", "externalConfigRevision_", "tokenRejected_"])
+require("mqtt_h", ["class BambuMqttService", "snapshot()", "status()", "configSnapshot()", "replaceConfig(", "cycleActivePrinter(", "externalConfigRevision_", "tokenRejected_"])
 forbid("mqtt_h", ["BambuCloudClient", "BambuSessionModel sessionModel_", "setPendingVerification", "submitVerificationCode", "requestVerificationCode", "pendingTfaKey", "passwordSet", "verificationRequired", "verificationType"])
-require("mqtt_cpp", ["PubSubClient", "WiFiClientSecure", "setCACertBundle", "rootca_crt_bundle_start", "setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)", "sharedNetworkArbiter", "activeBambuPrinter", "bambuBrokerForRegion", "bambuReportTopic", "pushall", "mqtt_->loop()", "externalConfigRevision_", "state_ = BambuState{}", "tokenRejected_"])
-forbid("mqtt_cpp", ["setInsecure", "performRelogin", "setPendingVerification", "submitVerificationCode", "requestVerificationCode", "fetchPrinters(", "fetchUserId(", "VERIFICATION_REQUIRED", "result=CHALLENGE"])
+require("mqtt_cpp", ["PubSubClient", "WiFiClientSecure", "setCACertBundle", "rootca_crt_bundle_start", "setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)", "sharedNetworkArbiter", "activeBambuPrinter", "selectRelativeBambuPrinter", "cycleActivePrinter(", "bambuBrokerForRegion", "bambuReportTopic", "pushall", "mqtt_->loop()", "externalConfigRevision_", "state_ = BambuState{}", "tokenRejected_", "mqtt_connect_fail", "lastError(", "WiFi.RSSI()", "esp_get_free_heap_size()"])
+forbid("mqtt_cpp", ["setInsecure", "performRelogin", "setPendingVerification", "submitVerificationCode", "requestVerificationCode", "fetchPrinters(", "fetchUserId(", "VERIFICATION_REQUIRED", "result=CHALLENGE", "config.accessToken.c_str(), WiFi.RSSI"])
 if text("mqtt_cpp").count("mqtt_->publish") != 1:
     errors.append("Bambu MQTT may publish only the single read-only pushall request")
 for command in ('"pause"', '"resume"', '"stop"', '"temperature"'):
@@ -68,8 +70,14 @@ require("portal_model_h", ["BambuPortalConfigInput", "accessToken", "printers", 
 require("portal_cpp", ["WebServer server{8081}", '"/api/ha/status"', '"/api/ha/config"', '"/api/bambu/status"', '"/api/bambu/config"', '"/api/bambu/printers"', '"/api/bambu/discover"', '"/api/bambu/logout"', "Access Token", "打印机 ${i}", "当前打印机", "保存并切换", "用 Token 获取我的打印机", 'doc["token_set"]', 'doc["printer_count"]', 'doc["active_printer_serial"]', "extractBambuUserIdFromJwt", "discoverBambuPrinters", "sendSavedBambuPrinters"])
 forbid("portal_cpp", ['"/api/bambu/login"', '"/api/bambu/verify"', '"/api/bambu/verification/resend"', "账号密码", "remember_password", "验证码", 'doc["password_set"]', 'doc["verification_required"]', 'doc["verification_type"]', 'doc["access_token"]', 'doc["token"]', "setInsecure"])
 
-require("app_cpp", ["service_.configSnapshot()", "activeBambuPrinter"])
-forbid("app_cpp", ["config.printerName"])
+require("app_cpp", ["service_.configSnapshot()", "activeBambuPrinter", "InputEvent::PREV_SHORT", "InputEvent::NEXT_SHORT", "service_.cycleActivePrinter(-1)", "service_.cycleActivePrinter(1)", "presentationChanged", "if (changed) dirty_ = true"])
+forbid("app_cpp", ["void BambuApp::onButton(InputEvent) {}"])
+require("screen_h", ["struct RenderSignature", "signatureFor", "drawHeader", "drawProgress", "drawJob", "drawFilament", "drawFooter", "rendered_", "previous_"])
+require("screen_cpp", ["BambuScreen::signatureFor", "const bool full = fullRedraw || !rendered_", "if (full) {", "display_->fillScreen(UiTheme::BACKGROUND);", "drawHeader", "drawProgress", "drawJob", "drawFilament", "drawFooter"])
+if text("screen_cpp").count("display_->fillScreen(UiTheme::BACKGROUND);") != 1:
+    errors.append("Bambu screen must clear the whole display only in the single full-redraw path")
+forbid("screen_cpp", ["void BambuScreen::render(const BambuViewModel& model, bool) {"])
+
 require("main", ["bambuMqttService.begin(bambuConfig, bambuConfigStore)", "integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService)"])
 require("build", ['BAMBU_CONFIG_NAMESPACE[] = "bambucloud"', "BAMBU_MQTT_BUFFER_BYTES = 40960"])
 require("pio", ["knolleary/PubSubClient", "+<network/BambuPortalModel.cpp>"])
@@ -83,4 +91,4 @@ if errors:
     for error in errors:
         print(f"ERROR: {error}")
     sys.exit(1)
-print("Bambu manual-token + local multi-printer + read-only persistent MQTT contract: OK")
+print("Bambu manual-token + local multi-printer + device-switch + partial-render + read-only MQTT contract: OK")
