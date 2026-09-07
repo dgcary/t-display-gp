@@ -30,6 +30,7 @@ class BambuMqttService {
   BambuMqttStatus status() const;
   BambuConfig configSnapshot() const;
   bool replaceConfig(const BambuConfig& config);
+  bool cycleActivePrinter(int direction);
 
  private:
   static void taskThunk(void* arg);
@@ -42,6 +43,7 @@ class BambuMqttService {
   void setConnectivity(bool connected);
   void setSession(BambuSessionState state, int mqttRc = -1);
   BambuConfig configCopy(uint32_t* externalRevision = nullptr) const;
+  void applyConfigLocked(const BambuConfig& config);
 
   BambuConfigStore* store_ = nullptr;
   WiFiClientSecure* tls_ = nullptr;

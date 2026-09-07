@@ -58,6 +58,7 @@ struct BambuConfig {
 
 BambuConfigValidationResult validateBambuConfig(const BambuConfig& config);
 const BambuPrinterConfig* activeBambuPrinter(const BambuConfig& config);
+bool selectRelativeBambuPrinter(BambuConfig& config, int direction);
 const char* bambuBrokerForRegion(BambuRegion region);
 
 class BambuConfigCodec {

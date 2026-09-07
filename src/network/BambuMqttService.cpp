@@ -92,22 +92,38 @@ BambuMqttStatus BambuMqttService::status() const {
 
 BambuConfig BambuMqttService::configSnapshot() const { return configCopy(); }
 
+void BambuMqttService::applyConfigLocked(const BambuConfig& config) {
+  config_ = config;
+  ++externalConfigRevision_;
+  state_ = BambuState{};
+  status_.mqttConnected = false;
+  status_.lastMessageMs = 0U;
+  status_.lastMqttRc = -1;
+  status_.configured = configuredForMqtt(config_);
+  status_.tokenSet = !config_.accessToken.empty();
+  status_.session = config_.enabled ? BambuSessionState::MQTT_CONNECTING
+                                    : BambuSessionState::INTEGRATION_DISABLED;
+}
+
 bool BambuMqttService::replaceConfig(const BambuConfig& config) {
   if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) return false;
   if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
   const bool saved = store_->save(config);
-  if (saved) {
-    config_ = config;
-    ++externalConfigRevision_;
-    state_ = BambuState{};
-    status_.mqttConnected = false;
-    status_.lastMessageMs = 0U;
-    status_.lastMqttRc = -1;
-    status_.configured = configuredForMqtt(config_);
-    status_.tokenSet = !config_.accessToken.empty();
-    status_.session = config_.enabled ? BambuSessionState::MQTT_CONNECTING
-                                      : BambuSessionState::INTEGRATION_DISABLED;
+  if (saved) applyConfigLocked(config);
+  xSemaphoreGive(mutex_);
+  return saved;
+}
+
+bool BambuMqttService::cycleActivePrinter(int direction) {
+  if (!store_ || !mutex_ || direction == 0) return false;
+  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
+  BambuConfig next = config_;
+  if (!selectRelativeBambuPrinter(next, direction)) {
+    xSemaphoreGive(mutex_);
+    return false;
   }
+  const bool saved = store_->save(next);
+  if (saved) applyConfigLocked(next);
   xSemaphoreGive(mutex_);
   return saved;
 }
@@ -159,7 +175,14 @@ void BambuMqttService::taskLoop() {
       vTaskDelay(pdMS_TO_TICKS(BAMBU_TASK_SLEEP_MS));
       continue;
     }
-    if (!mqtt_->loop()) setConnectivity(false);
+    if (!mqtt_->loop()) {
+      const int rc = mqtt_->state();
+      setConnectivity(false);
+      setSession(BambuSessionState::NETWORK_ERROR, rc);
+      Serial.printf("[bambu] mqtt_loop_lost rc=%d wifi=%d rssi=%d heap=%u\n",
+                    rc, static_cast<int>(WiFi.status()), WiFi.RSSI(),
+                    static_cast<unsigned>(esp_get_free_heap_size()));
+    }
     vTaskDelay(pdMS_TO_TICKS(BAMBU_TASK_SLEEP_MS));
   }
 }
@@ -199,7 +222,8 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   tls_->setTimeout(15);
   mqtt_ = new (std::nothrow) PubSubClient(*tls_);
   if (!mqtt_) { disconnectMqtt(); setSession(BambuSessionState::BUFFER_ERROR); return false; }
-  mqtt_->setServer(bambuBrokerForRegion(config.region), BAMBU_MQTT_PORT);
+  const char* broker = bambuBrokerForRegion(config.region);
+  mqtt_->setServer(broker, BAMBU_MQTT_PORT);
   mqtt_->setCallback(mqttCallbackThunk);
   mqtt_->setKeepAlive(BAMBU_MQTT_KEEPALIVE_SEC);
   if (!mqtt_->setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)) {
@@ -211,11 +235,20 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   NetworkRequestGuard guard(sharedNetworkArbiter());
   if (!guard.locked()) { disconnectMqtt(); setSession(BambuSessionState::NETWORK_ERROR); return false; }
 
+  Serial.printf("[bambu] mqtt_connect broker=%s wifi=%d rssi=%d heap=%u\n",
+                broker, static_cast<int>(WiFi.status()), WiFi.RSSI(),
+                static_cast<unsigned>(esp_get_free_heap_size()));
+
   char clientId[32];
   std::snprintf(clientId, sizeof(clientId), "tdgp_%08lx%04x",
                 static_cast<unsigned long>(esp_random()), static_cast<unsigned>(esp_random() & 0xFFFFU));
   if (!mqtt_->connect(clientId, config.cloudUserId.c_str(), config.accessToken.c_str())) {
     const int rc = mqtt_->state();
+    char tlsErrorText[96] = {};
+    const int tlsError = tls_->lastError(tlsErrorText, sizeof(tlsErrorText));
+    Serial.printf("[bambu] mqtt_connect_fail rc=%d tls=%d wifi=%d rssi=%d heap=%u\n",
+                  rc, tlsError, static_cast<int>(WiFi.status()), WiFi.RSSI(),
+                  static_cast<unsigned>(esp_get_free_heap_size()));
     if (rc == 4 || rc == 5) tokenRejected_ = true;
     setSession((rc == 4 || rc == 5) ? BambuSessionState::TOKEN_INVALID : BambuSessionState::NETWORK_ERROR, rc);
     disconnectMqtt();
@@ -223,7 +256,11 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   }
   const std::string reportTopic = bambuReportTopic(active->serial);
   if (reportTopic.empty() || !mqtt_->subscribe(reportTopic.c_str())) {
-    setSession(BambuSessionState::NETWORK_ERROR, mqtt_->state());
+    const int rc = mqtt_->state();
+    Serial.printf("[bambu] mqtt_subscribe_fail rc=%d wifi=%d rssi=%d heap=%u\n",
+                  rc, static_cast<int>(WiFi.status()), WiFi.RSSI(),
+                  static_cast<unsigned>(esp_get_free_heap_size()));
+    setSession(BambuSessionState::NETWORK_ERROR, rc);
     disconnectMqtt();
     return false;
   }
@@ -236,6 +273,8 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   tokenRejected_ = false;
   setConnectivity(true);
   setSession(BambuSessionState::ONLINE, 0);
+  Serial.printf("[bambu] mqtt_connect_ok rssi=%d heap=%u\n",
+                WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()));
   return true;
 }
 

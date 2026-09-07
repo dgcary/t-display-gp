@@ -71,8 +71,6 @@ bool decodeV1(JsonObjectConst root, BambuConfig& decoded) {
   }
 
   if (decoded.enabled && !validateBambuConfig(decoded).ok()) {
-    // Preserve any reusable token/user-id/printer values for the new portal,
-    // but do not start MQTT from an incomplete legacy config.
     decoded.enabled = false;
   }
   return validateBambuConfig(decoded).ok();
@@ -138,6 +136,22 @@ const BambuPrinterConfig* activeBambuPrinter(const BambuConfig& config) {
     return nullptr;
   }
   return &config.printers[config.activePrinterIndex];
+}
+
+bool selectRelativeBambuPrinter(BambuConfig& config, int direction) {
+  if (direction == 0 || config.printerCount < 2 ||
+      config.printerCount > BambuConfigLimits::PRINTER_COUNT ||
+      config.activePrinterIndex >= config.printerCount) {
+    return false;
+  }
+
+  const size_t count = config.printerCount;
+  if (direction > 0) {
+    config.activePrinterIndex = (config.activePrinterIndex + 1U) % count;
+  } else {
+    config.activePrinterIndex = (config.activePrinterIndex + count - 1U) % count;
+  }
+  return true;
 }
 
 const char* bambuBrokerForRegion(BambuRegion region) {
