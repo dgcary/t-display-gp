@@ -82,17 +82,20 @@ HA HTTP sends Bearer Token in cleartext on the LAN; HTTPS requires strict CA ver
 Configure locally on the same Integrations page:
 
 - region: China or US/EU/Global;
-- Bambu account email;
+- account identifier: **China accepts a mainland mobile number (11 digits, optional `+86`/`86` prefix) or email; US/EU/Global uses email**;
 - password;
 - remember-password choice;
 - bound printer selection after successful login.
+
+The firmware keeps the historical config/form key `email` for NVS compatibility, but China-region password login treats it as a generic account identifier and submits it to Bambu Cloud as JSON `account`.
 
 **Do not paste the Bambu password or access token into ChatGPT/Codex prompts, serial captures or screenshots.** Enter them directly in the local page. The firmware must never return them from status endpoints or print them to serial.
 
 Cloud endpoint behavior:
 
 ```text
-HTTPS login/profile/device discovery: CA verified
+HTTPS password login: POST /v1/user-service/user/login {account,password}
+HTTPS profile/device discovery: CA verified
 China MQTT: cn.mqtt.bambulab.com:8883
 US/EU MQTT: us.mqtt.bambulab.com:8883
 subscribe: device/<serial>/report
@@ -106,7 +109,7 @@ Bambu MQTT remains connected in the background when the user leaves the Bambu ap
 
 `BambuMqttService` owns the mutable runtime Bambu configuration. Local Portal saves are serialized through its update API and advance an external config revision. Any in-flight background login/identity/printer-discovery operation may persist its result only when the revision still matches the snapshot it used; otherwise that late result is stale and is discarded. This prevents a background Cloud response from reverting a newer account/region/token/printer selection saved from `:8081`.
 
-If Cloud auth becomes invalid and a password is saved, the service automatically logs in again, replaces token/user ID and reconnects. Failed renewal backs off approximately 1/5/15/30 minutes. Accounts requiring 2FA/email code cannot complete unattended renewal in V1; the UI should show the requirement instead of retrying continuously.
+If Cloud auth becomes invalid and a password is saved, the service automatically logs in again, replaces token/user ID and reconnects. Failed renewal backs off approximately 1/5/15/30 minutes. Accounts requiring a second factor/email/SMS code cannot complete unattended renewal in V1; the UI should show the requirement instead of retrying continuously.
 
 ## Codex smoke / physical acceptance
 
@@ -119,7 +122,7 @@ Use the final exact-SHA artifact only.
 5. Weather: current data readable, only 今/明, no dividers, Bad Apple 168×126, ~10 FPS, no whole-screen flicker. For full acceptance observe ~219 s loop and exit/re-enter reset.
 6. Open `http://<device-ip>:8081/` and confirm one combined HA+Bambu Integrations page.
 7. HA regression: existing HTTP or CA-verified HTTPS server remains readable; no secret leak.
-8. Bambu: enter credentials directly in the local page, login, obtain printer list, select printer and confirm Cloud MQTT online.
+8. Bambu: choose the correct region. For a China account enter the phone number + password directly in the local page (or email if that account uses email); for Global use email + password. Login, obtain printer list, select printer and confirm Cloud MQTT online.
 9. When practical, verify Cloud data while T-Display cannot reach printer LAN but still has Internet access.
 10. During an active print verify progress, ETA, layers, nozzle/bed/chamber temperatures, job and filament/AMS fields update where available.
 11. Leave Bambu for another app, wait for printer state to change, return and confirm cached state is fresh; MQTT must not be tied to active app.
@@ -128,6 +131,8 @@ Use the final exact-SHA artifact only.
 14. If safely testable, verify invalid/expired token triggers saved-password automatic relogin. Do not deliberately trigger account lockout. Mark NOT TESTED when unsafe/impractical.
 15. If practical without risky credential experiments, save a newer Bambu config while a background Cloud operation is in flight and confirm a late result cannot restore the older config. If this timing is impractical, mark the race-specific physical case NOT TESTED; the automated revision contract remains required.
 16. For formal full acceptance perform >=100 app/menu transitions and collect concise serial/system evidence.
+
+If Bambu Cloud itself responds that the account requires verification/2FA, do not attempt to bypass it; record the observed state. Normal China phone+password login must not be blocked locally by browser email validation or firmware email-only validation.
 
 ## Expected diagnostics
 
