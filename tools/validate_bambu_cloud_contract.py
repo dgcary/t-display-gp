@@ -151,6 +151,13 @@ if PORTAL_HEADER.exists() and PORTAL_SOURCE.exists() and PORTAL_MODEL_SOURCE.exi
         joined = portal_header + "\n" + portal_source + "\n" + portal_model
         if marker not in joined:
             errors.append(f"integrations portal missing marker: {marker}")
+    if "账号（中国区手机号 / Global 邮箱）" not in portal_source:
+        errors.append("Bambu portal must describe the account field as China phone / Global email")
+    if '<input name="email" type="email"' in portal_source:
+        errors.append("Bambu portal account input must not force HTML email validation for China phone accounts")
+    for old_copy in ("请输入邮箱和密码", "启用时需要邮箱以及密码"):
+        if old_copy in portal_source:
+            errors.append(f"Bambu portal still contains email-only copy: {old_copy}")
     for forbidden in ('doc["password"]', 'doc["accessToken"]', 'doc["access_token"]', 'doc["token"]'):
         if forbidden in portal_source:
             errors.append(f"Bambu status/config response may expose a secret key: {forbidden}")
@@ -195,4 +202,4 @@ if errors:
         print(f"ERROR: {error}")
     sys.exit(1)
 
-print("Bambu Cloud auth + persistent MQTT + read-only app + unified portal + config ownership + stale-write contract: OK")
+print("Bambu Cloud auth + persistent MQTT + read-only app + unified portal + China phone account + config ownership + stale-write contract: OK")
