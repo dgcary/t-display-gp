@@ -23,6 +23,42 @@ void test_enabled_requires_email_and_credential() {
   TEST_ASSERT_TRUE(validateBambuConfig(cfg).ok());
 }
 
+void test_china_accepts_mainland_phone_account_with_password() {
+  BambuConfig cfg;
+  cfg.enabled = true;
+  cfg.region = BambuRegion::CHINA;
+  cfg.email = "18912654259";
+  cfg.password = "secret";
+  TEST_ASSERT_TRUE(validateBambuConfig(cfg).ok());
+}
+
+void test_china_accepts_email_account_too() {
+  BambuConfig cfg;
+  cfg.enabled = true;
+  cfg.region = BambuRegion::CHINA;
+  cfg.email = "user@example.com";
+  cfg.password = "secret";
+  TEST_ASSERT_TRUE(validateBambuConfig(cfg).ok());
+}
+
+void test_global_rejects_phone_only_account() {
+  BambuConfig cfg;
+  cfg.enabled = true;
+  cfg.region = BambuRegion::US_EU;
+  cfg.email = "18912654259";
+  cfg.password = "secret";
+  TEST_ASSERT_FALSE(validateBambuConfig(cfg).ok());
+}
+
+void test_china_rejects_malformed_phone_account() {
+  BambuConfig cfg;
+  cfg.enabled = true;
+  cfg.region = BambuRegion::CHINA;
+  cfg.email = "123456";
+  cfg.password = "secret";
+  TEST_ASSERT_FALSE(validateBambuConfig(cfg).ok());
+}
+
 void test_token_can_satisfy_enabled_credential_without_password() {
   BambuConfig cfg;
   cfg.enabled = true;
@@ -40,7 +76,7 @@ void test_codec_round_trip_preserves_all_fields() {
   BambuConfig cfg;
   cfg.enabled = true;
   cfg.region = BambuRegion::CHINA;
-  cfg.email = "cary@example.com";
+  cfg.email = "18912654259";
   cfg.password = "password-value";
   cfg.accessToken = "token-value";
   cfg.cloudUserId = "u_123456";
@@ -88,6 +124,10 @@ int main() {
   UNITY_BEGIN();
   RUN_TEST(test_disabled_default_is_valid);
   RUN_TEST(test_enabled_requires_email_and_credential);
+  RUN_TEST(test_china_accepts_mainland_phone_account_with_password);
+  RUN_TEST(test_china_accepts_email_account_too);
+  RUN_TEST(test_global_rejects_phone_only_account);
+  RUN_TEST(test_china_rejects_malformed_phone_account);
   RUN_TEST(test_token_can_satisfy_enabled_credential_without_password);
   RUN_TEST(test_broker_mapping);
   RUN_TEST(test_codec_round_trip_preserves_all_fields);
