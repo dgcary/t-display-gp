@@ -15,15 +15,10 @@ void BambuApp::onEnter() {
 }
 
 void BambuApp::onExit() {
-  // MQTT is a device-level background service. Leaving this app only stops UI
-  // refreshes; it never connects, disconnects, or mutates the service session.
   active_ = false;
 }
 
-void BambuApp::onButton(InputEvent) {
-  // V1 is intentionally read-only. Global long-press navigation is owned by
-  // AppManager and there are no printer-control short-press actions.
-}
+void BambuApp::onButton(InputEvent) {}
 
 void BambuApp::tick(uint32_t nowMs) {
   if (!initialized_ || !active_) return;
@@ -31,7 +26,10 @@ void BambuApp::tick(uint32_t nowMs) {
     model_.state = service_.snapshot();
     model_.service = service_.status();
     const BambuConfig config = service_.configSnapshot();
-    model_.printerName = config.printerName;
+    const BambuPrinterConfig* activePrinter = activeBambuPrinter(config);
+    model_.printerName = activePrinter
+                             ? (activePrinter->name.empty() ? activePrinter->serial : activePrinter->name)
+                             : std::string{};
     lastRefreshMs_ = nowMs;
     hasRefresh_ = true;
     dirty_ = true;

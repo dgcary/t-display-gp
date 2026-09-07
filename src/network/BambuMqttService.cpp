@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <new>
 #include <string>
-#include <utility>
 
 #include "BambuCloudProtocol.h"
 #include "NetworkArbiter.h"
@@ -23,81 +22,41 @@ constexpr uint16_t BAMBU_MQTT_KEEPALIVE_SEC = 30U;
 constexpr uint32_t BAMBU_MQTT_RECONNECT_MS = 30000U;
 constexpr uint32_t BAMBU_TASK_SLEEP_MS = 50U;
 constexpr uint32_t BAMBU_WIFI_WAIT_MS = 500U;
-constexpr uint32_t BAMBU_VERIFICATION_RESEND_COOLDOWN_MS = 60000U;
 
 class NetworkRequestGuard {
  public:
   explicit NetworkRequestGuard(NetworkArbiter& arbiter)
       : arbiter_(arbiter), locked_(arbiter_.lock()) {}
-  ~NetworkRequestGuard() {
-    if (locked_) arbiter_.unlock();
-  }
+  ~NetworkRequestGuard() { if (locked_) arbiter_.unlock(); }
   bool locked() const { return locked_; }
-
  private:
   NetworkArbiter& arbiter_;
   bool locked_ = false;
 };
 
-void secureErase(std::string& value) {
-  if (!value.empty()) {
-    volatile char* data = &value[0];
-    for (size_t i = 0; i < value.size(); ++i) data[i] = '\0';
-  }
-  value.clear();
-}
-
-const char* verificationTypeName(BambuVerificationType type) {
-  switch (type) {
-    case BambuVerificationType::NONE: return "none";
-    case BambuVerificationType::EMAIL_CODE: return "email";
-    case BambuVerificationType::SMS_CODE: return "sms";
-    case BambuVerificationType::TFA: return "tfa";
-  }
-  return "unknown";
-}
-
-BambuReloginFailure reloginFailureFor(BambuCloudError error) {
-  if (error == BambuCloudError::VERIFICATION_REQUIRED) {
-    return BambuReloginFailure::VERIFICATION_REQUIRED;
-  }
-  if (error == BambuCloudError::INVALID_CREDENTIALS ||
-      error == BambuCloudError::HTTP_STATUS ||
-      error == BambuCloudError::MALFORMED ||
-      error == BambuCloudError::USER_ID_UNAVAILABLE) {
-    return BambuReloginFailure::INVALID_CREDENTIALS;
-  }
-  return BambuReloginFailure::NETWORK;
-}
-
 bool elapsed(uint32_t nowMs, uint32_t sinceMs, uint32_t intervalMs) {
   return static_cast<uint32_t>(nowMs - sinceMs) >= intervalMs;
+}
+
+bool configuredForMqtt(const BambuConfig& config) {
+  return config.enabled && !config.accessToken.empty() && !config.cloudUserId.empty() &&
+         activeBambuPrinter(config) != nullptr;
 }
 }  // namespace
 
 BambuMqttService* BambuMqttService::activeInstance_ = nullptr;
 
-bool BambuMqttService::begin(const BambuConfig& config,
-                             BambuConfigStore& store,
-                             BambuCloudClient& cloud) {
+bool BambuMqttService::begin(const BambuConfig& config, BambuConfigStore& store) {
   if (task_ || activeInstance_) return false;
-
   mutex_ = xSemaphoreCreateMutex();
   if (!mutex_) return false;
-
   store_ = &store;
-  cloud_ = &cloud;
   config_ = config;
-  status_.configured = config_.enabled && !config_.email.empty();
-  status_.passwordSet = !config_.password.empty();
+  status_.configured = configuredForMqtt(config_);
   status_.tokenSet = !config_.accessToken.empty();
   status_.session = config_.enabled ? BambuSessionState::MQTT_CONNECTING
                                     : BambuSessionState::INTEGRATION_DISABLED;
-  sessionModel_.setAutomaticReloginAvailable(!config_.password.empty());
-  externalConfigRevision_ = 0U;
-  observedExternalConfigRevision_ = 0U;
   activeInstance_ = this;
-
   const BaseType_t created = xTaskCreatePinnedToCore(
       taskThunk, "bambu-mqtt", 8192, this, 1, &task_, 0);
   if (created != pdPASS) {
@@ -125,16 +84,6 @@ BambuMqttStatus BambuMqttService::status() const {
   if (!mutex_) return copy;
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
     copy = status_;
-    copy.verificationRequired = pendingVerificationType_ != BambuVerificationType::NONE;
-    copy.verificationType = pendingVerificationType_;
-    copy.verificationResendAfterMs = 0U;
-    if (copy.verificationRequired && verificationResendAnchorSet_ &&
-        pendingVerificationType_ != BambuVerificationType::TFA) {
-      const uint32_t since = static_cast<uint32_t>(millis() - verificationResendAnchorMs_);
-      if (since < BAMBU_VERIFICATION_RESEND_COOLDOWN_MS) {
-        copy.verificationResendAfterMs = BAMBU_VERIFICATION_RESEND_COOLDOWN_MS - since;
-      }
-    }
     xSemaphoreGive(mutex_);
   }
   return copy;
@@ -147,261 +96,42 @@ BambuConfig BambuMqttService::configSnapshot() const {
 bool BambuMqttService::replaceConfig(const BambuConfig& config) {
   if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) return false;
   if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
-
   const bool saved = store_->save(config);
   if (saved) {
     config_ = config;
-    status_.configured = config_.enabled && !config_.email.empty();
-    status_.passwordSet = !config_.password.empty();
-    status_.tokenSet = !config_.accessToken.empty();
     ++externalConfigRevision_;
-    discoveredPrinters_.clear();
-    clearPendingVerificationLocked();
+    state_ = BambuState{};
+    status_.mqttConnected = false;
+    status_.lastMessageMs = 0U;
+    status_.lastMqttRc = -1;
+    status_.configured = configuredForMqtt(config_);
+    status_.tokenSet = !config_.accessToken.empty();
+    status_.session = config_.enabled ? BambuSessionState::MQTT_CONNECTING
+                                      : BambuSessionState::INTEGRATION_DISABLED;
   }
-
   xSemaphoreGive(mutex_);
   return saved;
-}
-
-std::vector<BambuCloudDevice> BambuMqttService::discoveredPrinters() const {
-  std::vector<BambuCloudDevice> copy;
-  if (!mutex_) return copy;
-  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-    copy = discoveredPrinters_;
-    xSemaphoreGive(mutex_);
-  }
-  return copy;
-}
-
-bool BambuMqttService::setPendingVerification(const BambuCloudLoginResult& challenge) {
-  if (!mutex_ || !challenge.verificationRequired() ||
-      challenge.verificationType == BambuVerificationType::NONE) {
-    return false;
-  }
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
-  clearPendingVerificationLocked();
-  pendingVerificationType_ = challenge.verificationType;
-  if (challenge.verificationType == BambuVerificationType::TFA) {
-    if (challenge.tfaKey.empty()) {
-      clearPendingVerificationLocked();
-      xSemaphoreGive(mutex_);
-      return false;
-    }
-    pendingTfaKey_ = challenge.tfaKey;
-  }
-  pendingVerificationRevision_ = externalConfigRevision_;
-  verificationResendAnchorMs_ = millis();
-  verificationResendAnchorSet_ = challenge.verificationType != BambuVerificationType::TFA;
-  status_.verificationRequired = true;
-  status_.verificationType = pendingVerificationType_;
-  status_.verificationResendAfterMs = verificationResendAnchorSet_
-                                          ? BAMBU_VERIFICATION_RESEND_COOLDOWN_MS
-                                          : 0U;
-  status_.session = BambuSessionState::VERIFICATION_REQUIRED;
-  xSemaphoreGive(mutex_);
-
-  Serial.printf("[bambu] login http=%d result=CHALLENGE type=%s hasEmailCode=%d hasSmsCode=%d hasTfa=%d\n",
-                challenge.httpStatus, verificationTypeName(challenge.verificationType),
-                challenge.verificationType == BambuVerificationType::EMAIL_CODE ? 1 : 0,
-                challenge.verificationType == BambuVerificationType::SMS_CODE ? 1 : 0,
-                challenge.verificationType == BambuVerificationType::TFA ? 1 : 0);
-  return true;
-}
-
-bool BambuMqttService::setPendingVerification(const BambuCloudLoginResult& challenge,
-                                               uint32_t expectedExternalRevision) {
-  if (!mutex_ || !challenge.verificationRequired() ||
-      challenge.verificationType == BambuVerificationType::NONE) {
-    return false;
-  }
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
-  if (externalConfigRevision_ != expectedExternalRevision) {
-    xSemaphoreGive(mutex_);
-    return false;
-  }
-  clearPendingVerificationLocked();
-  pendingVerificationType_ = challenge.verificationType;
-  if (challenge.verificationType == BambuVerificationType::TFA) {
-    if (challenge.tfaKey.empty()) {
-      clearPendingVerificationLocked();
-      xSemaphoreGive(mutex_);
-      return false;
-    }
-    pendingTfaKey_ = challenge.tfaKey;
-  }
-  pendingVerificationRevision_ = expectedExternalRevision;
-  verificationResendAnchorMs_ = millis();
-  verificationResendAnchorSet_ = challenge.verificationType != BambuVerificationType::TFA;
-  status_.verificationRequired = true;
-  status_.verificationType = pendingVerificationType_;
-  status_.verificationResendAfterMs = verificationResendAnchorSet_
-                                          ? BAMBU_VERIFICATION_RESEND_COOLDOWN_MS
-                                          : 0U;
-  status_.session = BambuSessionState::VERIFICATION_REQUIRED;
-  xSemaphoreGive(mutex_);
-
-  Serial.printf("[bambu] login http=%d result=CHALLENGE type=%s hasEmailCode=%d hasSmsCode=%d hasTfa=%d\n",
-                challenge.httpStatus, verificationTypeName(challenge.verificationType),
-                challenge.verificationType == BambuVerificationType::EMAIL_CODE ? 1 : 0,
-                challenge.verificationType == BambuVerificationType::SMS_CODE ? 1 : 0,
-                challenge.verificationType == BambuVerificationType::TFA ? 1 : 0);
-  return true;
-}
-
-bool BambuMqttService::hasPendingVerification() const {
-  if (!mutex_) return false;
-  bool pending = false;
-  if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-    pending = pendingVerificationType_ != BambuVerificationType::NONE &&
-              pendingVerificationRevision_ == externalConfigRevision_;
-    xSemaphoreGive(mutex_);
-  }
-  return pending;
-}
-
-BambuCloudLoginResult BambuMqttService::submitVerificationCode(std::string code) {
-  BambuCloudLoginResult result;
-  if (!cloud_ || !mutex_) {
-    result.error = BambuCloudError::NETWORK;
-    secureErase(code);
-    return result;
-  }
-
-  BambuConfig config;
-  BambuVerificationType verificationType = BambuVerificationType::NONE;
-  std::string tfaKey;
-  uint32_t expectedExternalRevision = 0U;
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
-    result.error = BambuCloudError::NETWORK;
-    secureErase(code);
-    return result;
-  }
-  if (pendingVerificationType_ == BambuVerificationType::NONE ||
-      pendingVerificationRevision_ != externalConfigRevision_) {
-    result.error = BambuCloudError::INVALID_CREDENTIALS;
-    result.httpStatus = 409;
-    xSemaphoreGive(mutex_);
-    secureErase(code);
-    return result;
-  }
-  config = config_;
-  verificationType = pendingVerificationType_;
-  tfaKey = pendingTfaKey_;
-  expectedExternalRevision = pendingVerificationRevision_;
-  xSemaphoreGive(mutex_);
-
-  if (verificationType == BambuVerificationType::TFA) {
-    result = cloud_->submitTfaCode(tfaKey, code, config.region);
-  } else {
-    result = cloud_->submitVerificationCode(config.email, code, config.region);
-  }
-  secureErase(code);
-  secureErase(tfaKey);
-
-  if (result.verificationRequired()) {
-    const bool staged = setPendingVerification(result, expectedExternalRevision);
-    secureErase(result.tfaKey);
-    if (!staged) {
-      result.error = BambuCloudError::HTTP_STATUS;
-      result.httpStatus = 409;
-    }
-    return result;
-  }
-  if (!result.ok()) return result;
-
-  BambuConfig updated = config;
-  updated.enabled = true;
-  updated.accessToken = result.accessToken;
-  const ConfigCommitResult committed = completeVerificationConfig(updated, expectedExternalRevision);
-  if (committed != ConfigCommitResult::SAVED) {
-    result.error = BambuCloudError::HTTP_STATUS;
-    result.httpStatus = committed == ConfigCommitResult::STALE ? 409 : 500;
-    secureErase(result.accessToken);
-    return result;
-  }
-
-  Serial.printf("[bambu] verification http=%d result=TOKEN type=%s\n",
-                result.httpStatus, verificationTypeName(verificationType));
-  return result;
-}
-
-BambuCloudError BambuMqttService::requestVerificationCode() {
-  if (!cloud_ || !mutex_) return BambuCloudError::NETWORK;
-
-  BambuConfig config;
-  BambuVerificationType verificationType = BambuVerificationType::NONE;
-  uint32_t expectedExternalRevision = 0U;
-  const uint32_t nowMs = millis();
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return BambuCloudError::NETWORK;
-  if (pendingVerificationType_ == BambuVerificationType::NONE ||
-      pendingVerificationType_ == BambuVerificationType::TFA ||
-      pendingVerificationRevision_ != externalConfigRevision_) {
-    xSemaphoreGive(mutex_);
-    return BambuCloudError::INVALID_CREDENTIALS;
-  }
-  if (verificationResendAnchorSet_ &&
-      !elapsed(nowMs, verificationResendAnchorMs_, BAMBU_VERIFICATION_RESEND_COOLDOWN_MS)) {
-    xSemaphoreGive(mutex_);
-    return BambuCloudError::RATE_LIMITED;
-  }
-  config = config_;
-  verificationType = pendingVerificationType_;
-  expectedExternalRevision = pendingVerificationRevision_;
-  xSemaphoreGive(mutex_);
-
-  const BambuCloudError requested = cloud_->requestVerificationCode(config.email, config.region);
-  if (requested != BambuCloudError::NONE) return requested;
-
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return BambuCloudError::NETWORK;
-  if (externalConfigRevision_ != expectedExternalRevision ||
-      pendingVerificationRevision_ != expectedExternalRevision ||
-      pendingVerificationType_ != verificationType) {
-    xSemaphoreGive(mutex_);
-    return BambuCloudError::HTTP_STATUS;
-  }
-  verificationResendAnchorMs_ = millis();
-  verificationResendAnchorSet_ = true;
-  status_.verificationResendAfterMs = BAMBU_VERIFICATION_RESEND_COOLDOWN_MS;
-  xSemaphoreGive(mutex_);
-
-  Serial.printf("[bambu] verification resend result=OK type=%s\n",
-                verificationTypeName(verificationType));
-  return BambuCloudError::NONE;
 }
 
 void BambuMqttService::taskThunk(void* arg) {
   static_cast<BambuMqttService*>(arg)->taskLoop();
 }
 
-void BambuMqttService::mqttCallbackThunk(char* topic,
-                                         uint8_t* payload,
-                                         unsigned int length) {
+void BambuMqttService::mqttCallbackThunk(char* topic, uint8_t* payload, unsigned int length) {
   if (activeInstance_) activeInstance_->handleMessage(topic, payload, length);
 }
 
 void BambuMqttService::taskLoop() {
   for (;;) {
     const uint32_t nowMs = millis();
-    uint32_t externalRevision = 0U;
-    const BambuConfig config = configCopy(&externalRevision);
+    uint32_t revision = 0U;
+    const BambuConfig config = configCopy(&revision);
 
-    if (externalRevision != observedExternalConfigRevision_) {
-      observedExternalConfigRevision_ = externalRevision;
+    if (revision != observedExternalConfigRevision_) {
+      observedExternalConfigRevision_ = revision;
       disconnectMqtt();
       mqttAttempted_ = false;
-      sessionModel_ = BambuSessionModel{};
-      sessionModel_.setAutomaticReloginAvailable(!config.password.empty());
-    }
-
-    if (hasPendingVerification()) {
-      sessionModel_.setAutomaticReloginAvailable(!config.password.empty());
-      sessionModel_.onMqttAuthFailure(nowMs);
-      sessionModel_.onReloginStarted();
-      sessionModel_.onReloginFailure(nowMs, BambuReloginFailure::VERIFICATION_REQUIRED);
-      disconnectMqtt();
-      setSession(BambuSessionState::VERIFICATION_REQUIRED);
-      vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
-      continue;
+      tokenRejected_ = false;
     }
 
     if (!config.enabled) {
@@ -410,20 +140,22 @@ void BambuMqttService::taskLoop() {
       vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
       continue;
     }
-
+    if (!configuredForMqtt(config)) {
+      disconnectMqtt();
+      setSession(config.accessToken.empty() ? BambuSessionState::TOKEN_INVALID
+                                            : BambuSessionState::UNCONFIGURED);
+      vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
+      continue;
+    }
+    if (tokenRejected_) {
+      disconnectMqtt();
+      setSession(BambuSessionState::TOKEN_INVALID);
+      vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
+      continue;
+    }
     if (WiFi.status() != WL_CONNECTED) {
       disconnectMqtt();
       setSession(BambuSessionState::NETWORK_ERROR);
-      vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
-      continue;
-    }
-
-    if (!ensureCloudIdentity(nowMs)) {
-      vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
-      continue;
-    }
-
-    if (!discoverPrinterIfNeeded()) {
       vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
       continue;
     }
@@ -436,10 +168,7 @@ void BambuMqttService::taskLoop() {
       vTaskDelay(pdMS_TO_TICKS(BAMBU_TASK_SLEEP_MS));
       continue;
     }
-
-    if (!mqtt_->loop()) {
-      setConnectivity(false);
-    }
+    if (!mqtt_->loop()) setConnectivity(false);
     vTaskDelay(pdMS_TO_TICKS(BAMBU_TASK_SLEEP_MS));
   }
 }
@@ -448,11 +177,11 @@ void BambuMqttService::handleMessage(const char* topic,
                                      const uint8_t* payload,
                                      unsigned int length) {
   const BambuConfig config = configCopy();
-  const std::string expected = bambuReportTopic(config.printerSerial);
+  const BambuPrinterConfig* active = activeBambuPrinter(config);
+  if (!active) return;
+  const std::string expected = bambuReportTopic(active->serial);
   if (!topic || expected.empty() || expected != topic || !payload || length == 0U ||
-      length > BambuStateLimits::REPORT_JSON) {
-    return;
-  }
+      length > BambuStateLimits::REPORT_JSON) return;
 
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) return;
   const std::string_view json(reinterpret_cast<const char*>(payload), length);
@@ -466,103 +195,12 @@ void BambuMqttService::handleMessage(const char* topic,
   xSemaphoreGive(mutex_);
 }
 
-bool BambuMqttService::ensureCloudIdentity(uint32_t nowMs) {
-  BambuConfig config = configCopy();
-  sessionModel_.setAutomaticReloginAvailable(!config.password.empty());
-
-  if (hasPendingVerification()) {
-    setSession(BambuSessionState::VERIFICATION_REQUIRED);
-    return false;
-  }
-
-  if (config.email.empty()) {
-    setSession(BambuSessionState::UNCONFIGURED);
-    return false;
-  }
-
-  if (config.accessToken.empty()) {
-    if (config.password.empty()) {
-      setSession(BambuSessionState::TOKEN_INVALID);
-      return false;
-    }
-    sessionModel_.onMqttAuthFailure(nowMs);
-  }
-
-  if (sessionModel_.shouldRelogin(nowMs)) {
-    return performRelogin(nowMs);
-  }
-
-  uint32_t externalRevision = 0U;
-  config = configCopy(&externalRevision);
-  if (config.accessToken.empty()) {
-    setSession(sessionModel_.state());
-    return false;
-  }
-
-  if (config.cloudUserId.empty()) {
-    const BambuCloudUserIdResult user = cloud_->fetchUserId(config.accessToken, config.region);
-    if (!user.ok()) {
-      if (user.error == BambuCloudError::INVALID_CREDENTIALS ||
-          user.error == BambuCloudError::HTTP_STATUS) {
-        sessionModel_.onMqttAuthFailure(nowMs);
-        setSession(sessionModel_.state());
-      } else {
-        setSession(BambuSessionState::NETWORK_ERROR);
-      }
-      return false;
-    }
-    config.cloudUserId = user.userId;
-    const ConfigCommitResult committed = persistConfig(config, externalRevision);
-    if (committed == ConfigCommitResult::STALE) return false;
-    if (committed != ConfigCommitResult::SAVED) {
-      setSession(BambuSessionState::LOGIN_FAILED);
-      return false;
-    }
-  }
-  return true;
-}
-
-bool BambuMqttService::discoverPrinterIfNeeded() {
-  uint32_t externalRevision = 0U;
-  BambuConfig config = configCopy(&externalRevision);
-  if (!config.printerSerial.empty()) return true;
-
-  const BambuCloudPrintersResult found = cloud_->fetchPrinters(config.accessToken, config.region);
-  if (!found.ok()) {
-    setSession(found.error == BambuCloudError::NETWORK || found.error == BambuCloudError::TLS
-                   ? BambuSessionState::NETWORK_ERROR
-                   : BambuSessionState::LOGIN_FAILED);
-    return false;
-  }
-
-  if (!publishDiscoveredPrintersIfCurrent(found.printers, externalRevision)) return false;
-
-  if (found.printers.empty()) {
-    setSession(BambuSessionState::UNCONFIGURED);
-    return false;
-  }
-  if (found.printers.size() != 1U) {
-    setSession(BambuSessionState::PRINTER_SELECTION_REQUIRED);
-    return false;
-  }
-
-  config.printerSerial = found.printers[0].serial;
-  config.printerName = found.printers[0].name;
-  const ConfigCommitResult committed = persistConfig(config, externalRevision);
-  if (committed == ConfigCommitResult::STALE) return false;
-  if (committed != ConfigCommitResult::SAVED) {
-    setSession(BambuSessionState::LOGIN_FAILED);
-    return false;
-  }
-  return true;
-}
-
 bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   lastMqttAttemptMs_ = nowMs;
   mqttAttempted_ = true;
   const BambuConfig config = configCopy();
-
-  if (config.cloudUserId.empty() || config.accessToken.empty() || config.printerSerial.empty()) {
+  const BambuPrinterConfig* active = activeBambuPrinter(config);
+  if (!active || config.cloudUserId.empty() || config.accessToken.empty()) {
     setSession(BambuSessionState::UNCONFIGURED);
     return false;
   }
@@ -604,28 +242,23 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   std::snprintf(clientId, sizeof(clientId), "tdgp_%08lx%04x",
                 static_cast<unsigned long>(esp_random()),
                 static_cast<unsigned>(esp_random() & 0xFFFFU));
-
   if (!mqtt_->connect(clientId, config.cloudUserId.c_str(), config.accessToken.c_str())) {
     const int rc = mqtt_->state();
+    if (rc == 4 || rc == 5) tokenRejected_ = true;
     setSession((rc == 4 || rc == 5) ? BambuSessionState::TOKEN_INVALID
                                      : BambuSessionState::NETWORK_ERROR,
                rc);
     disconnectMqtt();
-    if (rc == 4 || rc == 5) {
-      sessionModel_.setAutomaticReloginAvailable(!config.password.empty());
-      sessionModel_.onMqttAuthFailure(nowMs);
-    }
     return false;
   }
 
-  const std::string reportTopic = bambuReportTopic(config.printerSerial);
+  const std::string reportTopic = bambuReportTopic(active->serial);
   if (reportTopic.empty() || !mqtt_->subscribe(reportTopic.c_str())) {
     setSession(BambuSessionState::NETWORK_ERROR, mqtt_->state());
     disconnectMqtt();
     return false;
   }
-
-  const std::string requestTopic = "device/" + config.printerSerial + "/request";
+  const std::string requestTopic = "device/" + active->serial + "/request";
   char request[144];
   std::snprintf(request, sizeof(request),
                 "{\"pushing\":{\"sequence_id\":\"%lu\",\"command\":\"pushall\","
@@ -633,61 +266,9 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
                 static_cast<unsigned long>(pushallSequence_++));
   mqtt_->publish(requestTopic.c_str(), request);
 
+  tokenRejected_ = false;
   setConnectivity(true);
   setSession(BambuSessionState::ONLINE, 0);
-  return true;
-}
-
-bool BambuMqttService::performRelogin(uint32_t nowMs) {
-  uint32_t externalRevision = 0U;
-  const BambuConfig config = configCopy(&externalRevision);
-  if (config.password.empty()) {
-    setSession(BambuSessionState::TOKEN_INVALID);
-    return false;
-  }
-
-  sessionModel_.onReloginStarted();
-  setSession(BambuSessionState::RELOGIN_IN_PROGRESS);
-
-  BambuCloudLoginResult login = cloud_->login(config.email, config.password, config.region);
-  if (login.verificationRequired()) {
-    const bool staged = setPendingVerification(login, externalRevision);
-    secureErase(login.tfaKey);
-    if (staged) {
-      sessionModel_.onReloginFailure(nowMs, BambuReloginFailure::VERIFICATION_REQUIRED);
-      setSession(BambuSessionState::VERIFICATION_REQUIRED);
-    }
-    return false;
-  }
-  if (!login.ok()) {
-    const BambuReloginFailure reason = reloginFailureFor(login.error);
-    sessionModel_.onReloginFailure(nowMs, reason);
-    setSession(sessionModel_.state());
-    return false;
-  }
-
-  const BambuCloudUserIdResult user = cloud_->fetchUserId(login.accessToken, config.region);
-  if (!user.ok()) {
-    const BambuReloginFailure reason = reloginFailureFor(user.error);
-    sessionModel_.onReloginFailure(nowMs, reason);
-    setSession(sessionModel_.state());
-    return false;
-  }
-
-  BambuConfig updated = config;
-  updated.accessToken = login.accessToken;
-  updated.cloudUserId = user.userId;
-  const ConfigCommitResult committed = persistConfig(updated, externalRevision);
-  if (committed == ConfigCommitResult::STALE) return false;
-  if (committed != ConfigCommitResult::SAVED) {
-    sessionModel_.onReloginFailure(nowMs, BambuReloginFailure::SERVICE_ERROR);
-    setSession(sessionModel_.state());
-    return false;
-  }
-
-  sessionModel_.onReloginSuccess();
-  setSession(BambuSessionState::MQTT_CONNECTING);
-  mqttAttempted_ = false;
   return true;
 }
 
@@ -719,12 +300,8 @@ void BambuMqttService::setSession(BambuSessionState session, int mqttRc) {
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
     status_.session = session;
     if (mqttRc != -1) status_.lastMqttRc = mqttRc;
-    status_.reloginFailureCount = sessionModel_.reloginFailureCount();
-    status_.configured = config_.enabled && !config_.email.empty();
-    status_.passwordSet = !config_.password.empty();
+    status_.configured = configuredForMqtt(config_);
     status_.tokenSet = !config_.accessToken.empty();
-    status_.verificationRequired = pendingVerificationType_ != BambuVerificationType::NONE;
-    status_.verificationType = pendingVerificationType_;
     xSemaphoreGive(mutex_);
   }
 }
@@ -738,89 +315,4 @@ BambuConfig BambuMqttService::configCopy(uint32_t* externalRevision) const {
     xSemaphoreGive(mutex_);
   }
   return copy;
-}
-
-bool BambuMqttService::publishDiscoveredPrintersIfCurrent(
-    const std::vector<BambuCloudDevice>& printers,
-    uint32_t expectedExternalRevision) {
-  if (!mutex_) return false;
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
-  if (externalConfigRevision_ != expectedExternalRevision) {
-    xSemaphoreGive(mutex_);
-    return false;
-  }
-  discoveredPrinters_ = printers;
-  xSemaphoreGive(mutex_);
-  return true;
-}
-
-BambuMqttService::ConfigCommitResult BambuMqttService::persistConfig(
-    const BambuConfig& config,
-    uint32_t expectedExternalRevision) {
-  if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) {
-    return ConfigCommitResult::ERROR;
-  }
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
-    return ConfigCommitResult::ERROR;
-  }
-
-  if (externalConfigRevision_ != expectedExternalRevision) {
-    xSemaphoreGive(mutex_);
-    return ConfigCommitResult::STALE;
-  }
-
-  const bool saved = store_->save(config);
-  if (saved) {
-    config_ = config;
-    status_.configured = config_.enabled && !config_.email.empty();
-    status_.passwordSet = !config_.password.empty();
-    status_.tokenSet = !config_.accessToken.empty();
-  }
-
-  xSemaphoreGive(mutex_);
-  return saved ? ConfigCommitResult::SAVED : ConfigCommitResult::ERROR;
-}
-
-BambuMqttService::ConfigCommitResult BambuMqttService::completeVerificationConfig(
-    const BambuConfig& config,
-    uint32_t expectedExternalRevision) {
-  if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) {
-    return ConfigCommitResult::ERROR;
-  }
-  if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
-    return ConfigCommitResult::ERROR;
-  }
-  if (externalConfigRevision_ != expectedExternalRevision ||
-      pendingVerificationRevision_ != expectedExternalRevision ||
-      pendingVerificationType_ == BambuVerificationType::NONE) {
-    xSemaphoreGive(mutex_);
-    return ConfigCommitResult::STALE;
-  }
-
-  const bool saved = store_->save(config);
-  if (!saved) {
-    xSemaphoreGive(mutex_);
-    return ConfigCommitResult::ERROR;
-  }
-
-  config_ = config;
-  status_.configured = config_.enabled && !config_.email.empty();
-  status_.passwordSet = !config_.password.empty();
-  status_.tokenSet = !config_.accessToken.empty();
-  discoveredPrinters_.clear();
-  clearPendingVerificationLocked();
-  ++externalConfigRevision_;
-  xSemaphoreGive(mutex_);
-  return ConfigCommitResult::SAVED;
-}
-
-void BambuMqttService::clearPendingVerificationLocked() {
-  pendingVerificationType_ = BambuVerificationType::NONE;
-  secureErase(pendingTfaKey_);
-  pendingVerificationRevision_ = 0U;
-  verificationResendAnchorMs_ = 0U;
-  verificationResendAnchorSet_ = false;
-  status_.verificationRequired = false;
-  status_.verificationType = BambuVerificationType::NONE;
-  status_.verificationResendAfterMs = 0U;
 }

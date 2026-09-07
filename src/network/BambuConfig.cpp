@@ -52,14 +52,6 @@ bool safeSerial(const std::string& serial) {
   return true;
 }
 
-void updateLegacyActiveAliases(BambuConfig& config) {
-  config.printerSerial.clear();
-  config.printerName.clear();
-  if (config.printerCount == 0 || config.activePrinterIndex >= config.printerCount) return;
-  config.printerSerial = config.printers[config.activePrinterIndex].serial;
-  config.printerName = config.printers[config.activePrinterIndex].name;
-}
-
 bool decodeV1(JsonObjectConst root, BambuConfig& decoded) {
   if (!root["enabled"].is<bool>() || !root["region"].is<const char*>()) return false;
   decoded.enabled = root["enabled"].as<bool>();
@@ -78,15 +70,9 @@ bool decodeV1(JsonObjectConst root, BambuConfig& decoded) {
     decoded.printers[0].name = std::move(name);
   }
 
-  // Account/password from schema v1 are intentionally not migrated. Manual
-  // token mode removes long-lived account credentials from the new config.
-  decoded.email.clear();
-  decoded.password.clear();
-  updateLegacyActiveAliases(decoded);
-
   if (decoded.enabled && !validateBambuConfig(decoded).ok()) {
-    // Preserve usable token/printer data for the portal but do not boot an
-    // incomplete legacy config into MQTT.
+    // Preserve any reusable token/user-id/printer values for the new portal,
+    // but do not start MQTT from an incomplete legacy config.
     decoded.enabled = false;
   }
   return validateBambuConfig(decoded).ok();
@@ -113,7 +99,6 @@ bool decodeV2(JsonObjectConst root, BambuConfig& decoded) {
     ++decoded.printerCount;
   }
   decoded.activePrinterIndex = root["active_printer"].as<size_t>();
-  updateLegacyActiveAliases(decoded);
   return validateBambuConfig(decoded).ok();
 }
 }  // namespace

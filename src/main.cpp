@@ -103,7 +103,7 @@ void setup() {
     Serial.println("App-data worker failed to start");
     return;
   }
-  if (!bambuMqttService.begin(bambuConfig, bambuConfigStore, bambuCloudClient)) {
+  if (!bambuMqttService.begin(bambuConfig, bambuConfigStore)) {
     Serial.println("Bambu MQTT service failed to start");
     return;
   }

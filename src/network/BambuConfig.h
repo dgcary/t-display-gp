@@ -44,11 +44,6 @@ constexpr size_t PRINTER_SERIAL = 32;
 constexpr size_t PRINTER_NAME = 64;
 constexpr size_t PRINTER_COUNT = 4;
 constexpr size_t ENCODED = 4096;
-
-// Transitional source-compatibility bounds for schema-v1 auth code while the
-// portal/service migration lands. Schema v2 never persists these fields.
-constexpr size_t EMAIL = 160;
-constexpr size_t PASSWORD = 256;
 }  // namespace BambuConfigLimits
 
 struct BambuConfig {
@@ -59,14 +54,6 @@ struct BambuConfig {
   std::array<BambuPrinterConfig, BambuConfigLimits::PRINTER_COUNT> printers{};
   size_t printerCount = 0;
   size_t activePrinterIndex = 0;
-
-  // Transitional in-memory aliases used only by the old portal/service until
-  // their migration in the same feature branch. They are never encoded by
-  // schema v2 and are cleared when decoding legacy credentials.
-  std::string email;
-  std::string password;
-  std::string printerSerial;
-  std::string printerName;
 };
 
 BambuConfigValidationResult validateBambuConfig(const BambuConfig& config);

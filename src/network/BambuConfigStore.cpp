@@ -27,9 +27,14 @@ bool BambuConfigStore::load(BambuConfig& out) const {
   preferences.end();
   if (read != encoded.size()) return false;
 
+  const bool legacySchema = encoded.find("\"schema\":1") != std::string::npos;
   BambuConfig parsed;
   if (!BambuConfigCodec::decode(encoded, parsed)) return false;
-  out = std::move(parsed);
+  out = parsed;
+
+  // Best-effort rewrite removes legacy account/password fields from NVS as
+  // soon as the new firmware successfully decodes schema v1.
+  if (legacySchema) save(parsed);
   return true;
 }
 
@@ -51,12 +56,10 @@ bool BambuConfigStore::save(const BambuConfig& config) const {
 bool BambuConfigStore::clear() const {
   Preferences preferences;
   if (!preferences.begin(BuildConfig::BAMBU_CONFIG_NAMESPACE, false)) return false;
-
   if (preferences.getBytesLength(BuildConfig::BAMBU_CONFIG_KEY) == 0U) {
     preferences.end();
     return true;
   }
-
   const bool removed = preferences.remove(BuildConfig::BAMBU_CONFIG_KEY);
   preferences.end();
   return removed;

@@ -2,24 +2,6 @@
 
 #include <algorithm>
 
-namespace {
-void clearLegacyAliases(BambuConfig& config) {
-  config.email.clear();
-  config.password.clear();
-  config.printerSerial.clear();
-  config.printerName.clear();
-}
-
-void updateLegacyActiveAlias(BambuConfig& config) {
-  config.printerSerial.clear();
-  config.printerName.clear();
-  const BambuPrinterConfig* active = activeBambuPrinter(config);
-  if (!active) return;
-  config.printerSerial = active->serial;
-  config.printerName = active->name;
-}
-}  // namespace
-
 BambuConfig mergeBambuPortalConfig(const BambuConfig& existing,
                                     const BambuPortalConfigInput& input) {
   BambuConfig merged = existing;
@@ -27,7 +9,6 @@ BambuConfig mergeBambuPortalConfig(const BambuConfig& existing,
 
   merged.enabled = input.enabled;
   merged.region = input.region;
-
   if (!input.accessToken.empty()) {
     merged.accessToken = input.accessToken;
     merged.cloudUserId.clear();
@@ -46,9 +27,6 @@ BambuConfig mergeBambuPortalConfig(const BambuConfig& existing,
       merged.activePrinterIndex = i;
     }
   }
-
-  clearLegacyAliases(merged);
-  updateLegacyActiveAlias(merged);
   return merged;
 }
 
@@ -60,7 +38,6 @@ BambuConfig clearBambuPortalCredentials(const BambuConfig& existing) {
   cleared.printers = {};
   cleared.printerCount = 0;
   cleared.activePrinterIndex = 0;
-  clearLegacyAliases(cleared);
   return cleared;
 }
 
