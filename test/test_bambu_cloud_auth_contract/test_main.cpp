@@ -1,5 +1,7 @@
 #include <unity.h>
 
+#include <type_traits>
+
 #include "BambuCloudClient.h"
 
 void setUp() {}
@@ -19,12 +21,20 @@ void test_login_result_preserves_typed_verification_challenge() {
 }
 
 void test_client_exposes_verification_submit_resend_and_tfa_methods() {
-  auto submitCode = &BambuCloudClient::submitVerificationCode;
-  auto requestCode = &BambuCloudClient::requestVerificationCode;
-  auto submitTfa = &BambuCloudClient::submitTfaCode;
-  TEST_ASSERT_TRUE(submitCode != nullptr);
-  TEST_ASSERT_TRUE(requestCode != nullptr);
-  TEST_ASSERT_TRUE(submitTfa != nullptr);
+  using SubmitVerificationSignature = BambuCloudLoginResult (BambuCloudClient::*)(
+      const std::string&, const std::string&, BambuRegion) const;
+  using RequestVerificationSignature = BambuCloudError (BambuCloudClient::*)(
+      const std::string&, BambuRegion) const;
+  using SubmitTfaSignature = BambuCloudLoginResult (BambuCloudClient::*)(
+      const std::string&, const std::string&, BambuRegion) const;
+
+  static_assert(std::is_same_v<decltype(&BambuCloudClient::submitVerificationCode),
+                               SubmitVerificationSignature>);
+  static_assert(std::is_same_v<decltype(&BambuCloudClient::requestVerificationCode),
+                               RequestVerificationSignature>);
+  static_assert(std::is_same_v<decltype(&BambuCloudClient::submitTfaCode),
+                               SubmitTfaSignature>);
+  TEST_PASS();
 }
 
 int main() {

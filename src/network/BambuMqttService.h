@@ -5,6 +5,7 @@
 #include <freertos/task.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "BambuCloudClient.h"
@@ -22,6 +23,9 @@ struct BambuMqttStatus {
   bool configured = false;
   bool passwordSet = false;
   bool tokenSet = false;
+  bool verificationRequired = false;
+  BambuVerificationType verificationType = BambuVerificationType::NONE;
+  uint32_t verificationResendAfterMs = 0U;
   int lastMqttRc = -1;
   uint32_t lastMessageMs = 0U;
   uint8_t reloginFailureCount = 0U;
@@ -35,6 +39,12 @@ class BambuMqttService {
   BambuConfig configSnapshot() const;
   bool replaceConfig(const BambuConfig& config);
   std::vector<BambuCloudDevice> discoveredPrinters() const;
+
+  // Challenge material is RAM-only and owned by this service. The Portal never
+  // stores a tfaKey or verification code and status only exposes typed booleans.
+  bool setPendingVerification(const BambuCloudLoginResult& challenge);
+  BambuCloudLoginResult submitVerificationCode(std::string code);
+  BambuCloudError requestVerificationCode();
 
  private:
   enum class ConfigCommitResult {
@@ -60,6 +70,12 @@ class BambuMqttService {
                                           uint32_t expectedExternalRevision);
   ConfigCommitResult persistConfig(const BambuConfig& config,
                                    uint32_t expectedExternalRevision);
+  bool setPendingVerification(const BambuCloudLoginResult& challenge,
+                              uint32_t expectedExternalRevision);
+  bool hasPendingVerification() const;
+  void clearPendingVerificationLocked();
+  ConfigCommitResult completeVerificationConfig(const BambuConfig& config,
+                                                uint32_t expectedExternalRevision);
 
   BambuConfigStore* store_ = nullptr;
   BambuCloudClient* cloud_ = nullptr;
@@ -72,6 +88,11 @@ class BambuMqttService {
   BambuMqttStatus status_;
   std::vector<BambuCloudDevice> discoveredPrinters_;
   BambuSessionModel sessionModel_;
+  BambuVerificationType pendingVerificationType_ = BambuVerificationType::NONE;
+  std::string pendingTfaKey_;
+  uint32_t pendingVerificationRevision_ = 0U;
+  uint32_t verificationResendAnchorMs_ = 0U;
+  bool verificationResendAnchorSet_ = false;
   uint32_t externalConfigRevision_ = 0U;
   uint32_t observedExternalConfigRevision_ = 0U;
   uint32_t lastMqttAttemptMs_ = 0U;
