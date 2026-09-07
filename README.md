@@ -38,9 +38,11 @@ http://<T-Display-IP>:8081/
 在该页面本地填写：
 
 - region：China 或 US/EU/Global；
-- Bambu 账号邮箱；
+- Bambu 账号：**China 可使用中国大陆手机号（11 位，亦接受 +86/86 前缀）或邮箱；US/EU/Global 使用邮箱**；
 - 账号密码（可选择保存，默认用于 Token 自动续期）；
 - 登录后从账号绑定设备中选择打印机。
+
+内部配置字段仍沿用历史名称 `email` 以保持 NVS/schema 兼容，但在 China region 下它表示通用 Bambu `account`，可以保存手机号；Cloud 密码登录实际向 Bambu `/v1/user-service/user/login` 提交 `{account,password}`。
 
 **不要把 Bambu 密码或 Access Token 发到聊天、日志或截图中。** 固件的 status API 只返回 `password_set` / `token_set` 之类的存在性布尔值，不回显秘密；串口也不打印密码、Token 或完整 Cloud 响应体。
 
