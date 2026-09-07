@@ -104,6 +104,8 @@ MQTT receive buffer is 40960 bytes. Buffer allocation failure is a recoverable v
 
 Bambu MQTT remains connected in the background when the user leaves the Bambu app. Connect/reconnect handshakes acquire `NetworkArbiter`; after success the persistent socket releases arbiter and continues independently so Stock/Weather/HA remain usable.
 
+`BambuMqttService` owns the mutable runtime Bambu configuration. Local Portal saves are serialized through its update API and advance an external config revision. Any in-flight background login/identity/printer-discovery operation may persist its result only when the revision still matches the snapshot it used; otherwise that late result is stale and is discarded. This prevents a background Cloud response from reverting a newer account/region/token/printer selection saved from `:8081`.
+
 If Cloud auth becomes invalid and a password is saved, the service automatically logs in again, replaces token/user ID and reconnects. Failed renewal backs off approximately 1/5/15/30 minutes. Accounts requiring 2FA/email code cannot complete unattended renewal in V1; the UI should show the requirement instead of retrying continuously.
 
 ## Codex smoke / physical acceptance
@@ -124,7 +126,8 @@ Use the final exact-SHA artifact only.
 12. While MQTT stays connected, verify Stock/Weather/HA remain responsive.
 13. Interrupt/recover Wi-Fi and confirm Bambu reconnects without watchdog, panic, reboot or monotonic heap loss.
 14. If safely testable, verify invalid/expired token triggers saved-password automatic relogin. Do not deliberately trigger account lockout. Mark NOT TESTED when unsafe/impractical.
-15. For formal full acceptance perform >=100 app/menu transitions and collect concise serial/system evidence.
+15. If practical without risky credential experiments, save a newer Bambu config while a background Cloud operation is in flight and confirm a late result cannot restore the older config. If this timing is impractical, mark the race-specific physical case NOT TESTED; the automated revision contract remains required.
+16. For formal full acceptance perform >=100 app/menu transitions and collect concise serial/system evidence.
 
 ## Expected diagnostics
 
