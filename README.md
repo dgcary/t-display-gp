@@ -35,6 +35,10 @@ Access Token 留空保存表示保留当前 Token，固件永不从状态 API/�
 
 本地最多保存 4 台打印机。切换 active printer 不需要重启、不需要重新登录、不需要验证码；`BambuMqttService` 会断开旧 MQTT，清空旧打印机状态快照，并以新 Serial 重新连接/订阅，防止两台设备状态串台。
 
+Bambu App 本机也可以直接切换已经保存的打印机：GPIO0 短按切上一台，GPIO14 短按切下一台，首尾循环；少于两台时不动作。选择会立即写回 Bambu NVS，清空旧状态并触发新 Serial 的 MQTT 重连。GPIO0 长按回菜单、GPIO14 长按无操作的全局语义不变。
+
+Bambu 页面采用差量呈现：后台仍以 500 ms 周期读取 service cache，但只有展示状态实际变化时才标记 dirty。整屏清除只发生在首次进入页面或主动切换打印机的 full redraw；实时进度、温度、任务、耗材和 footer 只擦除并重画对应区域，避免周期性整屏闪烁。
+
 配置 schema 为 v2：
 
 ```text
@@ -71,7 +75,7 @@ request   = device/<activeSerial>/request
 
 Token 被 MQTT 以 rc 4/5 拒绝后进入 `token_invalid`，固件不会用旧 Token/旧密码自动撞 Cloud，也没有 SMS/Email/TFA 登录状态机。用户重新从浏览器取得新 Token，在 `:8081` 粘贴保存即可恢复。
 
-Bambu MQTT 是设备级后台服务，离开 Bambu App 不断开；Stock/Weather/HA 仍可使用各自网络请求。
+Bambu MQTT 是设备级后台服务，离开 Bambu App 不断开；Stock/Weather/HA 仍可使用各自网络请求。连接/掉线诊断只输出非敏感字段：MQTT rc、TLS numeric error、Wi-Fi status/RSSI 和 free heap，不输出 Token、Cloud User ID 或认证载荷。当前重连/keepalive 策略不会仅因诊断日志而改变，真实网络稳定性仍以真机证据为准。
 
 ## Home Assistant
 

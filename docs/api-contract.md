@@ -46,6 +46,8 @@ Enabled config requires Token, Cloud User ID and >=1 printer. Max 4 printers, no
 
 The firmware has no Bambu account/password login state machine and no SMS/email/TFA verification or automatic token renewal.
 
+`activeBambuPrinter(config)` resolves the selected entry. `selectRelativeBambuPrinter(config, direction)` is a pure selection helper: positive moves to the next configured printer, negative moves to the previous one, both wrap, and fewer than two printers is a no-op.
+
 ## Local portal
 
 Exactly one `WebServer{8081}` exists: `IntegrationConfigPortal`.
@@ -106,6 +108,17 @@ If a new Token is supplied, Cloud User ID is resolved before enabling. Save pers
 
 Clears Token/User ID/printer list, disables Bambu and disconnects MQTT.
 
+## Device-side active printer control
+
+While Bambu is the visible normal app:
+
+```text
+GPIO0 PREV_SHORT  -> BambuMqttService::cycleActivePrinter(-1)
+GPIO14 NEXT_SHORT -> BambuMqttService::cycleActivePrinter(+1)
+```
+
+`cycleActivePrinter()` changes only the active index of the existing validated local list, persists the resulting schema-v2 config, increments external config revision, clears old `BambuState` and allows the service task to disconnect/reconnect to the new Serial. No Token/Cloud discovery/login request is involved. Long-press app-shell behavior is unchanged.
+
 ## Token HTTPS client
 
 `BambuCloudClient` exposes only Token-based operations:
@@ -130,11 +143,29 @@ request   = device/<activeSerial>/request
 
 One service task owns connect/subscribe/callback/mqtt.loop. Buffer = 40960 bytes. Connect handshake acquires `NetworkArbiter`; established socket releases it. Only one read-only `pushall` publish path is allowed.
 
-Config replacement increments an external revision. On revision change service disconnects old MQTT, resets retry/token-rejected state and reconnects from the new config. Active printer switch clears old `BambuState` before reconnect.
+Config replacement or device-side active-printer switching increments an external revision. On revision change service disconnects old MQTT, resets retry/token-rejected state and reconnects from the new config. Active printer switch clears old `BambuState` before reconnect.
 
 MQTT auth rc 4/5 sets `TOKEN_INVALID` and marks current Token rejected; that same config is not retried. A new portal config revision (normally fresh Token) clears the latch and permits connection.
 
+When `mqtt.loop()` reports a lost connection the service records a network-error session and the current PubSubClient rc instead of leaving a stale ONLINE label. Reconnect cadence and keepalive remain explicit policy and must not be silently changed while diagnosing a physical-network problem.
+
+Secret-safe MQTT diagnostics may contain only connection layer metadata:
+
+```text
+mqtt_connect: broker, Wi-Fi status, RSSI, free heap
+mqtt_connect_ok: RSSI, free heap
+mqtt_connect_fail: MQTT rc, numeric TLS error, Wi-Fi status, RSSI, free heap
+mqtt_subscribe_fail: MQTT rc, Wi-Fi status, RSSI, free heap
+mqtt_loop_lost: MQTT rc, Wi-Fi status, RSSI, free heap
+```
+
+They must not contain Access Token, Cloud User ID, Cookie/Authorization, account data, raw authentication payloads or raw credential-bearing headers.
+
 Network disconnects preserve last valid state except deliberate active-printer change, where state is cleared to prevent showing one printer's data under another printer's name.
+
+## Bambu presentation
+
+`BambuApp` polls the mutex-protected service state/config cache, but a polling tick marks the app dirty only if presentation-relevant state changed. `BambuScreen` keeps a render signature. Full redraw is reserved for first render/explicit app full redraw (including active-printer switch); routine state deltas repaint only the affected header/progress/job/filament/footer region. This prevents whole-screen flashing at the polling cadence.
 
 # Shared concurrency
 

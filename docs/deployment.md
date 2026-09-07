@@ -79,6 +79,17 @@ Old account-login/verify/resend routes are retired.
 
 Saved config supports 4 printers. Active-printer change applies immediately without reboot or re-authentication. Service disconnects old MQTT, clears the old printer snapshot, then connects/subscribes with the newly selected Serial.
 
+The same saved list can be switched directly from the device while the Bambu app is visible:
+
+```text
+GPIO0 short  previous printer
+GPIO14 short next printer
+```
+
+Selection wraps A ↔ B ↔ …, does nothing when fewer than two printers are saved, persists `activePrinterIndex` immediately, clears the old state and reconnects. GPIO0 long still returns to the menu; GPIO14 long remains no-op.
+
+Bambu rendering is incremental. A service-cache poll does not itself trigger a redraw. Full-screen clear occurs only for a full redraw such as entering Bambu or switching active printer; normal live data changes redraw only their header/progress/job/filament/footer regions. This is the required anti-flicker behavior.
+
 Brokers:
 
 ```text
@@ -92,6 +103,20 @@ If the Token is rejected with MQTT rc 4/5, service enters `token_invalid` and st
 
 Legacy Bambu NVS schema v1 is migrated to v2 when possible. Reusable Token/User ID/single printer are retained; account/password are dropped.
 
+### MQTT diagnostics
+
+When diagnosing unstable Cloud MQTT, serial may emit secret-safe lines such as:
+
+```text
+[bambu] mqtt_connect broker=<host> wifi=<status> rssi=<dBm> heap=<bytes>
+[bambu] mqtt_connect_ok rssi=<dBm> heap=<bytes>
+[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> wifi=<status> rssi=<dBm> heap=<bytes>
+[bambu] mqtt_subscribe_fail rc=<mqtt> wifi=<status> rssi=<dBm> heap=<bytes>
+[bambu] mqtt_loop_lost rc=<mqtt> wifi=<status> rssi=<dBm> heap=<bytes>
+```
+
+These lines must never include Access Token, Cloud User ID, Cookie/Authorization, account data or raw authentication payloads. Diagnostic instrumentation does not by itself justify changing CA, keepalive or retry cadence; collect physical evidence first.
+
 ## Physical smoke
 
 1. Flash exact-SHA application image, preserve NVS.
@@ -100,12 +125,15 @@ Legacy Bambu NVS schema v1 is migrated to v2 when possible. Reusable Token/User 
 4. Open `:8081`; confirm Manual Token UI and four printer slots.
 5. Paste Token locally, configure two printers and select printer A; Save.
 6. Confirm MQTT online and printer A state.
-7. Change active selection to printer B, Save; no reboot/login should be required. Confirm old state disappears and B connects to printer B.
-8. Switch back to A and confirm the same behavior.
-9. Optionally test explicit discovery once; verify it populates form but does not overwrite saved config until Save.
-10. Reboot with NVS preserved; saved Token/list/active printer should restore.
-11. Leave Bambu app and verify background freshness while Stock/Weather/HA remain usable.
-12. Wi-Fi loss/recovery must reconnect without panic/watchdog/heap leak.
-13. Token-invalid test only if safe; do not intentionally lock the account.
+7. In the Bambu app short-press GPIO14; confirm device switches A→B, clears A state, persists B and reconnects without reboot/login.
+8. Short-press GPIO0; confirm B→A wrap/persistence/reconnect. With only one saved printer, both short presses must be no-op.
+9. Observe Bambu screen while idle and during live updates; it must not flash the entire display on a 500 ms cadence.
+10. Return to `:8081`, change active selection and Save; web switching must still work without reboot/login.
+11. Optionally test explicit discovery once; verify it populates form but does not overwrite saved config until Save.
+12. Reboot with NVS preserved; saved Token/list/active printer should restore.
+13. Leave Bambu app and verify background freshness while Stock/Weather/HA remain usable.
+14. For any MQTT drop, preserve the new `[bambu]` diagnostic lines and correlate them with `/api/bambu/status`, Wi-Fi reachability and PC-side TCP 8883/TLS tests before changing policy.
+15. Wi-Fi loss/recovery must reconnect without panic/watchdog/heap leak.
+16. Token-invalid test only if safe; do not intentionally lock the account.
 
 See `docs/hardware-acceptance.md`.

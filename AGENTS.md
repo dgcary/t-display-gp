@@ -99,7 +99,20 @@ Validation rules:
 - active index must refer to a configured printer;
 - enabled config requires Token, Cloud User ID and at least one printer.
 
-`activeBambuPrinter(config)` is the only runtime selection helper.
+`activeBambuPrinter(config)` is the only runtime selection helper. `selectRelativeBambuPrinter(config, direction)` is the pure wrap-around selection helper used by device-side switching.
+
+### Device-side switching / rendering
+
+Within the Bambu normal app:
+
+```text
+GPIO0 short  -> previous saved printer
+GPIO14 short -> next saved printer
+```
+
+Selection wraps through the local printer list and is a no-op with fewer than two printers. A successful switch persists the new `activePrinterIndex`, increments config revision, clears old `BambuState`, disconnects the old session and reconnects to the new Serial. GPIO0 long still returns to menu; GPIO14 long remains no-op through `AppManager`.
+
+`BambuApp` may poll service snapshots on a fixed cadence, but it must mark dirty only when presentation state changes. `BambuScreen` uses a render signature and section-level redraws. Whole-screen `fillScreen()` is allowed only on a full redraw such as first enter or active-printer switch; routine live updates must clear/redraw only the affected section so the display does not flash periodically.
 
 ### Portal
 
@@ -168,7 +181,9 @@ request   = device/<activeSerial>/request
 - other network failures may retry on bounded reconnect cadence;
 - no background Cloud login/discovery/token renewal.
 
-`BambuApp`/`BambuScreen` are passive readers/renderers only and read printer metadata from the mutex-protected service config snapshot.
+MQTT diagnostics may print only secret-safe connection metadata. Approved prefixes/fields include `mqtt_connect`, `mqtt_connect_ok`, `mqtt_connect_fail`, `mqtt_subscribe_fail`, `mqtt_loop_lost` with MQTT rc, numeric TLS error, Wi-Fi status/RSSI and free heap. Never print Token, Cloud User ID, Authorization/Cookie values, request payload credentials, or raw TLS error text if it may contain remote/credential material. Diagnostic instrumentation alone must not silently change keepalive/reconnect/CA policy; stability changes require physical evidence.
+
+`BambuApp`/`BambuScreen` are passive readers/renderers except for invoking `cycleActivePrinter()` on the two short-button events.
 
 ## Config / security
 
@@ -184,12 +199,13 @@ request   = device/<activeSerial>/request
 [md]      Stock
 [appdata] WEATHER / HOME_ASSISTANT
 [net]     short-lived transport
+[bambu]   secret-safe MQTT connection diagnostics only
 [sys]     MENU|STOCK|WEATHER|BAMBU|HOME_ASSISTANT|DEVICE_INFO
 ```
 
 ## Physical acceptance
 
-Must verify: five-app UI; Stock startup/no idle switch; Weather/Bad Apple; HA regression; Manual Token setup without echo; at least two local Bambu printers; active printer switching without reboot/login; MQTT reconnects to selected serial; old printer state is not shown after switching; optional explicit discover; Token-invalid behavior; background freshness; Wi-Fi recovery; Stock/Weather/HA coexistence; no watchdog/panic/heap leak.
+Must verify: five-app UI; Stock startup/no idle switch; Weather/Bad Apple; HA regression; Manual Token setup without echo; at least two local Bambu printers; web and device-side active printer switching without reboot/login; selected active index persists; MQTT reconnects to selected serial; old printer state is not shown after switching; Bambu page has no periodic whole-screen flash; optional explicit discover; Token-invalid behavior; background freshness; Wi-Fi recovery; Stock/Weather/HA coexistence; safe MQTT diagnostics around any drop; no watchdog/panic/heap leak.
 
 ## Safety
 

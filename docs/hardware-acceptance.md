@@ -14,7 +14,7 @@ Verify exact-SHA manifest and firmware SHA256. Normal upgrade: flash only `firmw
 - Menu exactly 股票 / 天气 / Bambu Lab / 智能家居 / 设备信息.
 - Reboot enters Stock.
 - No auto-idle switching.
-- Button semantics/debounce/long-press unchanged.
+- Button debounce/long-press behavior unchanged.
 
 ## Weather / Bad Apple
 
@@ -70,6 +70,29 @@ subscribe device/<activeSerial>/report
 
 Only read-only `pushall` request publish is allowed.
 
+## Bambu — device-side switching
+
+With at least two printers already persisted:
+
+1. Enter Bambu with printer A active and online.
+2. Short-press GPIO14. The selected printer must advance to B (or next saved printer) and wrap at the end.
+3. Old A state must clear immediately; temporary `CONNECTING`/placeholder values are acceptable.
+4. No reboot, account login, Token prompt or Cloud discovery request is allowed.
+5. MQTT must reconnect/subscribe using B's Serial and B live state must appear.
+6. Short-press GPIO0. Selection must move to the previous saved printer and wrap back to A.
+7. Reboot without erasing NVS and confirm the last device-side selection persists.
+8. Repeat with only one saved printer if convenient: GPIO0/GPIO14 short presses must be no-op.
+9. GPIO0 long must still return to menu; GPIO14 long must remain no-op.
+
+## Bambu — anti-flicker rendering
+
+Observe Bambu for at least 2 minutes while idle and during live print updates when available.
+
+- There must be no periodic whole-screen black/blank flash at the 500 ms service polling cadence.
+- Entering Bambu and explicitly changing active printer may perform one full redraw.
+- Routine state changes may redraw the affected text/progress section but must not `fillScreen()` the entire panel.
+- If visible flicker remains, record whether it is whole-screen or confined to a single changing section and provide video if possible.
+
 ## Explicit discovery
 
 When testing “用 Token 获取我的打印机”:
@@ -87,7 +110,7 @@ After successful Manual Token config, reboot without erasing NVS:
 
 - Token remains set;
 - local printer list remains;
-- active printer remains;
+- active printer remains, including a device-side button selection;
 - MQTT reconnects without account password/SMS/TFA flow.
 
 ## Token invalid
@@ -100,6 +123,29 @@ Only test safely. If MQTT returns auth rc 4/5:
 - obtain a fresh browser Token, paste/save it, and confirm new config revision resumes MQTT.
 
 Do not intentionally trigger account lockout or repeatedly use bad Tokens.
+
+## MQTT stability diagnostics
+
+For an intermittent MQTT problem, collect evidence before changing CA/keepalive/reconnect policy.
+
+Run serial 115200 and preserve all secret-safe `[bambu]` lines around each transition:
+
+```text
+mqtt_connect
+mqtt_connect_ok
+mqtt_connect_fail rc=<...> tls=<numeric> wifi=<...> rssi=<...> heap=<...>
+mqtt_subscribe_fail
+mqtt_loop_lost
+```
+
+At the same time sample `/api/bambu/status` every ~2 s and record `session`, `mqtt_connected`, `last_mqtt_rc`, active printer and timestamps. During a drop also verify whether 8081/ping/Stock/Weather still work, and from a PC test DNS plus TCP/TLS reachability to the selected regional broker on 8883.
+
+Acceptance of diagnostics/security:
+
+- no Token/User ID/Cookie/Authorization/account data in serial;
+- `mqtt_loop_lost` must stop presenting stale ONLINE state;
+- rc=-2 alone is not enough to call the Token invalid; correlate with numeric TLS error, Wi-Fi/RSSI/heap and PC network tests;
+- diagnostic firmware must not silently disable CA verification.
 
 ## Live state
 
@@ -145,12 +191,17 @@ HA REGRESSION: PASS/FAIL/NOT TESTED
 BAMBU MANUAL TOKEN SAVE: PASS/FAIL
 BAMBU TOKEN SECRET LEAK: PASS/FAIL
 BAMBU LOCAL PRINTER COUNT:
-BAMBU ACTIVE A -> B SWITCH: PASS/FAIL
-BAMBU B -> A SWITCH: PASS/FAIL
+BAMBU WEB A -> B SWITCH: PASS/FAIL
+BAMBU DEVICE NEXT A -> B: PASS/FAIL
+BAMBU DEVICE PREV B -> A: PASS/FAIL
+BAMBU DEVICE SWITCH PERSISTENCE: PASS/FAIL
 BAMBU SWITCH WITHOUT REBOOT: PASS/FAIL
 BAMBU OLD-STATE CROSS-CONTAMINATION: PASS/FAIL
+BAMBU WHOLE-SCREEN FLICKER: PASS/FAIL
 BAMBU EXPLICIT DISCOVERY: PASS/FAIL/NOT TESTED
 BAMBU MQTT: PASS/FAIL
+BAMBU MQTT DROP COUNT / DURATION:
+BAMBU MQTT DIAGNOSTIC SUMMARY:
 BAMBU TOKEN REBOOT REUSE: PASS/FAIL
 BAMBU TOKEN INVALID BEHAVIOR: PASS/FAIL/NOT TESTED
 BAMBU LIVE FIELDS: PASS/FAIL/PARTIAL/NOT TESTED
