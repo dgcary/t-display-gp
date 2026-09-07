@@ -2,71 +2,54 @@
 
 LILYGO T-Display-S3 320×170 多应用桌面终端。
 
-当前正式应用壳：
+当前应用：
 
 ```text
-股票 → 天气 → Bambu Lab → 智能家居 → 设备信息
+股票 / 天气 / Bambu Lab / 智能家居 / 设备信息
 ```
 
-GitHub exact SHA 是项目事实源。
-
-## Startup / Navigation
-
-- **默认启动 Stock。**
-- **没有自动 idle 跳转。** Menu / Stock / Weather / Bambu Lab / Home Assistant / DeviceInfo 都会保持当前页面，直到用户主动按键切换。
-- `AppManager` 不维护无操作计时器，也不会因为网络/数据活动自动切 App。
-
-按键：
-
-```text
-normal app: GPIO0 short prev; GPIO14 short next; GPIO0 long menu; GPIO14 long no-op
-menu:       GPIO0 short prev; GPIO14 short next; GPIO0 long no-op; GPIO14 long enter
-```
-
-40 ms debounce，700 ms long，long release 不产生 short。
+默认启动 **Stock**，没有自动 idle 跳转；页面保持到用户主动切换。
 
 ## Bambu Lab Cloud
 
-T-Display 是 **只读 Cloud 监视器**，不是打印机控制器。V1 不要求与打印机同一 LAN，也不开放/依赖打印机本地 MQTT 8883；不实现 pause/resume/stop、温度、灯光、相机等控制。
+T-Display 是 **只读 Cloud 监视器**。不依赖打印机 LAN MQTT，不提供 pause/resume/stop/温度/灯光/相机控制。
 
-配置入口与 Home Assistant 共用一个本地 Integrations 页面：
+配置入口与 Home Assistant 共用：
 
 ```text
 http://<T-Display-IP>:8081/
 ```
 
-在该页面本地填写：
+Bambu 现在采用 **Manual Token** 主流程：
 
-- region：China 或 US/EU/Global；
-- Bambu 账号：**China 可使用中国大陆手机号（11 位，亦接受 +86/86 前缀）或邮箱；US/EU/Global 使用邮箱**；
-- 账号密码（可选择保存，默认用于 Token 自动续期）；
-- 登录后从账号绑定设备中选择打印机。
+1. 在浏览器正常登录对应区域的 Bambu 网站；
+2. 从浏览器开发者工具 Cookies 中复制 `token`；
+3. 在 `:8081` 的 Bambu 区域粘贴 Access Token；
+4. 添加 1–4 台打印机的 `名称 + Serial`；
+5. 选择“当前打印机”；
+6. 点“保存并切换”。
 
-内部配置字段仍沿用历史名称 `email` 以保持 NVS/schema 兼容，但在 China region 下它表示通用 Bambu `account`，可以保存手机号；Cloud 密码登录实际向 Bambu `/v1/user-service/user/login` 提交 `{account,password}`。
+Access Token 留空保存表示保留当前 Token，固件永不从状态 API/串口回显 Token。Token 等价于登录凭据，不要发到聊天、GitHub、截图或日志中。
 
-**不要把 Bambu 密码、验证码或 Access Token 发到聊天、日志或截图中。** 固件的 status API 只返回 `password_set` / `token_set` / `verification_required` / `verification_type` 之类的非敏感状态，不回显密码、Token、验证码或 `tfaKey`；串口也不打印这些 secret 或完整 Cloud 响应体。
+页面提供可选的 **“用 Token 获取我的打印机”**。只有用户主动点击时才请求 Bambu HTTPS device list；结果只填入当前网页表单，不自动覆盖 NVS。日常打印机切换完全使用本地保存的列表，不调用 Cloud discovery。
 
-Cloud 流程：
+本地最多保存 4 台打印机。切换 active printer 不需要重启、不需要重新登录、不需要验证码；`BambuMqttService` 会断开旧 MQTT，清空旧打印机状态快照，并以新 Serial 重新连接/订阅，防止两台设备状态串台。
 
-```text
-verified HTTPS login / identity / printer discovery
-  -> access token + cloud user id
-  -> verified TLS MQTT broker
-  -> subscribe device/<serial>/report
-  -> background BambuState cache
-  -> passive BambuApp renderer
-```
-
-密码登录若直接返回 Token，流程自动继续。若 Bambu Cloud 返回 `verifyCode`，固件进入 `verification_required`：邮箱账号显示邮箱验证码，China 手机号显示短信验证码；用户仅需在 `:8081` 输入一次验证码，随后 Token 保存并继续 Cloud MQTT。真正的 authenticator TFA 保留独立 `tfaKey` challenge，只存在 RAM 中，通过同一页面输入 2FA 代码完成。验证码和 `tfaKey` 都不持久化。
-
-验证码 API：
+配置 schema 为 v2：
 
 ```text
-POST /api/bambu/verify
-POST /api/bambu/verification/resend
+enabled
+region
+accessToken
+cloudUserId
+printers[0..3] { serial, name }
+printerCount
+activePrinterIndex
 ```
 
-Email/SMS 重发必须由用户显式触发，设备本地有 60 秒冷却；TFA 不提供“重发”。正常重启只使用已保存 Token，不重复要求验证码。Token 失效时先用已保存密码自动重新登录；只有 Cloud 再次要求验证时才回到 `verification_required` 等待人工输入，停止无人值守重试。
+旧 schema v1 会迁移已有 Token / Cloud User ID / 单台打印机；旧账号/密码不再进入新配置。
+
+Cloud User ID 优先从 JWT Token 本地解析。只有手动 discovery 在需要时才使用短生命周期 HTTPS；Bambu HTTPS/MQTT 均保持严格 CA 校验，禁止 `setInsecure()`。
 
 Broker：
 
@@ -75,100 +58,63 @@ China: cn.mqtt.bambulab.com:8883
 US/EU/Global: us.mqtt.bambulab.com:8883
 ```
 
-MQTT username = cloud user id，password = access token。连接后只允许发送一次只读状态同步 `pushall` 请求到 `device/<serial>/request`，之后消费 `device/<serial>/report`；V1 不发布打印机控制命令。
+MQTT：
 
-Bambu HTTPS 与 MQTT 都使用 CA 校验；Bambu 凭据路径禁止 `setInsecure()`。MQTT receive buffer 为 40960 bytes；分配失败进入可见错误状态，不重启设备。
+```text
+username  = cloudUserId
+password  = accessToken
+subscribe = device/<activeSerial>/report
+request   = device/<activeSerial>/request
+```
 
-MQTT 是设备级后台服务，不跟随 Bambu 页面启停。离开 Bambu 后连接继续维护，返回页面应看到最新 cache。只有 HTTPS 请求和 MQTT connect/reconnect handshake 使用 `NetworkArbiter`；已建立的持久 MQTT socket 不长期占用 arbiter，从而不阻塞 Stock/Weather/HA。
+只允许一次只读 `pushall` 状态同步 publish；禁止任何打印机控制 publish。MQTT receive buffer = 40960 bytes。
 
-`BambuMqttService` 是运行时 Bambu 配置和 pending verification challenge 的唯一可变所有者。Portal 与 UI 只能通过 mutex 保护的 snapshot/update 接口访问；`tfaKey` 仅保存在 service RAM。后台登录、User ID 与打印机发现产生的持久化写回必须携带取得快照时的 external revision。若期间用户已经在 `:8081` 提交更新，旧后台结果会被判定为 stale 并丢弃，不允许覆盖较新的账号、Token、challenge 或打印机选择。
+Token 被 MQTT 以 rc 4/5 拒绝后进入 `token_invalid`，固件不会用旧 Token/旧密码自动撞 Cloud，也没有 SMS/Email/TFA 登录状态机。用户重新从浏览器取得新 Token，在 `:8081` 粘贴保存即可恢复。
 
-Access Token 失效且已保存密码时，固件自动重新登录并持久化新 Token/User ID，然后重新连接 MQTT。普通失败退避为约 **1 min → 5 min → 15 min → 30 min（封顶）**；若登录返回 Email/SMS/TFA challenge，则立即进入人工 `verification_required`，不继续退避撞接口。完成一次验证码后恢复自动流程。
-
-Bambu 页面优先显示打印机名/连接状态、打印进度、ETA、层数、喷嘴/热床/腔体温度、任务名、当前耗材/AMS 信息（字段可用时）。
+Bambu MQTT 是设备级后台服务，离开 Bambu App 不断开；Stock/Weather/HA 仍可使用各自网络请求。
 
 ## Home Assistant
 
-**用户已有 Home Assistant 是服务器；T-Display-S3 只是只读 REST API 客户端。**
+T-Display 只是用户现有 Home Assistant 的只读 REST client：
 
 ```text
-T-Display -> GET <existing HA>/api/states/<entity_id>
+GET <base_url>/api/states/<entity_id>
+Authorization: Bearer <Long-Lived Access Token>
 ```
 
-- V1 read-only，不调用 `/api/services`。
-- 1–4 entities，optional labels。
-- refresh 30–300 s，default 30 s，active-only。
-- per-entity last-valid cache。
-- Bearer Long-Lived Access Token。
-
-HA 与 Bambu 共用 `http://<T-Display-IP>:8081/` 配置页。HA HTTP 模式只适合可信 LAN；HTTPS 必须 PEM CA + `setCACert()`，禁止 credentialed HA HTTPS 使用 `setInsecure()`。
-
-## Stock
-
-Tencent quote+intraday primary，EastMoney fallback；quote/intraday health 独立；quote 优先；intraday latest-wins；有界 retry；cache-preserving。Stock 继续使用专用 `MarketDataWorker`。
+1–4 entities，refresh 30–300 s。HTTP 仅适合可信 LAN；HTTPS 必须配置 CA，禁止 insecure fallback。
 
 ## Weather / Bad Apple
 
-Open-Meteo 获取 current + 3-day structured data；默认 15 min，5–60 min；active-only；failure 保留 cache。UI 只显示 current + 今/明，`dayAfter` 仍保留在 provider/cache 中但不渲染。
-
-Bad Apple：
+Open-Meteo；UI 显示 current + 今/明。Bad Apple：
 
 ```text
-viewport x=152, y=27, 168×126
+viewport 168×126 at x=152,y=27
 2190 frames @ 10 FPS ≈ 219 s
-1-bit monochrome, silent, loop
+1-bit, silent, loop, local flash
 ```
 
-- 不显示“后天”。
-- 不绘制贯穿顶部的横线，也不绘制左侧天气与视频之间的竖线。
-- 进入 Weather 从 frame 0 开始；离开立即停止视频刷新。
-- 只刷新视频 viewport，不做 10 FPS 整屏清屏。
-- 本地 flash asset，无 runtime HTTP/task/AppDataWorker/NetworkArbiter 流量。
-- 构建时从锁定源生成，校验 Git blob SHA1 与全部 2190 帧 delta round-trip；原始 MP4/生成 C++ asset 不提交仓库。
-- 项目许可证不重新授权 Bad Apple!! 原始 PV/音乐。
+无顶部横分隔线/视频左竖分隔线；离开 Weather 停止刷新，重新进入从 frame 0 开始。
 
-## DeviceInfo
+## Stock / DeviceInfo
 
-IP、SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM、Web 地址；local-only，不显示 secrets。
+Stock：Tencent primary，EastMoney fallback；quote/intraday health 独立，失败保留 cache。
+
+DeviceInfo：IP、SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM、Web 地址；不显示 secret。
 
 ## Architecture
 
 ```text
 Stock -> dedicated MarketDataWorker
-Weather / HomeAssistant -> exactly one shared AppDataWorker -> typed result queues
-Bambu -> dedicated persistent Cloud MQTT service + BambuState cache
+Weather + HomeAssistant -> one shared AppDataWorker
+Bambu -> persistent Cloud MQTT service + local multi-printer config
 DeviceInfo -> local-only
-Bad Apple -> local flash playback only
+Bad Apple -> local flash playback
 ```
 
-短生命周期 external HTTP/TLS 请求统一通过 `NetworkArbiter`。Bambu MQTT connect/reconnect handshake 也通过 arbiter；成功连接后专用持久 socket 释放 arbiter并独立维持 keepalive/report traffic。
+短生命周期 HTTP/TLS 与 MQTT connect/reconnect handshake 经过 `NetworkArbiter`；已建立的持久 MQTT socket 不长期占用 arbiter。
 
-FreeRTOS queues 传 request/result pointer，不 raw-copy 含 `std::string` 的对象。
-
-## Config / Security
-
-- AppConfig schema v2 / `stockticker` NVS。
-- HA 使用独立 `ha_config` blob。
-- Bambu 使用独立 `bambucloud` NVS namespace/blob；只持久化账号、可选密码、Token、Cloud User ID、打印机选择等既有配置，不持久化验证码或 `tfaKey`。
-- Bambu runtime config/challenge 由 `BambuMqttService` 单点持有；Portal external update 递增 revision，后台衍生写回必须 revision-match 才能提交。
-- 普通 firmware upgrade 保留 NVS。
-- 端口 8081 只有一个 `IntegrationConfigPortal`，同时提供既有 HA routes 和 Bambu routes。
-- No secret logging。
-
-## Diagnostics
-
-```text
-[md]      Stock
-[appdata] WEATHER / HOME_ASSISTANT
-[net]     actual short-lived transport; HA mode=HA_HTTP or HA_CA
-[sys]     MENU/STOCK/WEATHER/BAMBU/HOME_ASSISTANT/DEVICE_INFO
-```
-
-Bambu challenge 只允许输出类型/HTTP 状态/布尔字段等非敏感诊断，例如 `result=CHALLENGE type=sms`；不要输出账号全文、验证码、密码、Token、Cookie、Authorization header 或 `tfaKey`。
-
-## Verification
-
-Host/CI 的 Bad Apple asset generation 需要 ffmpeg。
+## Build / Verification
 
 ```bash
 python tools/validate_tdisplay_setup.py
@@ -183,8 +129,8 @@ python tools/prepare_bad_apple_asset.py
 pio run -e lilygo-t-display-s3
 ```
 
-CI 同时跑 Windows native，并发布 exact-SHA artifact：`firmware.bin`、`partitions.bin`、`bootloader.bin`、`firmware-manifest.txt`。
+CI 还跑 Windows native，并发布 exact-SHA artifact：`firmware.bin`、`partitions.bin`、`bootloader.bin`、`firmware-manifest.txt`。
 
-Codex 只烧录/验证预编译 exact-SHA application image；普通测试不本地重编译、不 erase NVS、不改 partition/bootloader。
+普通升级只刷 exact-SHA `firmware.bin` 到 manifest offset（通常 `0x10000`），不 erase NVS，不改 bootloader/partition table。
 
-详细说明：`docs/deployment.md`、`docs/api-contract.md`、`docs/hardware-acceptance.md`。
+详细契约：`docs/deployment.md`、`docs/api-contract.md`、`docs/hardware-acceptance.md`。
