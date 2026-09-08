@@ -75,7 +75,29 @@ request   = device/<activeSerial>/request
 
 Token 被 MQTT 以 rc 4/5 拒绝后进入 `token_invalid`，固件不会用旧 Token/旧密码自动撞 Cloud，也没有 SMS/Email/TFA 登录状态机。用户重新从浏览器取得新 Token，在 `:8081` 粘贴保存即可恢复。
 
-Bambu MQTT 是设备级后台服务，离开 Bambu App 不断开；Stock/Weather/HA 仍可使用各自网络请求。连接/掉线诊断只输出非敏感字段：MQTT rc、TLS numeric error、Wi-Fi status/RSSI 和 free heap，不输出 Token、Cloud User ID 或认证载荷。当前重连/keepalive 策略不会仅因诊断日志而改变，真实网络稳定性仍以真机证据为准。
+Bambu MQTT 是设备级后台服务，离开 Bambu App 不断开；Stock/Weather/HA 仍可使用各自网络请求。
+
+### Bambu 分层网络诊断
+
+当前诊断版在每次 Cloud MQTT 建连尝试时，保留现有 CA/keepalive/reconnect/read-only 行为，同时额外输出 secret-safe 分层证据：
+
+```text
+[netcfg] ip=<...> mask=<...> gateway=<...> dns1=<...> dns2=<...> bssid=<...> ch=<...>
+[bambu] mqtt_diag_heap phase=before_probe internal_free=<...> internal_largest=<...> dma_free=<...> heap_free=<...>
+[bambu] mqtt_diag_dns ok=<0|1> ip=<resolved-ip> elapsed_ms=<...>
+[bambu] mqtt_diag_tcp ok=<0|1> ip=<resolved-ip> port=8883 elapsed_ms=<...>
+[bambu] mqtt_diag_tls ok=<0|1> tls=<numeric> elapsed_ms=<...>
+[bambu] mqtt_diag_heap phase=after_probe ...
+[bambu] mqtt_diag_heap phase=after_mqtt_buffer ...
+[bambu] mqtt_connect_ok elapsed_ms=<...> ...
+[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<...> internal_free=<...> internal_largest=<...> dma_free=<...>
+```
+
+诊断顺序是 DNS → plain TCP 8883 → strict-CA TLS preflight → 真实 PubSubClient MQTT CONNECT。这样可区分 DNS/TCP、TLS/内存和 MQTT 认证层。TLS probe 与真实 MQTT 都保持严格 CA，不允许 insecure fallback。
+
+这组 plain TCP/TLS preflight 是**故障定位 instrumentation**，会在重连尝试中产生额外短连接；它不是最终长期连接策略。获得真机根因后应重新评估是否移除 probe。诊断本身不修改 30 s MQTT keepalive、30 s reconnect、CA、Token 或 read-only publish policy。
+
+所有日志禁止输出 Token、Cloud User ID、Cookie/Authorization、认证载荷或 TLS error text；仅允许数值错误、目标 broker/IP、耗时和资源指标。
 
 ## Home Assistant
 
@@ -116,7 +138,7 @@ DeviceInfo -> local-only
 Bad Apple -> local flash playback
 ```
 
-短生命周期 HTTP/TLS 与 MQTT connect/reconnect handshake 经过 `NetworkArbiter`；已建立的持久 MQTT socket 不长期占用 arbiter。
+短生命周期 HTTP/TLS 与 MQTT connect/reconnect handshake 经过 `NetworkArbiter`；已建立的持久 MQTT socket 不长期占用 arbiter。诊断版的 DNS/TCP/TLS preflight 也在同一个 arbiter 临界区内，避免与其他短生命周期 TLS handshake 并发。
 
 ## Build / Verification
 
