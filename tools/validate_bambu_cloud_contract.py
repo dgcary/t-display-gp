@@ -56,15 +56,13 @@ forbid("client_h", ["BambuCloudLoginResult", "BambuVerificationType", "login(", 
 require("client_cpp", ["WiFiClientSecure", "HTTPClient", "setCACertBundle", "rootca_crt_bundle_start", "sharedNetworkArbiter", '"/v1/user-service/my/profile"', '"/api/v1/iot-service/api/user/bind"', "extractBambuUserIdFromJwt"])
 forbid("client_cpp", ["setInsecure", '"/v1/user-service/user/login"', "sendsmscode", "sendemail/code", '"/api/sign-in/tfa"', '"/api/csrf"', "Serial"])
 
-require("mqtt_h", ["class BambuMqttService", "snapshot()", "status()", "configSnapshot()", "replaceConfig(", "cycleActivePrinter(", "externalConfigRevision_", "tokenRejected_"])
-forbid("mqtt_h", ["BambuCloudClient", "BambuSessionModel sessionModel_", "setPendingVerification", "submitVerificationCode", "requestVerificationCode", "pendingTfaKey", "passwordSet", "verificationRequired", "verificationType"])
-require("mqtt_cpp", ["PubSubClient", "WiFiClientSecure", "setCACertBundle", "rootca_crt_bundle_start", "setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)", "sharedNetworkArbiter", "activeBambuPrinter", "selectRelativeBambuPrinter", "cycleActivePrinter(", "bambuBrokerForRegion", "bambuReportTopic", "pushall", "mqtt_->loop()", "externalConfigRevision_", "state_ = BambuState{}", "tokenRejected_", "mqtt_connect_fail", "lastError(", "WiFi.RSSI()", "esp_get_free_heap_size()"])
-# Layered diagnostic firmware must distinguish DNS/TCP/TLS/MQTT and show internal-memory pressure.
-require("mqtt_cpp", ["WiFi.hostByName", "WiFiClient tcpProbe", "mqtt_diag_dns", "mqtt_diag_tcp", "heap_caps_get_free_size", "heap_caps_get_largest_free_block", "MALLOC_CAP_INTERNAL", "MALLOC_CAP_DMA", "elapsed_ms"])
-forbid("mqtt_cpp", ["setInsecure", "performRelogin", "setPendingVerification", "submitVerificationCode", "requestVerificationCode", "fetchPrinters(", "fetchUserId(", "VERIFICATION_REQUIRED", "result=CHALLENGE", "config.accessToken.c_str(), WiFi.RSSI"])
+require("mqtt_h", ["class BambuMqttService", "void process(uint32_t nowMs);", "snapshot()", "status()", "configSnapshot()", "replaceConfig(", "cycleActivePrinter(", "externalConfigRevision_", "tokenRejected_", "consecutiveFails_", "initialPushallPending_"])
+forbid("mqtt_h", ["BambuCloudClient", "BambuSessionModel sessionModel_", "setPendingVerification", "submitVerificationCode", "requestVerificationCode", "pendingTfaKey", "passwordSet", "verificationRequired", "verificationType", "TaskHandle_t task_", "taskThunk", "taskLoop"])
+require("mqtt_cpp", ["PubSubClient", "WiFiClientSecure", "setCACertBundle", "rootca_crt_bundle_start", "tls_->setTimeout(15)", "setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)", "sharedNetworkArbiter", "activeBambuPrinter", "selectRelativeBambuPrinter", "cycleActivePrinter(", "bambuBrokerForRegion", "bambuReportTopic", "pushall", "mqtt_->loop()", "externalConfigRevision_", "state_ = BambuState{}", "tokenRejected_", "mqtt_connect_fail", "WiFi.RSSI()", "esp_get_free_heap_size()", "esp_task_wdt_reset", '"bblp_%08', "BAMBU_PUSHALL_INITIAL_DELAY_MS = 2000U", "BAMBU_CLOUD_RECONNECT_PHASE2_MS = 60000U", "BAMBU_CLOUD_RECONNECT_PHASE3_MS = 120000U"])
+forbid("mqtt_cpp", ["setInsecure", "performRelogin", "setPendingVerification", "submitVerificationCode", "requestVerificationCode", "fetchPrinters(", "fetchUserId(", "VERIFICATION_REQUIRED", "result=CHALLENGE", "config.accessToken.c_str(), WiFi.RSSI", "xTaskCreatePinnedToCore", '"bambu-mqtt"', "mqtt_real_tls_begin", "mqtt_real_tls_ok", "mqtt_real_tls_fail", "runLayeredConnectionProbe(broker);"])
 if text("mqtt_cpp").count("mqtt_->publish") != 1:
     errors.append("Bambu MQTT may publish only the single read-only pushall request")
-for command in ('"pause"', '"resume"', '"stop"', '"temperature"'):
+for command in ('"pause"', '"resume"', '"stop"', '"temperature"', '"ledctrl"'):
     if command in text("mqtt_cpp"):
         errors.append(f"Bambu MQTT contains forbidden control command: {command}")
 
@@ -80,9 +78,10 @@ if text("screen_cpp").count("display_->fillScreen(UiTheme::BACKGROUND);") != 1:
     errors.append("Bambu screen must clear the whole display only in the single full-redraw path")
 forbid("screen_cpp", ["void BambuScreen::render(const BambuViewModel& model, bool) {"])
 
-require("main", ["bambuMqttService.begin(bambuConfig, bambuConfigStore)", "integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService)", "WiFi.gatewayIP()", "WiFi.subnetMask()", "WiFi.dnsIP(0)", "[netcfg]"])
+require("main", ["bambuMqttService.begin(bambuConfig, bambuConfigStore)", "bambuMqttService.process(nowMs);", "integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService)", "WiFi.gatewayIP()", "WiFi.subnetMask()", "WiFi.dnsIP(0)", "[netcfg]"])
 require("build", ['BAMBU_CONFIG_NAMESPACE[] = "bambucloud"', "BAMBU_MQTT_BUFFER_BYTES = 40960"])
-require("pio", ["knolleary/PubSubClient", "+<network/BambuPortalModel.cpp>"])
+require("pio", ["platform = espressif32@6.12.0", "knolleary/PubSubClient", "+<network/BambuPortalModel.cpp>"])
+forbid("pio", ["MQTT_SOCKET_TIMEOUT"])
 require("notices", ["Keralots/BambuHelper", "knolleary/PubSubClient"])
 
 for path in sorted((ROOT / "src/network").glob("Bambu*.cpp")):
@@ -93,4 +92,4 @@ if errors:
     for error in errors:
         print(f"ERROR: {error}")
     sys.exit(1)
-print("Bambu manual-token + local multi-printer + device-switch + partial-render + layered-network-diagnostics + read-only MQTT contract: OK")
+print("Bambu manual-token + local multi-printer + device-switch + partial-render + BambuHelper-aligned read-only MQTT contract: OK")

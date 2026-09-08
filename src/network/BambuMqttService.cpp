@@ -3,10 +3,9 @@
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
-#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
-#include <esp_heap_caps.h>
 #include <esp_system.h>
+#include <esp_task_wdt.h>
 
 #include <cstdio>
 #include <new>
@@ -22,18 +21,22 @@ extern const uint8_t rootca_crt_bundle_start[] asm("_binary_x509_crt_bundle_star
 namespace {
 constexpr uint16_t BAMBU_MQTT_PORT = 8883U;
 constexpr uint16_t BAMBU_MQTT_KEEPALIVE_SEC = 30U;
-constexpr uint32_t BAMBU_MQTT_RECONNECT_MS = 30000U;
-constexpr uint32_t BAMBU_TASK_SLEEP_MS = 50U;
-constexpr uint32_t BAMBU_WIFI_WAIT_MS = 500U;
-constexpr int32_t BAMBU_DIAG_PROBE_TIMEOUT_MS = 5000;
-constexpr int32_t BAMBU_REAL_TLS_TIMEOUT_MS = 5000;
+constexpr uint32_t BAMBU_CLOUD_RECONNECT_BASE_MS = 30000U;
+constexpr uint32_t BAMBU_CLOUD_RECONNECT_PHASE2_MS = 60000U;
+constexpr uint32_t BAMBU_CLOUD_RECONNECT_PHASE3_MS = 120000U;
+constexpr uint16_t BAMBU_BACKOFF_PHASE1_FAILS = 5U;
+constexpr uint16_t BAMBU_BACKOFF_PHASE3_FAILS = 15U;
+constexpr uint32_t BAMBU_PUSHALL_INITIAL_DELAY_MS = 2000U;
 
 class NetworkRequestGuard {
  public:
   explicit NetworkRequestGuard(NetworkArbiter& arbiter)
       : arbiter_(arbiter), locked_(arbiter_.lock()) {}
-  ~NetworkRequestGuard() { if (locked_) arbiter_.unlock(); }
+  ~NetworkRequestGuard() {
+    if (locked_) arbiter_.unlock();
+  }
   bool locked() const { return locked_; }
+
  private:
   NetworkArbiter& arbiter_;
   bool locked_ = false;
@@ -47,72 +50,15 @@ bool configuredForMqtt(const BambuConfig& config) {
   return config.enabled && !config.accessToken.empty() && !config.cloudUserId.empty() &&
          activeBambuPrinter(config) != nullptr;
 }
-
-void logHeapDiagnostic(const char* phase) {
-  const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  const size_t internalLargest =
-      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  const size_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
-  Serial.printf(
-      "[bambu] mqtt_diag_heap phase=%s internal_free=%u internal_largest=%u dma_free=%u heap_free=%u\n",
-      phase, static_cast<unsigned>(internalFree), static_cast<unsigned>(internalLargest),
-      static_cast<unsigned>(dmaFree), static_cast<unsigned>(esp_get_free_heap_size()));
-}
-
-// Retained as a diagnostic helper for future targeted tests, but deliberately
-// not called by the normal MQTT path. Physical testing showed that opening and
-// closing a TLS preflight immediately before the real MQTT TLS connection can
-// perturb timing and make the second connection block long enough to trip WDT.
-void runLayeredConnectionProbe(const char* broker) {
-  logHeapDiagnostic("before_probe");
-
-  IPAddress resolvedIp;
-  const uint32_t dnsStartedMs = millis();
-  const int dnsOk = WiFi.hostByName(broker, resolvedIp);
-  const uint32_t dnsElapsedMs = static_cast<uint32_t>(millis() - dnsStartedMs);
-  const String resolvedText = dnsOk == 1 ? resolvedIp.toString() : String("0.0.0.0");
-  Serial.printf("[bambu] mqtt_diag_dns ok=%d ip=%s elapsed_ms=%lu\n",
-                dnsOk == 1 ? 1 : 0, resolvedText.c_str(),
-                static_cast<unsigned long>(dnsElapsedMs));
-
-  if (dnsOk == 1) {
-    WiFiClient tcpProbe;
-    const uint32_t tcpStartedMs = millis();
-    const int tcpOk = tcpProbe.connect(resolvedIp, BAMBU_MQTT_PORT, BAMBU_DIAG_PROBE_TIMEOUT_MS);
-    const uint32_t tcpElapsedMs = static_cast<uint32_t>(millis() - tcpStartedMs);
-    Serial.printf("[bambu] mqtt_diag_tcp ok=%d ip=%s port=%u elapsed_ms=%lu\n",
-                  tcpOk == 1 ? 1 : 0, resolvedText.c_str(),
-                  static_cast<unsigned>(BAMBU_MQTT_PORT),
-                  static_cast<unsigned long>(tcpElapsedMs));
-    tcpProbe.stop();
-  } else {
-    Serial.printf("[bambu] mqtt_diag_tcp ok=0 ip=unresolved port=%u elapsed_ms=0\n",
-                  static_cast<unsigned>(BAMBU_MQTT_PORT));
-  }
-
-  WiFiClientSecure tlsProbe;
-  tlsProbe.setCACertBundle(rootca_crt_bundle_start);
-  tlsProbe.setHandshakeTimeout(BuildConfig::HTTP_TLS_HANDSHAKE_TIMEOUT_SEC);
-  tlsProbe.setTimeout(5);
-  const uint32_t tlsStartedMs = millis();
-  const int tlsOk = tlsProbe.connect(broker, BAMBU_MQTT_PORT, BAMBU_DIAG_PROBE_TIMEOUT_MS);
-  const uint32_t tlsElapsedMs = static_cast<uint32_t>(millis() - tlsStartedMs);
-  char tlsErrorText[96] = {};
-  const int tlsError = tlsOk == 1 ? 0 : tlsProbe.lastError(tlsErrorText, sizeof(tlsErrorText));
-  Serial.printf("[bambu] mqtt_diag_tls ok=%d tls=%d elapsed_ms=%lu\n",
-                tlsOk == 1 ? 1 : 0, tlsError, static_cast<unsigned long>(tlsElapsedMs));
-  tlsProbe.stop();
-
-  logHeapDiagnostic("after_probe");
-}
 }  // namespace
 
 BambuMqttService* BambuMqttService::activeInstance_ = nullptr;
 
 bool BambuMqttService::begin(const BambuConfig& config, BambuConfigStore& store) {
-  if (task_ || activeInstance_) return false;
+  if (mutex_ || activeInstance_) return false;
   mutex_ = xSemaphoreCreateMutex();
   if (!mutex_) return false;
+
   store_ = &store;
   config_ = config;
   status_.configured = configuredForMqtt(config_);
@@ -120,16 +66,73 @@ bool BambuMqttService::begin(const BambuConfig& config, BambuConfigStore& store)
   status_.session = config_.enabled ? BambuSessionState::MQTT_CONNECTING
                                     : BambuSessionState::INTEGRATION_DISABLED;
   activeInstance_ = this;
-  const BaseType_t created = xTaskCreatePinnedToCore(
-      taskThunk, "bambu-mqtt", 8192, this, 1, &task_, 0);
-  if (created != pdPASS) {
-    activeInstance_ = nullptr;
-    task_ = nullptr;
-    vSemaphoreDelete(mutex_);
-    mutex_ = nullptr;
-    return false;
-  }
   return true;
+}
+
+void BambuMqttService::process(uint32_t nowMs) {
+  uint32_t revision = 0U;
+  const BambuConfig config = configCopy(&revision);
+
+  if (revision != observedExternalConfigRevision_) {
+    observedExternalConfigRevision_ = revision;
+    disconnectMqtt();
+    mqttAttempted_ = false;
+    tokenRejected_ = false;
+    consecutiveFails_ = 0U;
+    lastMqttAttemptMs_ = 0U;
+    connectTimeMs_ = 0U;
+  }
+
+  if (!config.enabled) {
+    if (mqtt_ || tls_) disconnectMqtt();
+    setSession(BambuSessionState::INTEGRATION_DISABLED);
+    return;
+  }
+
+  if (!configuredForMqtt(config)) {
+    if (mqtt_ || tls_) disconnectMqtt();
+    setSession(config.accessToken.empty() ? BambuSessionState::TOKEN_INVALID
+                                          : BambuSessionState::UNCONFIGURED);
+    return;
+  }
+
+  if (tokenRejected_) {
+    if (mqtt_ || tls_) disconnectMqtt();
+    setSession(BambuSessionState::TOKEN_INVALID);
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    if (mqtt_ || tls_) disconnectMqtt();
+    setSession(BambuSessionState::NETWORK_ERROR);
+    return;
+  }
+
+  if (!mqtt_ || !mqtt_->connected()) {
+    setConnectivity(false);
+    if (!mqttAttempted_ || elapsed(nowMs, lastMqttAttemptMs_, reconnectIntervalMs())) {
+      connectMqtt(nowMs);
+    }
+    return;
+  }
+
+  if (!mqtt_->loop()) {
+    const int rc = mqtt_->state();
+    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
+    setConnectivity(false);
+    setSession(BambuSessionState::NETWORK_ERROR, rc);
+    Serial.printf("[bambu] mqtt_loop_lost rc=%d wifi=%d rssi=%d heap=%u fails=%u\n",
+                  rc, static_cast<int>(WiFi.status()), WiFi.RSSI(),
+                  static_cast<unsigned>(esp_get_free_heap_size()),
+                  static_cast<unsigned>(consecutiveFails_));
+    disconnectMqtt();
+    return;
+  }
+
+  if (initialPushallPending_ && connectTimeMs_ != 0U &&
+      elapsed(nowMs, connectTimeMs_, BAMBU_PUSHALL_INITIAL_DELAY_MS)) {
+    publishInitialPushall();
+  }
 }
 
 BambuState BambuMqttService::snapshot() const {
@@ -190,71 +193,23 @@ bool BambuMqttService::cycleActivePrinter(int direction) {
   return saved;
 }
 
-void BambuMqttService::taskThunk(void* arg) { static_cast<BambuMqttService*>(arg)->taskLoop(); }
 void BambuMqttService::mqttCallbackThunk(char* topic, uint8_t* payload, unsigned int length) {
+  esp_task_wdt_reset();
   if (activeInstance_) activeInstance_->handleMessage(topic, payload, length);
 }
 
-void BambuMqttService::taskLoop() {
-  for (;;) {
-    const uint32_t nowMs = millis();
-    uint32_t revision = 0U;
-    const BambuConfig config = configCopy(&revision);
-    if (revision != observedExternalConfigRevision_) {
-      observedExternalConfigRevision_ = revision;
-      disconnectMqtt();
-      mqttAttempted_ = false;
-      tokenRejected_ = false;
-    }
-    if (!config.enabled) {
-      disconnectMqtt();
-      setSession(BambuSessionState::INTEGRATION_DISABLED);
-      vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
-      continue;
-    }
-    if (!configuredForMqtt(config)) {
-      disconnectMqtt();
-      setSession(config.accessToken.empty() ? BambuSessionState::TOKEN_INVALID
-                                            : BambuSessionState::UNCONFIGURED);
-      vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
-      continue;
-    }
-    if (tokenRejected_) {
-      disconnectMqtt();
-      setSession(BambuSessionState::TOKEN_INVALID);
-      vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
-      continue;
-    }
-    if (WiFi.status() != WL_CONNECTED) {
-      disconnectMqtt();
-      setSession(BambuSessionState::NETWORK_ERROR);
-      vTaskDelay(pdMS_TO_TICKS(BAMBU_WIFI_WAIT_MS));
-      continue;
-    }
-    if (!mqtt_ || !mqtt_->connected()) {
-      setConnectivity(false);
-      if (!mqttAttempted_ || elapsed(nowMs, lastMqttAttemptMs_, BAMBU_MQTT_RECONNECT_MS)) connectMqtt(nowMs);
-      vTaskDelay(pdMS_TO_TICKS(BAMBU_TASK_SLEEP_MS));
-      continue;
-    }
-    if (!mqtt_->loop()) {
-      const int rc = mqtt_->state();
-      setConnectivity(false);
-      setSession(BambuSessionState::NETWORK_ERROR, rc);
-      Serial.printf("[bambu] mqtt_loop_lost rc=%d wifi=%d rssi=%d heap=%u\n",
-                    rc, static_cast<int>(WiFi.status()), WiFi.RSSI(),
-                    static_cast<unsigned>(esp_get_free_heap_size()));
-    }
-    vTaskDelay(pdMS_TO_TICKS(BAMBU_TASK_SLEEP_MS));
-  }
-}
-
-void BambuMqttService::handleMessage(const char* topic, const uint8_t* payload, unsigned int length) {
+void BambuMqttService::handleMessage(const char* topic, const uint8_t* payload,
+                                     unsigned int length) {
   const BambuConfig config = configCopy();
   const BambuPrinterConfig* active = activeBambuPrinter(config);
   if (!active) return;
+
   const std::string expected = bambuReportTopic(active->serial);
-  if (!topic || expected.empty() || expected != topic || !payload || length == 0U || length > BambuStateLimits::REPORT_JSON) return;
+  if (!topic || expected.empty() || expected != topic || !payload || length == 0U ||
+      length > BambuStateLimits::REPORT_JSON) {
+    return;
+  }
+
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) return;
   const std::string_view json(reinterpret_cast<const char*>(payload), length);
   if (applyBambuReport(json, millis(), state_)) {
@@ -267,9 +222,20 @@ void BambuMqttService::handleMessage(const char* topic, const uint8_t* payload, 
   xSemaphoreGive(mutex_);
 }
 
+uint32_t BambuMqttService::reconnectIntervalMs() const {
+  if (consecutiveFails_ >= BAMBU_BACKOFF_PHASE3_FAILS) {
+    return BAMBU_CLOUD_RECONNECT_PHASE3_MS;
+  }
+  if (consecutiveFails_ >= BAMBU_BACKOFF_PHASE1_FAILS) {
+    return BAMBU_CLOUD_RECONNECT_PHASE2_MS;
+  }
+  return BAMBU_CLOUD_RECONNECT_BASE_MS;
+}
+
 bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   lastMqttAttemptMs_ = nowMs;
   mqttAttempted_ = true;
+
   const BambuConfig config = configCopy();
   const BambuPrinterConfig* active = activeBambuPrinter(config);
   if (!active || config.cloudUserId.empty() || config.accessToken.empty()) {
@@ -277,115 +243,138 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
     return false;
   }
 
+  // Adapted from Keralots/BambuHelper (MIT): Cloud reconnects always rebuild
+  // both client objects so no stale TLS/socket/session state survives.
   disconnectMqtt();
   setSession(BambuSessionState::MQTT_CONNECTING);
+
+  esp_task_wdt_reset();
   NetworkRequestGuard guard(sharedNetworkArbiter());
-  if (!guard.locked()) { setSession(BambuSessionState::NETWORK_ERROR); return false; }
+  if (!guard.locked()) {
+    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
+    setSession(BambuSessionState::NETWORK_ERROR, -2);
+    return false;
+  }
+  esp_task_wdt_reset();
 
   const char* broker = bambuBrokerForRegion(config.region);
-  Serial.printf("[bambu] mqtt_connect broker=%s wifi=%d rssi=%d heap=%u\n",
+  Serial.printf("[bambu] mqtt_connect broker=%s wifi=%d rssi=%d heap=%u fails=%u\n",
                 broker, static_cast<int>(WiFi.status()), WiFi.RSSI(),
-                static_cast<unsigned>(esp_get_free_heap_size()));
+                static_cast<unsigned>(esp_get_free_heap_size()),
+                static_cast<unsigned>(consecutiveFails_));
 
   tls_ = new (std::nothrow) WiFiClientSecure();
-  if (!tls_) { setSession(BambuSessionState::BUFFER_ERROR); return false; }
-  tls_->setCACertBundle(rootca_crt_bundle_start);
-  tls_->setHandshakeTimeout(BuildConfig::HTTP_TLS_HANDSHAKE_TIMEOUT_SEC);
-  tls_->setTimeout(5);
-
-  logHeapDiagnostic("before_real_tls");
-  Serial.printf("[bambu] mqtt_real_tls_begin broker=%s timeout_ms=%ld heap=%u\n",
-                broker, static_cast<long>(BAMBU_REAL_TLS_TIMEOUT_MS),
-                static_cast<unsigned>(esp_get_free_heap_size()));
-  const uint32_t realTlsStartedMs = millis();
-  const int realTlsOk = tls_->connect(broker, BAMBU_MQTT_PORT, BAMBU_REAL_TLS_TIMEOUT_MS);
-  const uint32_t realTlsElapsedMs = static_cast<uint32_t>(millis() - realTlsStartedMs);
-  if (realTlsOk != 1) {
-    char tlsErrorText[96] = {};
-    const int tlsError = tls_->lastError(tlsErrorText, sizeof(tlsErrorText));
-    const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    const size_t internalLargest =
-        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    const size_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
-    Serial.printf(
-        "[bambu] mqtt_real_tls_fail tls=%d elapsed_ms=%lu wifi=%d rssi=%d heap=%u internal_free=%u internal_largest=%u dma_free=%u\n",
-        tlsError, static_cast<unsigned long>(realTlsElapsedMs), static_cast<int>(WiFi.status()),
-        WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()),
-        static_cast<unsigned>(internalFree), static_cast<unsigned>(internalLargest),
-        static_cast<unsigned>(dmaFree));
-    setSession(BambuSessionState::NETWORK_ERROR, -2);
+  if (!tls_) {
+    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
+    setSession(BambuSessionState::BUFFER_ERROR, -2);
     disconnectMqtt();
     return false;
   }
-  Serial.printf("[bambu] mqtt_real_tls_ok elapsed_ms=%lu rssi=%d heap=%u\n",
-                static_cast<unsigned long>(realTlsElapsedMs), WiFi.RSSI(),
-                static_cast<unsigned>(esp_get_free_heap_size()));
-  logHeapDiagnostic("after_real_tls");
+  tls_->setCACertBundle(rootca_crt_bundle_start);
+  tls_->setTimeout(15);
 
   mqtt_ = new (std::nothrow) PubSubClient(*tls_);
-  if (!mqtt_) { disconnectMqtt(); setSession(BambuSessionState::BUFFER_ERROR); return false; }
+  if (!mqtt_) {
+    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
+    setSession(BambuSessionState::BUFFER_ERROR, -2);
+    disconnectMqtt();
+    return false;
+  }
   mqtt_->setServer(broker, BAMBU_MQTT_PORT);
   mqtt_->setCallback(mqttCallbackThunk);
   mqtt_->setKeepAlive(BAMBU_MQTT_KEEPALIVE_SEC);
   if (!mqtt_->setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)) {
+    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
+    setSession(BambuSessionState::BUFFER_ERROR, -2);
     disconnectMqtt();
-    setSession(BambuSessionState::BUFFER_ERROR);
     return false;
   }
-  logHeapDiagnostic("after_mqtt_buffer");
 
   char clientId[32];
-  std::snprintf(clientId, sizeof(clientId), "tdgp_%08lx%04x",
-                static_cast<unsigned long>(esp_random()), static_cast<unsigned>(esp_random() & 0xFFFFU));
-  const uint32_t mqttStartedMs = millis();
-  if (!mqtt_->connect(clientId, config.cloudUserId.c_str(), config.accessToken.c_str())) {
-    const uint32_t mqttElapsedMs = static_cast<uint32_t>(millis() - mqttStartedMs);
+  std::snprintf(clientId, sizeof(clientId), "bblp_%08x%04x",
+                static_cast<unsigned>(esp_random()),
+                static_cast<unsigned>(esp_random() & 0xFFFFU));
+
+  const uint32_t startedMs = millis();
+  esp_task_wdt_reset();
+  const bool connected =
+      mqtt_->connect(clientId, config.cloudUserId.c_str(), config.accessToken.c_str());
+  const uint32_t connectElapsedMs = static_cast<uint32_t>(millis() - startedMs);
+
+  if (!connected) {
     const int rc = mqtt_->state();
-    char tlsErrorText[96] = {};
-    const int tlsError = tls_->lastError(tlsErrorText, sizeof(tlsErrorText));
-    const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    const size_t internalLargest =
-        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    const size_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    if (rc == 4 || rc == 5) {
+      tokenRejected_ = true;
+    } else if (consecutiveFails_ < UINT16_MAX) {
+      ++consecutiveFails_;
+    }
     Serial.printf(
-        "[bambu] mqtt_connect_fail rc=%d tls=%d elapsed_ms=%lu wifi=%d rssi=%d heap=%u internal_free=%u internal_largest=%u dma_free=%u\n",
-        rc, tlsError, static_cast<unsigned long>(mqttElapsedMs), static_cast<int>(WiFi.status()),
+        "[bambu] mqtt_connect_fail rc=%d elapsed_ms=%lu wifi=%d rssi=%d heap=%u fails=%u retry_ms=%lu\n",
+        rc, static_cast<unsigned long>(connectElapsedMs), static_cast<int>(WiFi.status()),
         WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()),
-        static_cast<unsigned>(internalFree), static_cast<unsigned>(internalLargest),
-        static_cast<unsigned>(dmaFree));
-    if (rc == 4 || rc == 5) tokenRejected_ = true;
-    setSession((rc == 4 || rc == 5) ? BambuSessionState::TOKEN_INVALID : BambuSessionState::NETWORK_ERROR, rc);
+        static_cast<unsigned>(consecutiveFails_),
+        static_cast<unsigned long>(reconnectIntervalMs()));
+    setSession((rc == 4 || rc == 5) ? BambuSessionState::TOKEN_INVALID
+                                    : BambuSessionState::NETWORK_ERROR,
+               rc);
     disconnectMqtt();
     return false;
   }
-  const uint32_t mqttElapsedMs = static_cast<uint32_t>(millis() - mqttStartedMs);
 
   const std::string reportTopic = bambuReportTopic(active->serial);
   if (reportTopic.empty() || !mqtt_->subscribe(reportTopic.c_str())) {
     const int rc = mqtt_->state();
-    Serial.printf("[bambu] mqtt_subscribe_fail rc=%d wifi=%d rssi=%d heap=%u\n",
+    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
+    Serial.printf("[bambu] mqtt_subscribe_fail rc=%d wifi=%d rssi=%d heap=%u fails=%u\n",
                   rc, static_cast<int>(WiFi.status()), WiFi.RSSI(),
-                  static_cast<unsigned>(esp_get_free_heap_size()));
+                  static_cast<unsigned>(esp_get_free_heap_size()),
+                  static_cast<unsigned>(consecutiveFails_));
     setSession(BambuSessionState::NETWORK_ERROR, rc);
     disconnectMqtt();
     return false;
   }
-  const std::string requestTopic = "device/" + active->serial + "/request";
-  char request[144];
-  std::snprintf(request, sizeof(request),
-                "{\"pushing\":{\"sequence_id\":\"%lu\",\"command\":\"pushall\",\"version\":1,\"push_target\":1}}",
-                static_cast<unsigned long>(pushallSequence_++));
-  mqtt_->publish(requestTopic.c_str(), request);
+
+  consecutiveFails_ = 0U;
   tokenRejected_ = false;
+  connectTimeMs_ = millis();
+  initialPushallPending_ = true;
   setConnectivity(true);
   setSession(BambuSessionState::ONLINE, 0);
   Serial.printf("[bambu] mqtt_connect_ok elapsed_ms=%lu rssi=%d heap=%u\n",
-                static_cast<unsigned long>(mqttElapsedMs), WiFi.RSSI(),
+                static_cast<unsigned long>(connectElapsedMs), WiFi.RSSI(),
                 static_cast<unsigned>(esp_get_free_heap_size()));
   return true;
 }
 
+bool BambuMqttService::publishInitialPushall() {
+  if (!mqtt_ || !mqtt_->connected()) return false;
+
+  const BambuConfig config = configCopy();
+  const BambuPrinterConfig* active = activeBambuPrinter(config);
+  if (!active) return false;
+
+  const std::string requestTopic = "device/" + active->serial + "/request";
+  const uint32_t sequence = pushallSequence_++;
+  char request[144];
+  std::snprintf(request, sizeof(request),
+                "{\"pushing\":{\"sequence_id\":\"%lu\",\"command\":\"pushall\",\"version\":1,\"push_target\":1}}",
+                static_cast<unsigned long>(sequence));
+
+  esp_task_wdt_reset();
+  const bool published = mqtt_->publish(requestTopic.c_str(), request);
+  if (published) {
+    initialPushallPending_ = false;
+    Serial.printf("[bambu] mqtt_pushall_initial seq=%lu delay_ms=%lu\n",
+                  static_cast<unsigned long>(sequence),
+                  static_cast<unsigned long>(millis() - connectTimeMs_));
+  } else {
+    Serial.printf("[bambu] mqtt_pushall_initial_fail rc=%d\n", mqtt_->state());
+  }
+  return published;
+}
+
 void BambuMqttService::disconnectMqtt() {
+  initialPushallPending_ = false;
   if (mqtt_) {
     if (mqtt_->connected()) mqtt_->disconnect();
     delete mqtt_;
