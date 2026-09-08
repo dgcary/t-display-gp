@@ -1,129 +1,89 @@
 # T-Display-S3 Hardware Acceptance
 
-Only for real LILYGO T-Display-S3. CI does not replace physical acceptance.
+Only for real LILYGO T-Display-S3. CI does not replace physical acceptance. Record source SHA, Actions run, artifact ID, firmware SHA256 and secret-safe evidence.
 
-Record source SHA, Actions run, artifact ID, firmware SHA256, date and secret-safe serial evidence.
+## Flash / core UI
 
-## Flash
+Normal upgrade: exact `firmware.bin` at manifest offset (normally `0x10000`), preserve NVS/bootloader/partition table; serial 115200. Verify 320×170 UI, menu `股票 / 天气 / Bambu Lab / 智能家居 / 设备信息`, Stock startup and no auto idle switching.
 
-Verify exact-SHA manifest and firmware SHA256. Normal upgrade: flash only `firmware.bin` at manifest offset (normally `0x10000`), preserve NVS, bootloader and partition table. Serial 115200.
+## Other app regression
 
-## Core UI
+Weather/Bad Apple: current + 今/明, 168×126 x=152,y=27, ~10 FPS, no divider regression/watchdog/leak.
 
-- 320×170 landscape, Chinese readable.
-- Menu exactly 股票 / 天气 / Bambu Lab / 智能家居 / 设备信息.
-- Reboot enters Stock; no auto-idle switching.
-- Button debounce/long-press behavior unchanged.
+HA: read-only, trusted-LAN HTTP or configured-CA HTTPS, no insecure fallback or secret echo.
 
-## Weather / Bad Apple
+## Bambu security
 
-- current + 今/明 only;
-- no top/video divider lines;
-- Bad Apple 168×126 at x=152,y=27, ~10 FPS, 2190-frame loop;
-- leave Weather stops redraw, re-enter starts frame 0;
-- no watchdog/panic/freeze/monotonic heap leak.
+User pastes their browser Token only into local `http://<device-ip>:8081/`; never expose it to ChatGPT/Codex/screenshots/logs. Verify status contains only token-set/non-secret runtime metadata; logout clears credentials/printers.
 
-## Home Assistant
+## Persistent multi-printer acceptance
 
-Read-only regression: HTTP trusted-LAN when used; HTTPS requires correct CA and no insecure fallback; 1–4 entities; no Token/Authorization in status/serial.
+With two saved real printers A/B:
 
-## Bambu — Manual Token security
+1. Boot and wait until **both** slots independently reach `mqtt_connect_ok slot=0` and `slot=1` (order may vary) and receive their delayed `mqtt_pushall_initial`/report data.
+2. Confirm A and B caches correspond to the correct Serial/name and live state.
+3. Perform GPIO14/GPIO0 A↔B switching at least 10 times.
+4. When both slots were already online before a switch, the switch itself must not create a new `[bambu] mqtt_connect`/TLS/MQTT login. It should display the target slot on the next normal UI cadence rather than wait for Cloud reconnection.
+5. Switching must not clear or corrupt the sibling cached state. No A data shown under B name or vice versa.
+6. Web active selector follows the same rule when only active index/name changes.
+7. Leave B active and reboot without erase; B remains selected. Connections are naturally re-established after reboot.
+8. With only one configured printer, device prev/next is a no-op.
 
-User obtains Token from their own browser and pastes it directly into `http://<device-ip>:8081/`. Never send it to ChatGPT/Codex or include it in screenshots/logs.
+Code capacity is 4 slots, but this acceptance only proves the user's actual two-printer simultaneous configuration. Do not label 4 simultaneous slots hardware-validated without a separate test.
 
-Verify Token is not echoed; status exposes only `token_set` + non-secret runtime metadata; local printer API exposes names/serials only; logout clears Token/User ID/printers and disables Bambu.
+## Bambu anti-flicker
 
-## Bambu — multi-printer / device switching
+Observe >=2 min idle/live. No periodic 500 ms whole-screen blank/flash. First entry or presentation full redraw is allowed; routine fields redraw sections only.
 
-With at least two saved printers A/B:
+## MQTT architecture evidence
 
-1. Select A and Save; MQTT should connect without reboot/account login/verification code.
-2. Confirm A identity/live state.
-3. GPIO14 short: A→B, old A state clears immediately, no reboot/Token prompt/discovery, B reconnects.
-4. GPIO0 short: B→A with wrap.
-5. Web selector remains equivalent and reboot-free.
-6. Reboot without erase; last active selection persists.
-7. With one printer, both short-switch actions are no-op.
-8. GPIO0 long still returns menu; GPIO14 long remains no-op.
-
-## Bambu — anti-flicker
-
-Observe Bambu >=2 minutes idle and during live updates when available. No periodic whole-screen blank/black flash at the 500 ms cache polling cadence. First entry and explicit printer switch may full redraw; routine fields only redraw affected sections.
-
-## Explicit discovery
-
-“用 Token 获取我的打印机” runs only after explicit click; results populate browser form and do not persist before Save; failure must not erase local printers; no secret in response/log.
-
-## Reboot persistence / token invalid
-
-After valid config reboot without erase: Token remains set, local list/active selection remain, MQTT reconnects without password/SMS/TFA.
-
-If safely observing MQTT rc 4/5: session becomes `token_invalid`, same rejected config stops retrying, and a newly saved browser Token/config revision resumes connection. Do not intentionally trigger account lockout.
-
-## MQTT stability — BambuHelper-aligned runtime
-
-Candidate must be built with `espressif32@6.12.0` / Arduino-ESP32 2.0.17 and use the loop-driven Cloud MQTT lifecycle adapted from `Keralots/BambuHelper`.
-
-Required architecture evidence:
+Candidate must use `espressif32@6.12.0` / Arduino-ESP32 2.0.17 and BambuHelper-aligned loop-driven persistent slots:
 
 ```text
 no dedicated CPU0 bambu-mqtt task
-BambuMqttService::process(nowMs) driven from Arduino loop
-fresh WiFiClientSecure + PubSubClient on every reconnect
-strict CA, TLS Client timeout 15 s
+BambuMqttService::process(nowMs) from Arduino loop
+per-printer MqttConn + BambuState
+strict CA, timeout 15 s
 PubSubClient buffer 40960, keepalive 30 s
 random bblp_* client ID
-direct mqtt.connect(user, token)
-subscribe report topic
-initial pushall >=2 s after connect
-30/60/120 s reconnect backoff
+per-slot subscribe report topic
+per-slot initial pushall >=2 s after connect
+per-slot 30/60/120 s backoff
 ```
 
-The old Stage-2/3/4 `mqtt_real_tls_*`, layered per-attempt probe, explicit pre-connect `tls_->connect(...)`, and project `MQTT_SOCKET_TIMEOUT=3/5` are not production acceptance markers.
+Old `mqtt_real_tls_*`, layered preflight, explicit production TLS preconnect and project `MQTT_SOCKET_TIMEOUT=3/5` are forbidden acceptance markers. WDT reset around known long operations is allowed; disabling/deleting watchdog is forbidden.
 
-`esp_task_wdt_reset()` around known long operations is allowed because it matches the working upstream lifecycle. Disabling/deleting watchdogs is forbidden.
+## Mandatory stability
 
-### Mandatory 10-minute test
+Observe >=10 continuous minutes with both real printer slots configured:
 
-Observe at least 10 continuous minutes after boot/config restore:
-
-- watchdog = 0;
-- panic = 0;
-- automatic reboot = 0;
-- MQTT connects and remains usable when broker accepts the session;
-- live report data continues updating;
-- no repeated fixed-cadence reconnect churn;
-- a transient connect failure returns normally and later retries under backoff;
+- watchdog 0, panic 0, automatic reboot 0;
+- both online slots continue `mqtt.loop()`/report updates while either one is displayed;
+- heap does not monotonically decline under two TLS+MQTT clients;
+- no repeated reconnect caused solely by active printer switching;
+- natural failure of one slot, if observed, only reconnects that slot; sibling remains connected/fresh;
 - no secret leak.
 
-Expected secret-safe markers:
+Expected markers:
 
 ```text
-[bambu] mqtt_connect ... fails=<n>
-[bambu] mqtt_connect_ok elapsed_ms=<ms>
-[bambu] mqtt_connect_fail rc=<n> elapsed_ms=<ms> retry_ms=<ms>
-[bambu] mqtt_subscribe_fail ...
-[bambu] mqtt_loop_lost ...
-[bambu] mqtt_pushall_initial seq=<n> delay_ms=<ms>
+[bambu] mqtt_connect slot=<n> ...
+[bambu] mqtt_connect_ok slot=<n> elapsed_ms=...
+[bambu] mqtt_connect_fail slot=<n> rc=... retry_ms=...
+[bambu] mqtt_subscribe_fail slot=<n> ...
+[bambu] mqtt_loop_lost slot=<n> ...
+[bambu] mqtt_pushall_initial slot=<n> ...
 ```
 
-### A/B switching under live MQTT
+## Live/background/coexistence
 
-After a stable A session, switch A→B→A at least three cycles. Each switch must clear old state, reconnect to selected serial, require no reauth/reboot, and preserve selection in NVS. No watchdog/panic/state cross-contamination.
-
-## Live state
-
-During a print, verify available fields: friendly name/state, progress, ETA, layers, nozzle/bed/chamber temperatures, job name, filament/AMS. Missing fields may show placeholders; partial reports preserve prior valid fields.
-
-## Background freshness / coexistence
-
-Confirm Bambu online, then visit Stock/Weather/HA/DeviceInfo while state changes. Return to fresh Bambu cache. Stock/Weather/HA network requests must remain usable while persistent MQTT is connected.
+Verify progress/ETA/layers/temps/job/filament as available. Leave Bambu for Stock/Weather/HA/DeviceInfo and return; both Bambu slot caches should continue updating. Stock/Weather/HA must remain usable with two persistent MQTT sockets. This regression is important because multi-slot MQTT increases resource pressure.
 
 ## Wi-Fi recovery
 
-Interrupt only T-Display Wi-Fi safely, restore it, and verify same active printer/config, ordinary network loss preserves last valid state, MQTT reconnects, and there is no panic/watchdog/reboot/freeze/monotonic heap leak.
+Safe Wi-Fi interruption/recovery: preserve config/active selection; reconnect slots without panic/watchdog/reboot/freeze/monotonic heap leak. One slot may recover before another.
 
-## Final report template
+## Report template
 
 ```text
 SOURCE SHA:
@@ -132,27 +92,21 @@ ARTIFACT ID:
 FIRMWARE SHA256:
 FLASH: PASS/FAIL
 NVS ERASED: NO
-STOCK START / FIVE APP / NO IDLE: PASS/FAIL
-WEATHER / BAD APPLE: PASS/FAIL
-HA REGRESSION: PASS/FAIL/NOT TESTED
-BAMBU MANUAL TOKEN SAVE: PASS/FAIL
-BAMBU SECRET LEAK: PASS/FAIL
-BAMBU MQTT 10 MIN: PASS/FAIL
-MQTT CONNECT OK COUNT:
-MQTT CONNECT FAIL COUNT:
-MQTT LOOP LOST COUNT:
-RECONNECT BACKOFF OBSERVED:
-BAMBU LIVE DATA: PASS/FAIL/PARTIAL
-BAMBU DEVICE A->B->A: PASS/FAIL
+BAMBU SLOT0 ONLINE/PUSHALL: PASS/FAIL
+BAMBU SLOT1 ONLINE/PUSHALL: PASS/FAIL
+BAMBU A<->B x10 INSTANT: PASS/FAIL
+NEW MQTT CONNECT CAUSED BY ONLINE SWITCH: YES/NO
 BAMBU SELECTION PERSISTENCE: PASS/FAIL
-BAMBU OLD-STATE CROSS-CONTAMINATION: YES/NO
+STATE CROSS-CONTAMINATION: YES/NO
 BAMBU WHOLE-SCREEN FLICKER: PASS/FAIL
-BAMBU BACKGROUND COEXISTENCE: PASS/FAIL/NOT TESTED
-BAMBU WIFI RECOVERY: PASS/FAIL/NOT TESTED
+BAMBU MQTT 10 MIN: PASS/FAIL
+SIBLING SURVIVES SINGLE-SLOT DROP: PASS/FAIL/NOT OBSERVED
+STOCK/WEATHER/HA COEXISTENCE: PASS/FAIL/NOT TESTED
 WATCHDOG COUNT:
 PANIC COUNT:
 AUTOMATIC REBOOT COUNT:
-HEAP OBSERVATION:
+HEAP START/MIN/END:
+SECRET LEAK: NO
 PHYSICAL ACCEPTANCE: PASS/FAIL/PARTIAL
 RAW SECRET-SAFE LOG:
 ```
