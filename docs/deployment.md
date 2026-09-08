@@ -38,13 +38,11 @@ No automatic idle switching.
 
 ## Integrations page
 
-Single server:
+Single trusted-LAN server:
 
 ```text
 http://<device-ip>:8081/
 ```
-
-Trusted-LAN HTTP only.
 
 ### Home Assistant
 
@@ -52,19 +50,15 @@ Read-only client of existing HA. Configure Base URL, token, 1–4 entities, refr
 
 ### Bambu Lab Cloud — Manual Token
 
-The firmware no longer logs into a Bambu account and no longer performs SMS/email/TFA verification or automatic password/token renewal.
-
-Setup:
+Firmware does not perform Bambu password login/SMS/email/TFA/automatic renewal.
 
 1. Log in to the correct Bambu website in a desktop browser.
-2. Use developer tools/Cookies to obtain the `token` value.
-3. Paste it into the Bambu **Access Token** field on `:8081`.
-4. Fill up to four local printer slots (`name + Serial`) and choose the active printer; or explicitly click “用 Token 获取我的打印机” to populate the form from Cloud.
+2. Obtain the browser `token` from developer tools/Cookies.
+3. Paste it into Bambu Access Token on `:8081`.
+4. Fill up to four local printer slots (`name + Serial`) and select the active printer; or explicitly use “用 Token 获取我的打印机” to fill the browser form.
 5. Click “保存并切换”.
 
-Token is a credential. Do not put it in ChatGPT/Codex prompts, screenshots, serial logs or GitHub.
-
-“用 Token 获取我的打印机” is explicit only. Discovery results remain browser-side until Save. `/api/bambu/printers` reads local persisted printers only and does not call Cloud.
+Token is a credential. Do not put it in ChatGPT/Codex prompts, screenshots, serial logs or GitHub. Blank Token on Save preserves the stored Token.
 
 Bambu routes:
 
@@ -76,101 +70,93 @@ POST /api/bambu/config
 POST /api/bambu/logout
 ```
 
-Old account-login/verify/resend routes are retired.
+Old login/verify/resend routes stay retired. Discovery is explicit-only and browser-side until Save. `/api/bambu/printers` is local saved data only.
 
-Saved config supports 4 printers. Active-printer change applies immediately without reboot or re-authentication. Service disconnects old MQTT, clears the old printer snapshot, then connects/subscribes with the newly selected Serial.
-
-The same saved list can be switched directly from the device while the Bambu app is visible:
+Active printer can also be changed on-device:
 
 ```text
 GPIO0 short  previous printer
 GPIO14 short next printer
 ```
 
-Selection wraps A ↔ B ↔ …, does nothing when fewer than two printers are saved, persists `activePrinterIndex` immediately, clears the old state and reconnects. GPIO0 long still returns to the menu; GPIO14 long remains no-op.
+Selection wraps, persists, clears old state and reconnects without reboot/re-authentication. Bambu rendering is incremental; routine live data must not cause whole-screen flashing.
 
-Bambu rendering is incremental. A service-cache poll does not itself trigger a redraw. Full-screen clear occurs only for a full redraw such as entering Bambu or switching active printer; normal live data changes redraw only their header/progress/job/filament/footer regions. This is the required anti-flicker behavior.
+## Bambu MQTT runtime
 
-Brokers:
+The production runtime is aligned to `Keralots/BambuHelper`'s proven Cloud MQTT lifecycle (MIT), while retaining this project's Manual Token/config/UI boundaries.
+
+Platform:
+
+```text
+PlatformIO espressif32@6.12.0
+Arduino-ESP32 2.0.17
+PubSubClient 2.8
+```
+
+Cloud connection:
 
 ```text
 China  cn.mqtt.bambulab.com:8883
 Global us.mqtt.bambulab.com:8883
+username = cloudUserId
+password = accessToken
+subscribe device/<activeSerial>/report
 ```
 
-MQTT username = Cloud User ID, password = Access Token. Only read-only `pushall` request publish is allowed. MQTT receive buffer = 40960 bytes.
-
-If the Token is rejected with MQTT rc 4/5, service enters `token_invalid` and stops retrying that same Token. Obtain a fresh browser Token and save it in `:8081`; changing config revision resumes MQTT.
-
-Legacy Bambu NVS schema v1 is migrated to v2 when possible. Reusable Token/User ID/single printer are retained; account/password are dropped.
-
-### MQTT TLS/watchdog connection path
-
-Physical diagnostics on the previous layered builds established:
+Runtime sequence:
 
 ```text
-DNS PASS
-plain TCP 8883 PASS
-strict-CA TLS preflight PASS
-internal_largest ≈180 KB after 40960-byte MQTT buffer
-real MQTT call blocks before returning rc
-CPU0 bambu-mqtt trips task watchdog
+Arduino loop calls BambuMqttService::process(nowMs)
+ -> discard stale MQTT/TLS objects before reconnect
+ -> WiFiClientSecure + strict CA bundle + timeout 15 s
+ -> PubSubClient + buffer 40960 + keepalive 30 s
+ -> random bblp_* client ID
+ -> PubSubClient owns TCP/TLS + MQTT CONNECT
+ -> subscribe report topic
+ -> release NetworkArbiter
+ -> >=2000 ms after connect, one read-only pushall
 ```
 
-A second A/B build changed only PubSubClient `MQTT_SOCKET_TIMEOUT` to 5 s. The watchdog still occurred around 16–25 s and no rc=-4 was returned, proving the block occurs before PubSubClient's CONNACK wait, inside the real TLS connect path.
+There is no dedicated `bambu-mqtt` task pinned to CPU0. The old Stage-2/3/4 production experiments are retired: no normal-path layered DNS/TCP/TLS preflight, no explicit `tls_->connect(...)` before PubSubClient, and no project `MQTT_SOCKET_TIMEOUT=3/5` override.
 
-Current candidate therefore removes the extra per-attempt TLS preflight from the normal reconnect path and establishes the one real MQTT TLS connection explicitly:
+Cloud reconnect backoff:
 
 ```text
-WiFiClientSecure allocation
-strict CA bundle
-handshake/connect bound = 5000 ms
-explicit tls_->connect(broker, 8883, 5000)
-PubSubClient constructed over the already-connected TLS Client
-40960-byte MQTT buffer allocation
-MQTT CONNECT with MQTT_SOCKET_TIMEOUT=5
+failures 0..4   -> 30 s
+failures 5..14  -> 60 s
+failures >=15   -> 120 s
 ```
 
-This is not a watchdog workaround: watchdogs remain enabled and are never deleted/reset from Bambu code. CA, Token, 30 s keepalive, 30 s reconnect cadence and the read-only publish rule remain unchanged.
+rc 4/5 sets `token_invalid` and suppresses retries with that config until a config revision changes. Other connect/subscribe/loop failures fully release clients and retry under backoff.
 
-Serial 115200 should show:
+The reference implementation resets Task WDT around known long operations; this adaptation may call `esp_task_wdt_reset()` before MQTT connect/callback/pushall, but never disables/deletes watchdogs. Bambu Cloud TLS remains strict CA; `setInsecure()` is forbidden.
+
+Secret-safe serial markers:
 
 ```text
-[netcfg] ip=<...> mask=<...> gateway=<...> dns1=<...> dns2=<...> bssid=<...> ch=<...> wifi=<...>
-[bambu] mqtt_diag_heap phase=before_real_tls internal_free=<...> internal_largest=<...> dma_free=<...> heap_free=<...>
-[bambu] mqtt_real_tls_begin broker=<...> timeout_ms=5000 heap=<...>
-[bambu] mqtt_real_tls_ok elapsed_ms=<...> ...
-# or
-[bambu] mqtt_real_tls_fail tls=<numeric> elapsed_ms=<...> ...
-[bambu] mqtt_diag_heap phase=after_real_tls ...
-[bambu] mqtt_diag_heap phase=after_mqtt_buffer ...
-[bambu] mqtt_connect_ok elapsed_ms=<...> ...
-# or
-[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<...> ...
+[bambu] mqtt_connect broker=<host> ... fails=<n>
+[bambu] mqtt_connect_ok elapsed_ms=<ms> ...
+[bambu] mqtt_connect_fail rc=<n> elapsed_ms=<ms> ... retry_ms=<ms>
+[bambu] mqtt_subscribe_fail ...
+[bambu] mqtt_loop_lost ...
+[bambu] mqtt_pushall_initial seq=<n> delay_ms=<ms>
 ```
 
-The old layered DNS/TCP/TLS probe helper is no longer called by the normal MQTT path. Do not reinsert an extra TLS preflight before every MQTT connection unless doing a deliberately scoped diagnostic experiment.
-
-Never include Access Token, Cloud User ID, Cookie/Authorization, account data, auth payloads or raw credential-bearing TLS error text in logs. Numeric errors, broker/IP, elapsed time and heap metrics are allowed.
+Never log Token, Cloud User ID, Cookie/Authorization or auth payloads.
 
 ## Physical smoke
 
-1. Flash exact-SHA application image, preserve NVS.
+1. Flash exact-head application image at `0x10000`, preserve NVS.
 2. Boot Stock; verify five apps/no idle switch.
-3. Weather/Bad Apple and HA regression.
-4. Open `:8081`; confirm Manual Token UI and four printer slots.
-5. Paste Token locally, configure two printers and select printer A; Save.
-6. Confirm one `mqtt_real_tls_begin` attempt returns `mqtt_real_tls_ok` or bounded `mqtt_real_tls_fail` without watchdog.
-7. If TLS succeeds, confirm MQTT returns `mqtt_connect_ok` or a bounded `mqtt_connect_fail`; it must not hang CPU0.
-8. Confirm MQTT online and printer A state when credentials/broker accept the connection.
-9. In the Bambu app short-press GPIO14; confirm device switches A→B, clears A state, persists B and reconnects without reboot/login.
-10. Short-press GPIO0; confirm B→A wrap/persistence/reconnect. With only one saved printer, both short presses must be no-op.
-11. Observe Bambu screen while idle and during live updates; it must not flash the entire display on a 500 ms cadence.
-12. Return to `:8081`, change active selection and Save; web switching must still work without reboot/login.
-13. Optionally test explicit discovery once; verify it populates form but does not overwrite saved config until Save.
-14. Reboot with NVS preserved; saved Token/list/active printer should restore.
-15. Leave Bambu app and verify background freshness while Stock/Weather/HA remain usable.
-16. Wi-Fi loss/recovery must reconnect without panic/watchdog/heap leak.
-17. Token-invalid test only if safe; do not intentionally lock the account.
+3. Verify Weather/Bad Apple and HA regression.
+4. Confirm Manual Token UI/four printer slots and no secret echo.
+5. With a valid saved printer, observe Bambu MQTT for >=10 minutes: no watchdog/panic/automatic reboot.
+6. Confirm `mqtt_connect_ok`, report/live-state flow and delayed initial pushall when broker accepts connection.
+7. If connect fails, confirm it returns cleanly and follows 30/60/120 s backoff rather than reboot/churn.
+8. Device-switch A→B→A: no reboot/login/Token prompt, old state clears, selected index persists, new Serial reconnects.
+9. Observe Bambu UI >=2 min: no periodic whole-screen flash.
+10. Leave Bambu for Stock/Weather/HA and return; MQTT/background state remains fresh and other network features remain usable.
+11. Reboot without erase; Token/printer list/active selection restore.
+12. Safe Wi-Fi interruption/recovery: reconnect without panic/watchdog/heap leak.
 
-See `docs/hardware-acceptance.md`.
+See `docs/hardware-acceptance.md` for the full checklist.

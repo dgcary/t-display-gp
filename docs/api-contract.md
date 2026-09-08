@@ -30,7 +30,7 @@ HTTP is trusted-LAN cleartext. HTTPS requires configured CA. No `/api/services` 
 
 ## Configuration
 
-Bambu config schema v2:
+Schema v2:
 
 ```text
 enabled
@@ -42,11 +42,9 @@ printerCount
 activePrinterIndex
 ```
 
-Enabled config requires Token, Cloud User ID and >=1 printer. Max 4 printers, no duplicate serials, active index must be valid. Legacy schema v1 decode migrates reusable Token/User ID/single printer and drops account/password.
+Enabled config requires Token, Cloud User ID and >=1 printer. Max 4 printers, no duplicate serials, active index valid. Legacy v1 may migrate reusable Token/User ID/single printer and drops account/password. Firmware has no account/password/SMS/email/TFA state machine and no automatic token renewal.
 
-The firmware has no Bambu account/password login state machine and no SMS/email/TFA verification or automatic token renewal.
-
-`activeBambuPrinter(config)` resolves the selected entry. `selectRelativeBambuPrinter(config, direction)` is a pure selection helper: positive moves to the next configured printer, negative moves to the previous one, both wrap, and fewer than two printers is a no-op.
+`activeBambuPrinter(config)` resolves the selected entry. `selectRelativeBambuPrinter(config, direction)` performs wrap-around local selection and is a no-op with fewer than two printers.
 
 ## Local portal
 
@@ -62,75 +60,31 @@ POST /api/bambu/config
 POST /api/bambu/logout
 ```
 
-### GET /api/bambu/status
+`/api/bambu/status` exposes only non-secret runtime metadata (`token_set`, printer count, active name/serial, MQTT/session/rc). `/api/bambu/printers` returns only saved local printers. Discovery is explicit and does not persist until Save. Blank Access Token on config Save preserves stored Token. Logout clears Token/User ID/printers and disables Bambu.
 
-Returns only non-secret state such as:
-
-```text
-enabled
-region
-token_set
-printer_count
-active_printer_serial
-active_printer_name
-mqtt_connected
-session
-last_mqtt_rc
-```
-
-No raw Token/Cloud User ID/Cookie/Authorization header.
-
-### GET /api/bambu/printers
-
-Returns the **saved local printer list only**. No implicit Cloud call.
-
-### POST /api/bambu/discover
-
-Explicit user action. Inputs: region + optional newly typed Access Token. Blank Token may use the stored Token. Cloud User ID is resolved locally from JWT when possible, otherwise profile HTTPS fallback may be used. Device-list HTTPS returns a bounded printer list to the browser. Discovery does not persist printers/config.
-
-### POST /api/bambu/config
-
-Inputs:
-
-```text
-enabled
-region
-access_token   # blank preserves stored Token
-printer1_name / printer1_serial
-...
-printer4_name / printer4_serial
-active_printer_serial
-```
-
-If a new Token is supplied, Cloud User ID is resolved before enabling. Save persists schema v2 and applies immediately through `BambuMqttService::replaceConfig`; no reboot is required for Bambu switching.
-
-### POST /api/bambu/logout
-
-Clears Token/User ID/printer list, disables Bambu and disconnects MQTT.
+Old `/api/bambu/login`, `/api/bambu/verify`, `/api/bambu/verification/resend` are unsupported.
 
 ## Device-side active printer control
-
-While Bambu is the visible normal app:
 
 ```text
 GPIO0 PREV_SHORT  -> BambuMqttService::cycleActivePrinter(-1)
 GPIO14 NEXT_SHORT -> BambuMqttService::cycleActivePrinter(+1)
 ```
 
-`cycleActivePrinter()` changes only the active index of the existing validated local list, persists the resulting schema-v2 config, increments external config revision, clears old `BambuState` and allows the service task to disconnect/reconnect to the new Serial. No Token/Cloud discovery/login request is involved. Long-press app-shell behavior is unchanged.
+Selection changes only local validated config, persists v2, increments config revision, clears old BambuState and reconnects to the new Serial. It does not invoke Cloud discovery/login.
 
 ## Token HTTPS client
 
-`BambuCloudClient` exposes only Token-based operations:
+`BambuCloudClient` exposes only:
 
 ```text
 fetchUserId(token, region)
 fetchPrinters(token, region)
 ```
 
-Bambu HTTPS uses `WiFiClientSecure` CA bundle + bounded response body + shared `NetworkArbiter`. `setInsecure()` is forbidden. Login/SMS/email/TFA endpoints are absent from the client.
+Bambu HTTPS uses strict CA + shared `NetworkArbiter`; `setInsecure()` forbidden.
 
-## MQTT
+## MQTT protocol
 
 ```text
 CHINA -> cn.mqtt.bambulab.com:8883
@@ -141,68 +95,90 @@ subscribe = device/<activeSerial>/report
 request   = device/<activeSerial>/request
 ```
 
-One service task owns connect/subscribe/callback/mqtt.loop. Buffer = 40960 bytes. Connect handshake acquires `NetworkArbiter`; established socket releases it. Only one read-only `pushall` publish path is allowed.
+Only the read-only `pushall` request may be published. Receive buffer = 40960 bytes. Keepalive = 30 s.
 
-Config replacement or device-side active-printer switching increments an external revision. On revision change service disconnects old MQTT, resets retry/token-rejected state and reconnects from the new config. Active printer switch clears old `BambuState` before reconnect.
+### Runtime ownership
 
-MQTT auth rc 4/5 sets `TOKEN_INVALID` and marks current Token rejected; that same config is not retried. A new portal config revision (normally fresh Token) clears the latch and permits connection.
-
-When `mqtt.loop()` reports a lost connection the service records a network-error session and the current PubSubClient rc instead of leaving a stale ONLINE label.
-
-## Real TLS + MQTT connection contract
-
-Physical layered diagnostics established that DNS, plain TCP and strict-CA TLS can succeed and that internal contiguous heap remains large enough. A 5 s PubSubClient socket timeout did not prevent a 16–25 s watchdog in the real connection path, so the observed block occurs before CONNACK wait, inside the implicit real `WiFiClientSecure::connect()`.
-
-The normal MQTT connection path therefore has this contract:
+MQTT is **main-loop driven**, adapted from `Keralots/BambuHelper`'s MIT Cloud connection lifecycle:
 
 ```text
-allocate WiFiClientSecure
-set CA bundle + 5 s handshake/connect bound
-explicit tls_->connect(broker, 8883, 5000)
-if TLS fails: return bounded NETWORK_ERROR with numeric tls result
-construct PubSubClient over that already-connected Client
-allocate 40960-byte MQTT buffer
-MQTT CONNECT / CONNACK wait with MQTT_SOCKET_TIMEOUT=5
-subscribe report topic
-publish one read-only pushall
+setup: BambuMqttService::begin(config, store)
+loop:  BambuMqttService::process(nowMs)
 ```
 
-PubSubClient must see the underlying Client already connected and must not open a second TLS socket. `runLayeredConnectionProbe(broker)` is not part of the normal reconnect path; its old DNS/TCP/TLS helper may exist only for deliberately scoped diagnostics.
+There is no custom FreeRTOS `bambu-mqtt` task and no CPU0 pinning. `process()` owns reconnect decisions, `mqtt.loop()`, config-revision application and delayed initial pushall.
 
-Secret-safe serial records:
+### Cloud reconnect contract
+
+Every new Cloud attempt starts from fresh clients:
 
 ```text
-[netcfg] ip mask gateway dns1 dns2 bssid ch wifi
-[bambu] mqtt_diag_heap phase=<before_real_tls|after_real_tls|after_mqtt_buffer> internal_free=<bytes> internal_largest=<bytes> dma_free=<bytes> heap_free=<bytes>
-[bambu] mqtt_real_tls_begin broker=<host> timeout_ms=5000 heap=<bytes>
-[bambu] mqtt_real_tls_ok elapsed_ms=<ms> ...
-[bambu] mqtt_real_tls_fail tls=<numeric> elapsed_ms=<ms> ... internal_free=<bytes> internal_largest=<bytes> dma_free=<bytes>
-[bambu] mqtt_connect_ok elapsed_ms=<ms> ...
-[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<ms> ...
+destroy old PubSubClient/WiFiClientSecure
+acquire NetworkArbiter
+new WiFiClientSecure
+setCACertBundle(rootca_crt_bundle_start)
+setTimeout(15)
+new PubSubClient(*tls)
+setServer(broker, 8883)
+setBufferSize(40960)
+setKeepAlive(30)
+random client ID bblp_<random>
+mqtt.connect(clientId, cloudUserId, accessToken)
+subscribe device/<serial>/report
+release NetworkArbiter
+>=2000 ms after successful connect -> one pushall
 ```
 
-No Bambu code may disable/delete/reset watchdogs to hide a blocking transport call. Bambu TLS remains strict-CA; `setInsecure()` is forbidden. Keepalive = 30 s and reconnect cadence = 30 s unless a separately evidenced policy change is approved.
+PubSubClient owns TCP/TLS connection establishment. Normal reconnect must not first perform a layered diagnostic preflight or explicit `tls_->connect(...)`. Project-level `MQTT_SOCKET_TIMEOUT=3/5` diagnostic overrides are retired.
 
-All diagnostic lines must exclude Access Token, Cloud User ID, Cookie/Authorization, account data, raw authentication payloads and raw credential-bearing TLS error text. Broker hostname/resolved IP, elapsed time, numeric errors, Wi-Fi metadata and heap metrics are allowed.
+Reconnect backoff:
 
-Network disconnects preserve last valid state except deliberate active-printer change, where state is cleared to prevent showing one printer's data under another printer's name.
+```text
+0..4 consecutive failures   -> 30000 ms
+5..14 consecutive failures  -> 60000 ms
+>=15 consecutive failures   -> 120000 ms
+```
+
+On connect/subscribe/loop failure, stale MQTT/TLS clients are destroyed. rc 4/5 sets `TOKEN_INVALID` and latches the rejected config until external config revision changes. Successful connect resets failure backoff and arms the 2-second initial pushall.
+
+Changing active printer increments config revision, clears old state and forces session recreation with the selected Serial.
+
+### Watchdog policy
+
+The previous CPU0-pinned service could starve IDLE0 during a PubSubClient CONNACK busy wait. The production runtime fixes execution ownership by moving MQTT work to Arduino loop context and aligning framework/runtime behavior with the known-working reference.
+
+`esp_task_wdt_reset()` is allowed around known long MQTT connect/callback/pushall operations, matching BambuHelper. It is forbidden to disable/delete watchdog protection (`disableCore*WDT`, `disableLoopWDT`, `esp_task_wdt_delete`).
+
+### Diagnostics / security
+
+Secret-safe lines may include:
+
+```text
+[bambu] mqtt_connect ...
+[bambu] mqtt_connect_ok elapsed_ms=...
+[bambu] mqtt_connect_fail rc=... elapsed_ms=... retry_ms=...
+[bambu] mqtt_subscribe_fail ...
+[bambu] mqtt_loop_lost ...
+[bambu] mqtt_pushall_initial ...
+```
+
+Never emit Access Token, Cloud User ID, Cookie/Authorization, passwords, verification codes or auth payloads. Bambu Cloud TLS is strict CA; `setInsecure()` forbidden.
 
 ## Bambu presentation
 
-`BambuApp` polls the mutex-protected service state/config cache, but a polling tick marks the app dirty only if presentation-relevant state changed. `BambuScreen` keeps a render signature. Full redraw is reserved for first render/explicit app full redraw (including active-printer switch); routine state deltas repaint only the affected header/progress/job/filament/footer region. This prevents whole-screen flashing at the polling cadence.
+`BambuApp` polls mutex-protected service state/config but marks dirty only when presentation changes. `BambuScreen` uses section-level redraws; full `fillScreen()` only on full redraw such as first entry/active-printer switch.
 
 # Shared concurrency
 
 ```text
 Stock -> dedicated MarketDataWorker
-Weather + HomeAssistant -> one shared AppDataWorker
-Bambu -> one persistent MQTT service/task
+Weather + HomeAssistant -> shared AppDataWorker
+Bambu -> loop-driven persistent MQTT service
 DeviceInfo -> local-only
-Bad Apple -> local flash playback
 ```
 
-All ordinary short-lived external HTTP/TLS work serializes through `NetworkArbiter`. Bambu persistent MQTT holds it only for the single bounded real TLS/MQTT connect/reconnect handshake, then releases it while the established socket remains active.
+Short-lived external HTTP/TLS and Bambu connect/reconnect transactions serialize through `NetworkArbiter`. Established MQTT does not hold the arbiter.
 
 # Security
 
-No Bambu/HA Token, password, verification code, Cookie, Authorization header or challenge material in logs/status. Portal itself is trusted-LAN HTTP; user must treat pasted Tokens as exposed to that LAN segment.
+No Bambu/HA Token, password, verification code, Cookie, Authorization header or challenge material in logs/status. Portal itself is trusted-LAN HTTP; pasted Tokens are exposed to that LAN segment.
