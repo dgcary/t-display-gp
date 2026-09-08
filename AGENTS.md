@@ -17,6 +17,7 @@ python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 python tools/validate_app_shell_contract.py
+python tools/validate_direct_navigation_contract.py
 python tools/validate_dashboard_apps_contract.py
 python tools/validate_bambu_cloud_contract.py
 python tools/validate_bambu_pubsub_timeout_contract.py
@@ -26,18 +27,35 @@ python tools/prepare_bad_apple_asset.py
 pio run -e lilygo-t-display-s3
 ```
 
-## Input / shell
+## Input / direct page shell
+
+There is no runtime menu.
 
 ```text
-normal app: GPIO0 short prev; GPIO14 short next; GPIO0 long menu; GPIO14 long no-op
-menu:       GPIO0 short prev; GPIO14 short next; GPIO0 long no-op; GPIO14 long enter
+GPIO0 short  -> previous page
+GPIO14 short -> next page
+GPIO0 long   -> no-op
+GPIO14 long  -> no-op
 ```
 
-Menu exactly `股票 / 天气 / Bambu Lab / 智能家居 / 设备信息`; startup Stock; no automatic idle switching.
+Flattened order, wrapping at both ends:
+
+```text
+WEATHER
+-> STOCK page 1..min(configured stocks, 4)
+-> BAMBU page 1..min(configured printers, 2)
+-> HOME_ASSISTANT
+-> DEVICE_INFO
+-> WEATHER
+```
+
+Apps whose `pageCount()==0` are skipped automatically. Startup is WEATHER. Same-app page changes must not call `onExit()/onEnter()`; switching between apps does. Short presses are consumed by `AppManager` for navigation and are not forwarded to app-local button handlers. Configuration changes remain Web-portal driven rather than button-editable.
+
+Legacy `MenuApp/MenuScreen` source may remain for compile/history compatibility but must not be instantiated by `main.cpp` or reachable in the runtime navigation path.
 
 ## Other apps
 
-Stock: Tencent primary / EastMoney fallback, dedicated `MarketDataWorker`, cache-preserving.
+Stock: Tencent primary / EastMoney fallback, dedicated `MarketDataWorker`, cache-preserving. Direct navigation exposes at most the first 4 configured stocks. `StockController::selectIndex()` performs exact selection rather than walking through intermediate stocks.
 
 Weather: Open-Meteo current + Today/Tomorrow. Bad Apple x=152,y=27 168×126, 2190 frames, 10 FPS, local flash, silent loop.
 
@@ -51,16 +69,9 @@ Read-only persistent Cloud integration. No printer-LAN MQTT dependency and no pa
 
 No Bambu account/password/SMS/email/TFA login flow, password storage, automatic relogin or token renewal. User pastes browser `token` only into trusted-LAN `http://<device-ip>:8081/`. Never hard-code/log/return Token.
 
-Schema v2: `enabled, region, accessToken, cloudUserId, printers[4]{serial,name}, printerCount, activePrinterIndex`. Max 4 config slots, safe unique serials. Physical concurrent-slot acceptance is currently required for the user's real 2-printer setup; do not claim 4 simultaneous sockets hardware-validated until tested.
+Schema v2: `enabled, region, accessToken, cloudUserId, printers[4]{serial,name}, printerCount, activePrinterIndex`. Max 4 config slots, safe unique serials. Direct hardware navigation exposes only the first two configured printer slots as pages; background runtime may still maintain all configured slots. Do not claim 4 simultaneous sockets hardware-validated until tested.
 
-Device switching:
-
-```text
-GPIO0 short  -> previous saved printer
-GPIO14 short -> next saved printer
-```
-
-Selection wraps and persists. **Switching active printer is local selection only: do not disconnect persistent MQTT slots, do not clear sibling state caches, do not bump a connection-affecting revision.** `snapshot()` / `status()` expose the selected slot cache/status. With fewer than 2 printers, switch is no-op.
+Direct navigation chooses Bambu page 0/1 by updating active index only. It must preserve all persistent MQTT sockets and sibling caches; no TLS/MQTT reconnect may be caused solely by moving between Bambu page 1 and 2.
 
 Rendering stays partial; whole-screen fill only explicit full redraw/first entry. Routine polling must not flash the screen.
 
@@ -103,4 +114,4 @@ Secret-safe serial markers include `slot=<n>` with mqtt_connect/ok/fail/subscrib
 
 ## Diagnostics / acceptance
 
-Physical acceptance must include: exact firmware/NVS preservation; 2 saved real printers both reach their own `mqtt_connect_ok slot=0/1` and `mqtt_pushall_initial`; then >=10 A↔B switches should create **no new mqtt_connect solely because of switching** and should feel near-immediate; per-slot live data/caches must not cross-contaminate; selected active index persists reboot; no periodic full-screen flash; >=10 min no watchdog/panic/automatic reboot; one slot reconnect must not drop the other; check Stock/Weather/HA coexistence and heap under 2 persistent MQTT/TLS slots.
+Physical acceptance must include: exact firmware/NVS preservation; startup on Weather; verify the full direct page order in both directions; verify absent stock/printer pages are skipped; both long presses remain no-op; with two saved real printers both reach their own `mqtt_connect_ok slot=0/1` and `mqtt_pushall_initial`; moving between Bambu page 1/2 must create no new mqtt_connect solely because of navigation; per-slot live data/caches must not cross-contaminate; no periodic whole-screen flash; >=10 min no watchdog/panic/automatic reboot; one slot reconnect must not drop the other; check Stock/Weather/HA coexistence and heap under two persistent MQTT/TLS slots.
