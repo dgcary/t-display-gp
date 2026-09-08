@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <time.h>
@@ -55,6 +56,19 @@ uint32_t nextResourceLogMs = 0;
 
 void startChinaTimeSync() { configTzTime("CST-8", "ntp.aliyun.com", "pool.ntp.org", "time.nist.gov"); }
 
+void logNetworkConfig() {
+  const String ip = WiFi.localIP().toString();
+  const String mask = WiFi.subnetMask().toString();
+  const String gateway = WiFi.gatewayIP().toString();
+  const String dns1 = WiFi.dnsIP(0).toString();
+  const String dns2 = WiFi.dnsIP(1).toString();
+  const String bssid = WiFi.BSSIDstr();
+  Serial.printf(
+      "[netcfg] ip=%s mask=%s gateway=%s dns1=%s dns2=%s bssid=%s ch=%d wifi=%d\n",
+      ip.c_str(), mask.c_str(), gateway.c_str(), dns1.c_str(), dns2.c_str(), bssid.c_str(),
+      static_cast<int>(WiFi.channel()), static_cast<int>(WiFi.status()));
+}
+
 const char* appName(AppId id) {
   switch (id) {
     case AppId::MENU: return "MENU";
@@ -93,6 +107,7 @@ void setup() {
     return;
   }
   Serial.println("[boot] provisioning complete; starting shared services");
+  logNetworkConfig();
   startChinaTimeSync();
   provisioning.beginWebPortal(appConfig);
   if (!sharedNetworkArbiter().begin()) {
