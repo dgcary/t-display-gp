@@ -147,46 +147,41 @@ Config replacement or device-side active-printer switching increments an externa
 
 MQTT auth rc 4/5 sets `TOKEN_INVALID` and marks current Token rejected; that same config is not retried. A new portal config revision (normally fresh Token) clears the latch and permits connection.
 
-When `mqtt.loop()` reports a lost connection the service records a network-error session and the current PubSubClient rc instead of leaving a stale ONLINE label. Reconnect cadence and keepalive remain explicit policy and must not be silently changed while diagnosing a physical-network problem.
+When `mqtt.loop()` reports a lost connection the service records a network-error session and the current PubSubClient rc instead of leaving a stale ONLINE label.
 
-## Layered connection diagnostics
+## Real TLS + MQTT connection contract
 
-The diagnostic revision augments MQTT connection attempts with a bounded preflight under the same `NetworkArbiter` lock:
+Physical layered diagnostics established that DNS, plain TCP and strict-CA TLS can succeed and that internal contiguous heap remains large enough. A 5 s PubSubClient socket timeout did not prevent a 16–25 s watchdog in the real connection path, so the observed block occurs before CONNACK wait, inside the implicit real `WiFiClientSecure::connect()`.
+
+The normal MQTT connection path therefore has this contract:
 
 ```text
-DNS resolution
-plain TCP :8883
-strict-CA TLS :8883
-real PubSubClient MQTT CONNECT
+allocate WiFiClientSecure
+set CA bundle + 5 s handshake/connect bound
+explicit tls_->connect(broker, 8883, 5000)
+if TLS fails: return bounded NETWORK_ERROR with numeric tls result
+construct PubSubClient over that already-connected Client
+allocate 40960-byte MQTT buffer
+MQTT CONNECT / CONNACK wait with MQTT_SOCKET_TIMEOUT=5
+subscribe report topic
+publish one read-only pushall
 ```
 
-The preflight is observability only. It must not skip the real MQTT CONNECT or change MQTT authentication. Both TLS preflight and the real MQTT socket use strict CA; no insecure fallback is permitted.
+PubSubClient must see the underlying Client already connected and must not open a second TLS socket. `runLayeredConnectionProbe(broker)` is not part of the normal reconnect path; its old DNS/TCP/TLS helper may exist only for deliberately scoped diagnostics.
 
 Secret-safe serial records:
 
 ```text
 [netcfg] ip mask gateway dns1 dns2 bssid ch wifi
-[bambu] mqtt_diag_heap phase=<before_probe|after_probe|after_mqtt_buffer> internal_free=<bytes> internal_largest=<bytes> dma_free=<bytes> heap_free=<bytes>
-[bambu] mqtt_diag_dns ok=<0|1> ip=<resolved-ip> elapsed_ms=<ms>
-[bambu] mqtt_diag_tcp ok=<0|1> ip=<resolved-ip|unresolved> port=8883 elapsed_ms=<ms>
-[bambu] mqtt_diag_tls ok=<0|1> tls=<numeric> elapsed_ms=<ms>
+[bambu] mqtt_diag_heap phase=<before_real_tls|after_real_tls|after_mqtt_buffer> internal_free=<bytes> internal_largest=<bytes> dma_free=<bytes> heap_free=<bytes>
+[bambu] mqtt_real_tls_begin broker=<host> timeout_ms=5000 heap=<bytes>
+[bambu] mqtt_real_tls_ok elapsed_ms=<ms> ...
+[bambu] mqtt_real_tls_fail tls=<numeric> elapsed_ms=<ms> ... internal_free=<bytes> internal_largest=<bytes> dma_free=<bytes>
 [bambu] mqtt_connect_ok elapsed_ms=<ms> ...
-[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<ms> ... internal_free=<bytes> internal_largest=<bytes> dma_free=<bytes>
+[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<ms> ...
 ```
 
-`internal_free` and `internal_largest` come from heap-capability queries for internal 8-bit memory; `dma_free` is DMA-capable free memory. This is required because total heap alone cannot prove that mbedTLS has a sufficiently large contiguous internal block.
-
-Interpretation contract:
-
-```text
-DNS fail                           => resolver/network-config layer
-DNS pass, TCP fail                 => socket/route/TCP layer
-TCP pass, strict TLS preflight fail=> TLS/CA/handshake/resource layer
-TLS preflight pass, real rc=-2     => compare post-MQTT-buffer memory and real-connect elapsed time
-TLS pass, MQTT rc 4/5              => authentication/Token layer
-```
-
-The plain TCP/TLS preflight intentionally creates additional short-lived connections while diagnostics are enabled. It is not a permanent connection optimization and must be reassessed/removed after the physical root cause is identified. Diagnostic instrumentation does not change 30 s keepalive, 30 s reconnect cadence, CA policy, Token policy or the single read-only publish rule.
+No Bambu code may disable/delete/reset watchdogs to hide a blocking transport call. Bambu TLS remains strict-CA; `setInsecure()` is forbidden. Keepalive = 30 s and reconnect cadence = 30 s unless a separately evidenced policy change is approved.
 
 All diagnostic lines must exclude Access Token, Cloud User ID, Cookie/Authorization, account data, raw authentication payloads and raw credential-bearing TLS error text. Broker hostname/resolved IP, elapsed time, numeric errors, Wi-Fi metadata and heap metrics are allowed.
 
@@ -206,7 +201,7 @@ DeviceInfo -> local-only
 Bad Apple -> local flash playback
 ```
 
-All ordinary short-lived external HTTP/TLS work serializes through `NetworkArbiter`. Bambu persistent MQTT holds it only for connect/reconnect handshake. The diagnostic DNS/TCP/TLS preflight is also executed inside that connection critical section to avoid overlapping other short-lived TLS handshakes.
+All ordinary short-lived external HTTP/TLS work serializes through `NetworkArbiter`. Bambu persistent MQTT holds it only for the single bounded real TLS/MQTT connect/reconnect handshake, then releases it while the established socket remains active.
 
 # Security
 

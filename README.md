@@ -77,25 +77,35 @@ Token 被 MQTT 以 rc 4/5 拒绝后进入 `token_invalid`，固件不会用旧 T
 
 Bambu MQTT 是设备级后台服务，离开 Bambu App 不断开；Stock/Weather/HA 仍可使用各自网络请求。
 
-### Bambu 分层网络诊断
+### Bambu MQTT TLS / watchdog 路径
 
-当前诊断版在每次 Cloud MQTT 建连尝试时，保留现有 CA/keepalive/reconnect/read-only 行为，同时额外输出 secret-safe 分层证据：
+真机诊断已经确认：DNS、plain TCP 8883、严格 CA TLS 都可以成功，且 MQTT buffer 后仍有足够 internal/largest block；把 PubSubClient CONNACK timeout 从 15 s 缩到 5 s 后 watchdog 时间没有变化，因此阻塞发生在 PubSubClient 等 CONNACK 之前的真实 `WiFiClientSecure::connect()` 路径。
+
+当前连接策略不再在每次重连前额外打开一条 TLS preflight。真实 MQTT socket 只建立一次：
 
 ```text
-[netcfg] ip=<...> mask=<...> gateway=<...> dns1=<...> dns2=<...> bssid=<...> ch=<...>
-[bambu] mqtt_diag_heap phase=before_probe internal_free=<...> internal_largest=<...> dma_free=<...> heap_free=<...>
-[bambu] mqtt_diag_dns ok=<0|1> ip=<resolved-ip> elapsed_ms=<...>
-[bambu] mqtt_diag_tcp ok=<0|1> ip=<resolved-ip> port=8883 elapsed_ms=<...>
-[bambu] mqtt_diag_tls ok=<0|1> tls=<numeric> elapsed_ms=<...>
-[bambu] mqtt_diag_heap phase=after_probe ...
-[bambu] mqtt_diag_heap phase=after_mqtt_buffer ...
-[bambu] mqtt_connect_ok elapsed_ms=<...> ...
-[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<...> internal_free=<...> internal_largest=<...> dma_free=<...>
+allocate WiFiClientSecure
+ -> strict CA + 5 s handshake/connect bound
+ -> explicit tls_->connect(broker, 8883, 5000)
+ -> construct PubSubClient on the already-connected TLS Client
+ -> allocate 40960-byte MQTT buffer
+ -> MQTT CONNECT / wait CONNACK (MQTT_SOCKET_TIMEOUT=5)
 ```
 
-诊断顺序是 DNS → plain TCP 8883 → strict-CA TLS preflight → 真实 PubSubClient MQTT CONNECT。这样可区分 DNS/TCP、TLS/内存和 MQTT 认证层。TLS probe 与真实 MQTT 都保持严格 CA，不允许 insecure fallback。
+PubSubClient 看到底层 `Client::connected()==true` 后不会再隐式建立第二条 TLS。没有关闭/删除/reset watchdog，也没有 insecure fallback。
 
-这组 plain TCP/TLS preflight 是**故障定位 instrumentation**，会在重连尝试中产生额外短连接；它不是最终长期连接策略。获得真机根因后应重新评估是否移除 probe。诊断本身不修改 30 s MQTT keepalive、30 s reconnect、CA、Token 或 read-only publish policy。
+Secret-safe 串口关键标记：
+
+```text
+[bambu] mqtt_real_tls_begin ...
+[bambu] mqtt_real_tls_ok elapsed_ms=<...> ...
+[bambu] mqtt_real_tls_fail tls=<numeric> elapsed_ms=<...> ...
+[bambu] mqtt_diag_heap phase=<before_real_tls|after_real_tls|after_mqtt_buffer> ...
+[bambu] mqtt_connect_ok elapsed_ms=<...> ...
+[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<...> ...
+```
+
+旧的 DNS/TCP/TLS layered probe helper 只保留作后续定向诊断，不在正常 MQTT reconnect 路径中调用，避免额外短连接改变 broker/ESP32 时序。30 s keepalive、30 s reconnect、CA、Token 和 read-only publish policy 不变。
 
 所有日志禁止输出 Token、Cloud User ID、Cookie/Authorization、认证载荷或 TLS error text；仅允许数值错误、目标 broker/IP、耗时和资源指标。
 
@@ -138,7 +148,7 @@ DeviceInfo -> local-only
 Bad Apple -> local flash playback
 ```
 
-短生命周期 HTTP/TLS 与 MQTT connect/reconnect handshake 经过 `NetworkArbiter`；已建立的持久 MQTT socket 不长期占用 arbiter。诊断版的 DNS/TCP/TLS preflight 也在同一个 arbiter 临界区内，避免与其他短生命周期 TLS handshake 并发。
+短生命周期 HTTP/TLS 与 MQTT connect/reconnect handshake 经过 `NetworkArbiter`；已建立的持久 MQTT socket 不长期占用 arbiter。Bambu 正常连接路径只建立并复用一条真实严格 CA TLS socket，不在其前面执行额外 TLS preflight。
 
 ## Build / Verification
 
@@ -149,6 +159,7 @@ python tools/validate_http_transport_contract.py
 python tools/validate_app_shell_contract.py
 python tools/validate_dashboard_apps_contract.py
 python tools/validate_bambu_cloud_contract.py
+python tools/validate_bambu_pubsub_timeout_contract.py
 python tools/validate_bad_apple_contract.py
 pio test -e native
 python tools/prepare_bad_apple_asset.py

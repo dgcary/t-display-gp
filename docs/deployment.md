@@ -13,6 +13,7 @@ python tools/validate_http_transport_contract.py
 python tools/validate_app_shell_contract.py
 python tools/validate_dashboard_apps_contract.py
 python tools/validate_bambu_cloud_contract.py
+python tools/validate_bambu_pubsub_timeout_contract.py
 python tools/validate_bad_apple_contract.py
 pio test -e native
 python tools/prepare_bad_apple_asset.py
@@ -103,42 +104,52 @@ If the Token is rejected with MQTT rc 4/5, service enters `token_invalid` and st
 
 Legacy Bambu NVS schema v1 is migrated to v2 when possible. Reusable Token/User ID/single printer are retained; account/password are dropped.
 
-### Layered MQTT/TLS diagnostic firmware
+### MQTT TLS/watchdog connection path
 
-When the Cloud MQTT problem cannot be localized from `rc=-2` / numeric TLS error alone, the diagnostic build performs one bounded preflight inside the same `NetworkArbiter` critical section before the real MQTT CONNECT:
+Physical diagnostics on the previous layered builds established:
 
 ```text
-DNS resolve broker
-plain TCP connect broker:8883
-strict-CA TLS preflight broker:8883
-real PubSubClient MQTT CONNECT
+DNS PASS
+plain TCP 8883 PASS
+strict-CA TLS preflight PASS
+internal_largest ≈180 KB after 40960-byte MQTT buffer
+real MQTT call blocks before returning rc
+CPU0 bambu-mqtt trips task watchdog
 ```
+
+A second A/B build changed only PubSubClient `MQTT_SOCKET_TIMEOUT` to 5 s. The watchdog still occurred around 16–25 s and no rc=-4 was returned, proving the block occurs before PubSubClient's CONNACK wait, inside the real TLS connect path.
+
+Current candidate therefore removes the extra per-attempt TLS preflight from the normal reconnect path and establishes the one real MQTT TLS connection explicitly:
+
+```text
+WiFiClientSecure allocation
+strict CA bundle
+handshake/connect bound = 5000 ms
+explicit tls_->connect(broker, 8883, 5000)
+PubSubClient constructed over the already-connected TLS Client
+40960-byte MQTT buffer allocation
+MQTT CONNECT with MQTT_SOCKET_TIMEOUT=5
+```
+
+This is not a watchdog workaround: watchdogs remain enabled and are never deleted/reset from Bambu code. CA, Token, 30 s keepalive, 30 s reconnect cadence and the read-only publish rule remain unchanged.
 
 Serial 115200 should show:
 
 ```text
 [netcfg] ip=<...> mask=<...> gateway=<...> dns1=<...> dns2=<...> bssid=<...> ch=<...> wifi=<...>
-[bambu] mqtt_diag_heap phase=before_probe internal_free=<...> internal_largest=<...> dma_free=<...> heap_free=<...>
-[bambu] mqtt_diag_dns ok=<0|1> ip=<resolved-ip> elapsed_ms=<...>
-[bambu] mqtt_diag_tcp ok=<0|1> ip=<resolved-ip> port=8883 elapsed_ms=<...>
-[bambu] mqtt_diag_tls ok=<0|1> tls=<numeric> elapsed_ms=<...>
-[bambu] mqtt_diag_heap phase=after_probe ...
+[bambu] mqtt_diag_heap phase=before_real_tls internal_free=<...> internal_largest=<...> dma_free=<...> heap_free=<...>
+[bambu] mqtt_real_tls_begin broker=<...> timeout_ms=5000 heap=<...>
+[bambu] mqtt_real_tls_ok elapsed_ms=<...> ...
+# or
+[bambu] mqtt_real_tls_fail tls=<numeric> elapsed_ms=<...> ...
+[bambu] mqtt_diag_heap phase=after_real_tls ...
 [bambu] mqtt_diag_heap phase=after_mqtt_buffer ...
 [bambu] mqtt_connect_ok elapsed_ms=<...> ...
-[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<...> internal_free=<...> internal_largest=<...> dma_free=<...>
+# or
+[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<...> ...
 ```
 
-Interpretation:
-
-```text
-DNS fail                         -> resolver/network config layer
-DNS pass + TCP fail             -> route/socket/TCP layer
-TCP pass + strict TLS fail      -> TLS/CA/handshake/resource layer
-TLS preflight pass + real rc=-2 -> compare after_mqtt_buffer heap/largest block and real-connect elapsed
-TLS pass + rc 4/5               -> MQTT authentication / Token layer
-```
-
-The probes are diagnostic instrumentation only and intentionally create extra short-lived TCP/TLS connections during reconnect attempts. They are not a permanent optimization or fallback. Do not use them to justify disabling CA, changing Token handling or adding new publishes. Keep MQTT keepalive = 30 s and reconnect cadence = 30 s unless later physical evidence supports a separate policy change.
+The old layered DNS/TCP/TLS probe helper is no longer called by the normal MQTT path. Do not reinsert an extra TLS preflight before every MQTT connection unless doing a deliberately scoped diagnostic experiment.
 
 Never include Access Token, Cloud User ID, Cookie/Authorization, account data, auth payloads or raw credential-bearing TLS error text in logs. Numeric errors, broker/IP, elapsed time and heap metrics are allowed.
 
@@ -149,16 +160,17 @@ Never include Access Token, Cloud User ID, Cookie/Authorization, account data, a
 3. Weather/Bad Apple and HA regression.
 4. Open `:8081`; confirm Manual Token UI and four printer slots.
 5. Paste Token locally, configure two printers and select printer A; Save.
-6. Confirm MQTT online and printer A state.
-7. In the Bambu app short-press GPIO14; confirm device switches A→B, clears A state, persists B and reconnects without reboot/login.
-8. Short-press GPIO0; confirm B→A wrap/persistence/reconnect. With only one saved printer, both short presses must be no-op.
-9. Observe Bambu screen while idle and during live updates; it must not flash the entire display on a 500 ms cadence.
-10. Return to `:8081`, change active selection and Save; web switching must still work without reboot/login.
-11. Optionally test explicit discovery once; verify it populates form but does not overwrite saved config until Save.
-12. Reboot with NVS preserved; saved Token/list/active printer should restore.
-13. Leave Bambu app and verify background freshness while Stock/Weather/HA remain usable.
-14. For any MQTT failure, preserve one complete `[netcfg]` + `mqtt_diag_heap/dns/tcp/tls` + real `mqtt_connect_*` sequence. Correlate it with `/api/bambu/status` and, where available, firewall/PC-side evidence before changing policy.
-15. Wi-Fi loss/recovery must reconnect without panic/watchdog/heap leak.
-16. Token-invalid test only if safe; do not intentionally lock the account.
+6. Confirm one `mqtt_real_tls_begin` attempt returns `mqtt_real_tls_ok` or bounded `mqtt_real_tls_fail` without watchdog.
+7. If TLS succeeds, confirm MQTT returns `mqtt_connect_ok` or a bounded `mqtt_connect_fail`; it must not hang CPU0.
+8. Confirm MQTT online and printer A state when credentials/broker accept the connection.
+9. In the Bambu app short-press GPIO14; confirm device switches A→B, clears A state, persists B and reconnects without reboot/login.
+10. Short-press GPIO0; confirm B→A wrap/persistence/reconnect. With only one saved printer, both short presses must be no-op.
+11. Observe Bambu screen while idle and during live updates; it must not flash the entire display on a 500 ms cadence.
+12. Return to `:8081`, change active selection and Save; web switching must still work without reboot/login.
+13. Optionally test explicit discovery once; verify it populates form but does not overwrite saved config until Save.
+14. Reboot with NVS preserved; saved Token/list/active printer should restore.
+15. Leave Bambu app and verify background freshness while Stock/Weather/HA remain usable.
+16. Wi-Fi loss/recovery must reconnect without panic/watchdog/heap leak.
+17. Token-invalid test only if safe; do not intentionally lock the account.
 
 See `docs/hardware-acceptance.md`.

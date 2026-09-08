@@ -124,61 +124,56 @@ Only test safely. If MQTT returns auth rc 4/5:
 
 Do not intentionally trigger account lockout or repeatedly use bad Tokens.
 
-## MQTT stability diagnostics — layered diagnostic build
+## MQTT stability — single real TLS acceptance
 
-For an intermittent MQTT problem, collect evidence before changing CA/keepalive/reconnect policy.
+Previous physical evidence has already established that DNS, plain TCP 8883 and a strict-CA TLS handshake can succeed and that internal contiguous heap is not exhausted. It also established that shortening only PubSubClient's CONNACK timeout to 5 s did not stop the watchdog, so the blocked boundary was the real implicit TLS connection before CONNACK.
 
-At boot capture the startup network snapshot:
-
-```text
-[netcfg] ip=<...> mask=<...> gateway=<...> dns1=<...> dns2=<...> bssid=<...> ch=<...> wifi=<...>
-```
-
-For every failed/suspect MQTT attempt preserve one complete diagnostic sequence:
+The candidate under test must use only one real TLS connection for the normal MQTT path:
 
 ```text
 [bambu] mqtt_connect ...
-[bambu] mqtt_diag_heap phase=before_probe internal_free=<...> internal_largest=<...> dma_free=<...> heap_free=<...>
-[bambu] mqtt_diag_dns ok=<0|1> ip=<...> elapsed_ms=<...>
-[bambu] mqtt_diag_tcp ok=<0|1> ip=<...> port=8883 elapsed_ms=<...>
-[bambu] mqtt_diag_tls ok=<0|1> tls=<numeric> elapsed_ms=<...>
-[bambu] mqtt_diag_heap phase=after_probe ...
+[bambu] mqtt_diag_heap phase=before_real_tls ...
+[bambu] mqtt_real_tls_begin broker=<...> timeout_ms=5000 ...
+[bambu] mqtt_real_tls_ok elapsed_ms=<...> ...
+# or bounded mqtt_real_tls_fail
+[bambu] mqtt_diag_heap phase=after_real_tls ...
 [bambu] mqtt_diag_heap phase=after_mqtt_buffer ...
 [bambu] mqtt_connect_ok elapsed_ms=<...> ...
-# or
-[bambu] mqtt_connect_fail rc=<...> tls=<numeric> elapsed_ms=<...> internal_free=<...> internal_largest=<...> dma_free=<...>
+# or bounded mqtt_connect_fail rc=<...> ...
 ```
 
-The sequence deliberately distinguishes:
+Acceptance requirements:
+
+- no routine `mqtt_diag_dns/tcp/tls` preflight sequence before the real MQTT connection;
+- `mqtt_real_tls_begin` must return as `mqtt_real_tls_ok` or `mqtt_real_tls_fail` without a task watchdog reboot;
+- TLS connect is strict-CA and bounded at 5000 ms;
+- if `mqtt_real_tls_ok` occurs, PubSubClient must reuse that socket rather than opening a second TLS connection;
+- MQTT CONNECT/CONNACK wait is bounded by `MQTT_SOCKET_TIMEOUT=5`;
+- no `disableCore*WDT`, `disableLoopWDT`, `esp_task_wdt_delete` or `esp_task_wdt_reset` workaround;
+- no Token/User ID/Cookie/Authorization/account data in serial;
+- no raw auth payloads or credential-bearing TLS error text;
+- keepalive remains 30 s, reconnect cadence remains 30 s, receive buffer remains 40960 bytes, only read-only pushall is published.
+
+Interpretation:
 
 ```text
-DNS
- -> plain TCP 8883
- -> strict-CA TLS preflight
- -> real MQTT CONNECT
+mqtt_real_tls_fail within <=~5 s
+  -> transport/TLS layer failure is bounded and no longer allowed to hang CPU0
+
+mqtt_real_tls_ok + mqtt_connect_fail rc=-4 near <=~5 s
+  -> TLS completed; broker did not return CONNACK within PubSub timeout
+
+mqtt_real_tls_ok + mqtt_connect_fail rc=4/5
+  -> MQTT authentication/Token rejection
+
+mqtt_connect_ok
+  -> continue long-run stability and live-state acceptance
+
+watchdog before either bounded return
+  -> FAIL; capture full log and do not mask it by feeding/disabling watchdog
 ```
 
-Acceptance interpretation:
-
-- DNS failure: resolver/network configuration layer not proven healthy.
-- DNS pass + plain TCP failure: route/socket/TCP layer is the failing boundary; do not debug Token first.
-- TCP pass + strict TLS preflight failure: focus on TLS handshake/CA/resource conditions.
-- TLS preflight pass but real MQTT returns rc=-2: compare `after_mqtt_buffer` internal/largest-block data and the real-connect elapsed time; this is where MQTT-buffer/resource interaction becomes a valid hypothesis.
-- TLS pass + MQTT rc 4/5: only then classify the Token/authentication layer.
-
-`internal_largest` is required. A healthy total/free heap alone is not sufficient evidence against mbedTLS allocation fragmentation.
-
-The diagnostic preflight intentionally creates extra short-lived TCP/TLS connections during reconnect attempts. That traffic is acceptable only for diagnosis; it must not be treated as the final stable architecture without a separate review after root cause is established.
-
-At the same time, when topology permits, sample `/api/bambu/status` every ~2 s and record `session`, `mqtt_connected`, `last_mqtt_rc`, active printer and timestamps. Firewall/PC-side evidence may be correlated, but a PC on another VLAN is not proof of the device VLAN path.
-
-Acceptance of diagnostics/security:
-
-- no Token/User ID/Cookie/Authorization/account data in serial;
-- no raw authentication payloads or credential-bearing TLS error text;
-- TLS preflight and real Bambu HTTPS/MQTT keep strict CA verification;
-- `mqtt_loop_lost` must stop presenting stale ONLINE state;
-- diagnostic firmware must not change 30 s keepalive, 30 s reconnect cadence, Token policy or read-only publish policy.
+At the same time, when topology permits, sample `/api/bambu/status` every ~2 s and record `session`, `mqtt_connected`, `last_mqtt_rc`, active printer and timestamps.
 
 ## Live state
 
@@ -235,9 +230,7 @@ BAMBU EXPLICIT DISCOVERY: PASS/FAIL/NOT TESTED
 BAMBU MQTT: PASS/FAIL
 BAMBU MQTT DROP COUNT / DURATION:
 NETCFG:
-BAMBU DIAG DNS:
-BAMBU DIAG TCP:
-BAMBU DIAG TLS:
+BAMBU REAL TLS RESULT / ELAPSED / TLS CODE:
 BAMBU INTERNAL HEAP FREE/LARGEST:
 BAMBU DMA HEAP FREE:
 BAMBU REAL MQTT CONNECT ELAPSED/RC:
