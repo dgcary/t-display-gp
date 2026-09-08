@@ -9,6 +9,7 @@ python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 python tools/validate_app_shell_contract.py
+python tools/validate_direct_navigation_contract.py
 python tools/validate_dashboard_apps_contract.py
 python tools/validate_bambu_cloud_contract.py
 python tools/validate_bambu_pubsub_timeout_contract.py
@@ -20,24 +21,38 @@ pio run -e lilygo-t-display-s3
 
 Normal flash: verify manifest source/firmware SHA; write only `firmware.bin` at manifest offset (normally `0x10000`); preserve NVS/bootloader/partition table. Serial 115200.
 
-## UI / integrations
+## Direct page UI / integrations
 
-Startup Stock; menu exactly `股票 / 天气 / Bambu Lab / 智能家居 / 设备信息`; no auto idle switch.
+Runtime menu is removed. Startup is Weather. Button behavior:
 
-Trusted-LAN integrations page: `http://<device-ip>:8081/`.
+```text
+GPIO0 short  previous page
+GPIO14 short next page
+GPIO0 long   no-op
+GPIO14 long  no-op
+```
 
-HA is read-only. Bambu is Manual Token only: no password/SMS/email/TFA/automatic renewal. User pastes browser token locally, configures up to four `name + Serial` slots, and chooses active printer. Token must never appear in ChatGPT/Codex prompts, screenshots, serial logs or GitHub.
+The flattened page order is:
+
+```text
+Weather
+-> Stock1 -> Stock2 -> Stock3 -> Stock4
+-> Bambu1 -> Bambu2
+-> Home Assistant
+-> Device Info
+-> Weather
+```
+
+Only configured pages are present. Direct navigation exposes at most the first 4 configured stocks and first 2 configured Bambu printers; missing stock/printer slots are skipped automatically. Same-app page changes stay inside that app and do not exit/re-enter it. Configuration is still edited through the device Web portals rather than buttons.
+
+Stock/weather configuration: `http://<device-ip>/`.
+Trusted-LAN integrations page for HA/Bambu: `http://<device-ip>:8081/`.
+
+HA is read-only. Bambu is Manual Token only: no password/SMS/email/TFA/automatic renewal. User pastes browser token locally. Token must never appear in ChatGPT/Codex prompts, screenshots, serial logs or GitHub.
 
 Bambu routes: status, printers, discover, config, logout. Old login/verify/resend routes remain retired. Discovery is explicit and not persistent until Save.
 
-On-device active selection:
-
-```text
-GPIO0 short  previous printer
-GPIO14 short next printer
-```
-
-Selection wraps and persists. It does **not** tear down MQTT when the configured printer set/credentials/region are unchanged.
+Selecting Bambu page 1/2 changes only the active printer index. If the configured printer set/credentials/region are unchanged, it must **not** tear down persistent MQTT/TLS slots. The active index remains persisted through the existing Bambu config path.
 
 ## Bambu MQTT runtime
 
@@ -86,14 +101,16 @@ Never log Token, Cloud User ID, Cookie/Authorization or auth payloads.
 ## Physical smoke
 
 1. Flash exact-head application at `0x10000`, preserve NVS.
-2. Verify normal UI plus Bambu anti-flicker regression.
-3. With two saved printers, wait until both slot 0 and slot 1 have `mqtt_connect_ok` and initial pushall/report state.
-4. Perform >=10 A↔B switches. Switch itself must not emit a fresh `mqtt_connect` when both slots are already online; display should change on the next normal render cadence rather than waiting for TLS/MQTT/pushall.
-5. Verify correct per-printer cached data and no cross-contamination.
-6. Leave selected printer on B, reboot without erase, confirm B remains selected after boot.
-7. Observe >=10 minutes: 0 watchdog, 0 panic, 0 automatic reboot, heap not monotonically declining.
-8. If one slot naturally drops, confirm only that slot reconnects while the sibling remains alive.
-9. Test Stock/Weather/HA coexistence because two persistent TLS/MQTT slots increase resource pressure.
-10. Code supports up to 4 configured slots, but do not claim 4 simultaneous hardware acceptance until separately tested.
+2. Verify startup lands directly on Weather and no menu appears.
+3. Walk forward and backward through the exact configured page chain. If only 3 stocks exist, Stock4 must be absent; if only 1 Bambu printer exists, Bambu2 must be absent.
+4. Verify both long presses are no-op.
+5. With two saved printers, wait until both slot 0 and slot 1 have `mqtt_connect_ok` and initial pushall/report state.
+6. Move Bambu1 -> Bambu2 -> Bambu1 repeatedly. Navigation itself must not emit a fresh `mqtt_connect` when both slots were already online; target cached data should appear on the next UI cadence.
+7. Verify correct per-printer cached data and no cross-contamination.
+8. Observe >=10 minutes: 0 watchdog, 0 panic, 0 automatic reboot, heap not monotonically declining.
+9. If one slot naturally drops, confirm only that slot reconnects while the sibling remains alive.
+10. Test Stock/Weather/HA coexistence because persistent TLS/MQTT slots increase resource pressure.
+
+Bambu configuration can still contain up to 4 printers, but direct navigation intentionally exposes only the first 2. Stock configuration may contain the existing supported count, but direct navigation intentionally exposes only the first 4.
 
 See `docs/hardware-acceptance.md` for the full checklist.
