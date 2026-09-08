@@ -26,6 +26,7 @@ constexpr uint32_t BAMBU_MQTT_RECONNECT_MS = 30000U;
 constexpr uint32_t BAMBU_TASK_SLEEP_MS = 50U;
 constexpr uint32_t BAMBU_WIFI_WAIT_MS = 500U;
 constexpr int32_t BAMBU_DIAG_PROBE_TIMEOUT_MS = 5000;
+constexpr int32_t BAMBU_REAL_TLS_TIMEOUT_MS = 5000;
 
 class NetworkRequestGuard {
  public:
@@ -58,6 +59,10 @@ void logHeapDiagnostic(const char* phase) {
       static_cast<unsigned>(dmaFree), static_cast<unsigned>(esp_get_free_heap_size()));
 }
 
+// Retained as a diagnostic helper for future targeted tests, but deliberately
+// not called by the normal MQTT path. Physical testing showed that opening and
+// closing a TLS preflight immediately before the real MQTT TLS connection can
+// perturb timing and make the second connection block long enough to trip WDT.
 void runLayeredConnectionProbe(const char* broker) {
   logHeapDiagnostic("before_probe");
 
@@ -282,13 +287,41 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
                 broker, static_cast<int>(WiFi.status()), WiFi.RSSI(),
                 static_cast<unsigned>(esp_get_free_heap_size()));
 
-  runLayeredConnectionProbe(broker);
-
   tls_ = new (std::nothrow) WiFiClientSecure();
   if (!tls_) { setSession(BambuSessionState::BUFFER_ERROR); return false; }
   tls_->setCACertBundle(rootca_crt_bundle_start);
   tls_->setHandshakeTimeout(BuildConfig::HTTP_TLS_HANDSHAKE_TIMEOUT_SEC);
-  tls_->setTimeout(15);
+  tls_->setTimeout(5);
+
+  logHeapDiagnostic("before_real_tls");
+  Serial.printf("[bambu] mqtt_real_tls_begin broker=%s timeout_ms=%ld heap=%u\n",
+                broker, static_cast<long>(BAMBU_REAL_TLS_TIMEOUT_MS),
+                static_cast<unsigned>(esp_get_free_heap_size()));
+  const uint32_t realTlsStartedMs = millis();
+  const int realTlsOk = tls_->connect(broker, BAMBU_MQTT_PORT, BAMBU_REAL_TLS_TIMEOUT_MS);
+  const uint32_t realTlsElapsedMs = static_cast<uint32_t>(millis() - realTlsStartedMs);
+  if (realTlsOk != 1) {
+    char tlsErrorText[96] = {};
+    const int tlsError = tls_->lastError(tlsErrorText, sizeof(tlsErrorText));
+    const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t internalLargest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    Serial.printf(
+        "[bambu] mqtt_real_tls_fail tls=%d elapsed_ms=%lu wifi=%d rssi=%d heap=%u internal_free=%u internal_largest=%u dma_free=%u\n",
+        tlsError, static_cast<unsigned long>(realTlsElapsedMs), static_cast<int>(WiFi.status()),
+        WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()),
+        static_cast<unsigned>(internalFree), static_cast<unsigned>(internalLargest),
+        static_cast<unsigned>(dmaFree));
+    setSession(BambuSessionState::NETWORK_ERROR, -2);
+    disconnectMqtt();
+    return false;
+  }
+  Serial.printf("[bambu] mqtt_real_tls_ok elapsed_ms=%lu rssi=%d heap=%u\n",
+                static_cast<unsigned long>(realTlsElapsedMs), WiFi.RSSI(),
+                static_cast<unsigned>(esp_get_free_heap_size()));
+  logHeapDiagnostic("after_real_tls");
+
   mqtt_ = new (std::nothrow) PubSubClient(*tls_);
   if (!mqtt_) { disconnectMqtt(); setSession(BambuSessionState::BUFFER_ERROR); return false; }
   mqtt_->setServer(broker, BAMBU_MQTT_PORT);
