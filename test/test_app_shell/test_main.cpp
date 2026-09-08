@@ -73,6 +73,16 @@ void test_defaults_to_stock_and_enters_once() {
   TEST_ASSERT_EQUAL_INT(0, f.homeAssistant.enters);
 }
 
+void test_next_short_on_weather_switches_to_stock_globally() {
+  ShellFixture f;
+  f.manager.begin(AppId::WEATHER);
+  f.manager.onInput(InputEvent::NEXT_SHORT);
+  TEST_ASSERT_EQUAL(AppId::STOCK, f.manager.activeAppId());
+  TEST_ASSERT_EQUAL_INT(1, f.weather.exits);
+  TEST_ASSERT_EQUAL_INT(0, f.weather.buttons);
+  TEST_ASSERT_EQUAL_INT(1, f.stock.enters);
+}
+
 void test_prev_long_returns_to_menu_and_does_not_reach_stock() {
   ShellFixture f;
   f.manager.begin(AppId::STOCK);
@@ -186,6 +196,7 @@ void test_device_info_remains_active_across_millis_wrap() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_defaults_to_stock_and_enters_once);
+  RUN_TEST(test_next_short_on_weather_switches_to_stock_globally);
   RUN_TEST(test_prev_long_returns_to_menu_and_does_not_reach_stock);
   RUN_TEST(test_menu_selection_wraps_and_enters_bambu_in_final_order);
   RUN_TEST(test_menu_wraps_across_five_apps);
