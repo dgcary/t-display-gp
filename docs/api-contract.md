@@ -1,6 +1,6 @@
 # Data Provider / HTTP API Contract
 
-Status date: 2026-09-07
+Status date: 2026-09-08
 
 Remote payloads stay behind provider/service abstractions. UI consumes structured state.
 
@@ -149,17 +149,46 @@ MQTT auth rc 4/5 sets `TOKEN_INVALID` and marks current Token rejected; that sam
 
 When `mqtt.loop()` reports a lost connection the service records a network-error session and the current PubSubClient rc instead of leaving a stale ONLINE label. Reconnect cadence and keepalive remain explicit policy and must not be silently changed while diagnosing a physical-network problem.
 
-Secret-safe MQTT diagnostics may contain only connection layer metadata:
+## Layered connection diagnostics
+
+The diagnostic revision augments MQTT connection attempts with a bounded preflight under the same `NetworkArbiter` lock:
 
 ```text
-mqtt_connect: broker, Wi-Fi status, RSSI, free heap
-mqtt_connect_ok: RSSI, free heap
-mqtt_connect_fail: MQTT rc, numeric TLS error, Wi-Fi status, RSSI, free heap
-mqtt_subscribe_fail: MQTT rc, Wi-Fi status, RSSI, free heap
-mqtt_loop_lost: MQTT rc, Wi-Fi status, RSSI, free heap
+DNS resolution
+plain TCP :8883
+strict-CA TLS :8883
+real PubSubClient MQTT CONNECT
 ```
 
-They must not contain Access Token, Cloud User ID, Cookie/Authorization, account data, raw authentication payloads or raw credential-bearing headers.
+The preflight is observability only. It must not skip the real MQTT CONNECT or change MQTT authentication. Both TLS preflight and the real MQTT socket use strict CA; no insecure fallback is permitted.
+
+Secret-safe serial records:
+
+```text
+[netcfg] ip mask gateway dns1 dns2 bssid ch wifi
+[bambu] mqtt_diag_heap phase=<before_probe|after_probe|after_mqtt_buffer> internal_free=<bytes> internal_largest=<bytes> dma_free=<bytes> heap_free=<bytes>
+[bambu] mqtt_diag_dns ok=<0|1> ip=<resolved-ip> elapsed_ms=<ms>
+[bambu] mqtt_diag_tcp ok=<0|1> ip=<resolved-ip|unresolved> port=8883 elapsed_ms=<ms>
+[bambu] mqtt_diag_tls ok=<0|1> tls=<numeric> elapsed_ms=<ms>
+[bambu] mqtt_connect_ok elapsed_ms=<ms> ...
+[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<ms> ... internal_free=<bytes> internal_largest=<bytes> dma_free=<bytes>
+```
+
+`internal_free` and `internal_largest` come from heap-capability queries for internal 8-bit memory; `dma_free` is DMA-capable free memory. This is required because total heap alone cannot prove that mbedTLS has a sufficiently large contiguous internal block.
+
+Interpretation contract:
+
+```text
+DNS fail                           => resolver/network-config layer
+DNS pass, TCP fail                 => socket/route/TCP layer
+TCP pass, strict TLS preflight fail=> TLS/CA/handshake/resource layer
+TLS preflight pass, real rc=-2     => compare post-MQTT-buffer memory and real-connect elapsed time
+TLS pass, MQTT rc 4/5              => authentication/Token layer
+```
+
+The plain TCP/TLS preflight intentionally creates additional short-lived connections while diagnostics are enabled. It is not a permanent connection optimization and must be reassessed/removed after the physical root cause is identified. Diagnostic instrumentation does not change 30 s keepalive, 30 s reconnect cadence, CA policy, Token policy or the single read-only publish rule.
+
+All diagnostic lines must exclude Access Token, Cloud User ID, Cookie/Authorization, account data, raw authentication payloads and raw credential-bearing TLS error text. Broker hostname/resolved IP, elapsed time, numeric errors, Wi-Fi metadata and heap metrics are allowed.
 
 Network disconnects preserve last valid state except deliberate active-printer change, where state is cleared to prevent showing one printer's data under another printer's name.
 
@@ -177,7 +206,7 @@ DeviceInfo -> local-only
 Bad Apple -> local flash playback
 ```
 
-All ordinary short-lived external HTTP/TLS work serializes through `NetworkArbiter`. Bambu persistent MQTT holds it only for connect/reconnect handshake.
+All ordinary short-lived external HTTP/TLS work serializes through `NetworkArbiter`. Bambu persistent MQTT holds it only for connect/reconnect handshake. The diagnostic DNS/TCP/TLS preflight is also executed inside that connection critical section to avoid overlapping other short-lived TLS handshakes.
 
 # Security
 
