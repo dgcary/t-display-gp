@@ -124,28 +124,61 @@ Only test safely. If MQTT returns auth rc 4/5:
 
 Do not intentionally trigger account lockout or repeatedly use bad Tokens.
 
-## MQTT stability diagnostics
+## MQTT stability diagnostics — layered diagnostic build
 
 For an intermittent MQTT problem, collect evidence before changing CA/keepalive/reconnect policy.
 
-Run serial 115200 and preserve all secret-safe `[bambu]` lines around each transition:
+At boot capture the startup network snapshot:
 
 ```text
-mqtt_connect
-mqtt_connect_ok
-mqtt_connect_fail rc=<...> tls=<numeric> wifi=<...> rssi=<...> heap=<...>
-mqtt_subscribe_fail
-mqtt_loop_lost
+[netcfg] ip=<...> mask=<...> gateway=<...> dns1=<...> dns2=<...> bssid=<...> ch=<...> wifi=<...>
 ```
 
-At the same time sample `/api/bambu/status` every ~2 s and record `session`, `mqtt_connected`, `last_mqtt_rc`, active printer and timestamps. During a drop also verify whether 8081/ping/Stock/Weather still work, and from a PC test DNS plus TCP/TLS reachability to the selected regional broker on 8883.
+For every failed/suspect MQTT attempt preserve one complete diagnostic sequence:
+
+```text
+[bambu] mqtt_connect ...
+[bambu] mqtt_diag_heap phase=before_probe internal_free=<...> internal_largest=<...> dma_free=<...> heap_free=<...>
+[bambu] mqtt_diag_dns ok=<0|1> ip=<...> elapsed_ms=<...>
+[bambu] mqtt_diag_tcp ok=<0|1> ip=<...> port=8883 elapsed_ms=<...>
+[bambu] mqtt_diag_tls ok=<0|1> tls=<numeric> elapsed_ms=<...>
+[bambu] mqtt_diag_heap phase=after_probe ...
+[bambu] mqtt_diag_heap phase=after_mqtt_buffer ...
+[bambu] mqtt_connect_ok elapsed_ms=<...> ...
+# or
+[bambu] mqtt_connect_fail rc=<...> tls=<numeric> elapsed_ms=<...> internal_free=<...> internal_largest=<...> dma_free=<...>
+```
+
+The sequence deliberately distinguishes:
+
+```text
+DNS
+ -> plain TCP 8883
+ -> strict-CA TLS preflight
+ -> real MQTT CONNECT
+```
+
+Acceptance interpretation:
+
+- DNS failure: resolver/network configuration layer not proven healthy.
+- DNS pass + plain TCP failure: route/socket/TCP layer is the failing boundary; do not debug Token first.
+- TCP pass + strict TLS preflight failure: focus on TLS handshake/CA/resource conditions.
+- TLS preflight pass but real MQTT returns rc=-2: compare `after_mqtt_buffer` internal/largest-block data and the real-connect elapsed time; this is where MQTT-buffer/resource interaction becomes a valid hypothesis.
+- TLS pass + MQTT rc 4/5: only then classify the Token/authentication layer.
+
+`internal_largest` is required. A healthy total/free heap alone is not sufficient evidence against mbedTLS allocation fragmentation.
+
+The diagnostic preflight intentionally creates extra short-lived TCP/TLS connections during reconnect attempts. That traffic is acceptable only for diagnosis; it must not be treated as the final stable architecture without a separate review after root cause is established.
+
+At the same time, when topology permits, sample `/api/bambu/status` every ~2 s and record `session`, `mqtt_connected`, `last_mqtt_rc`, active printer and timestamps. Firewall/PC-side evidence may be correlated, but a PC on another VLAN is not proof of the device VLAN path.
 
 Acceptance of diagnostics/security:
 
 - no Token/User ID/Cookie/Authorization/account data in serial;
+- no raw authentication payloads or credential-bearing TLS error text;
+- TLS preflight and real Bambu HTTPS/MQTT keep strict CA verification;
 - `mqtt_loop_lost` must stop presenting stale ONLINE state;
-- rc=-2 alone is not enough to call the Token invalid; correlate with numeric TLS error, Wi-Fi/RSSI/heap and PC network tests;
-- diagnostic firmware must not silently disable CA verification.
+- diagnostic firmware must not change 30 s keepalive, 30 s reconnect cadence, Token policy or read-only publish policy.
 
 ## Live state
 
@@ -201,6 +234,13 @@ BAMBU WHOLE-SCREEN FLICKER: PASS/FAIL
 BAMBU EXPLICIT DISCOVERY: PASS/FAIL/NOT TESTED
 BAMBU MQTT: PASS/FAIL
 BAMBU MQTT DROP COUNT / DURATION:
+NETCFG:
+BAMBU DIAG DNS:
+BAMBU DIAG TCP:
+BAMBU DIAG TLS:
+BAMBU INTERNAL HEAP FREE/LARGEST:
+BAMBU DMA HEAP FREE:
+BAMBU REAL MQTT CONNECT ELAPSED/RC:
 BAMBU MQTT DIAGNOSTIC SUMMARY:
 BAMBU TOKEN REBOOT REUSE: PASS/FAIL
 BAMBU TOKEN INVALID BEHAVIOR: PASS/FAIL/NOT TESTED
