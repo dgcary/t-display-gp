@@ -11,8 +11,8 @@ constexpr time_t MIN_SYNCED_EPOCH = 1704067200;  // 2024-01-01 UTC
 }
 
 DeviceLayer::DeviceLayer()
-    : previousButton_(BuildConfig::BUTTON_DEBOUNCE_MS),
-      nextButton_(BuildConfig::BUTTON_DEBOUNCE_MS) {}
+    : previousButton_(BuildConfig::BUTTON_DEBOUNCE_MS, BuildConfig::BUTTON_LONG_PRESS_MS),
+      nextButton_(BuildConfig::BUTTON_DEBOUNCE_MS, BuildConfig::BUTTON_LONG_PRESS_MS) {}
 
 void DeviceLayer::begin() {
   // T-Display-S3 display power must be asserted before initializing the panel.
@@ -38,14 +38,17 @@ void DeviceLayer::begin() {
   drawSmokeScreen();
 }
 
-ButtonEvent DeviceLayer::pollButtons(uint32_t nowMs) {
-  if (previousButton_.update(digitalRead(BuildConfig::PIN_BUTTON_PREV) != LOW, nowMs)) {
-    return ButtonEvent::PREVIOUS;
-  }
-  if (nextButton_.update(digitalRead(BuildConfig::PIN_BUTTON_NEXT) != LOW, nowMs)) {
-    return ButtonEvent::NEXT;
-  }
-  return ButtonEvent::NONE;
+InputEvent DeviceLayer::pollButtons(uint32_t nowMs) {
+  const ButtonGesture previous =
+      previousButton_.update(digitalRead(BuildConfig::PIN_BUTTON_PREV) != LOW, nowMs);
+  const ButtonGesture next =
+      nextButton_.update(digitalRead(BuildConfig::PIN_BUTTON_NEXT) != LOW, nowMs);
+
+  if (previous == ButtonGesture::LONG_PRESS) return InputEvent::PREV_LONG;
+  if (previous == ButtonGesture::SHORT_PRESS) return InputEvent::PREV_SHORT;
+  if (next == ButtonGesture::LONG_PRESS) return InputEvent::NEXT_LONG;
+  if (next == ButtonGesture::SHORT_PRESS) return InputEvent::NEXT_SHORT;
+  return InputEvent::NONE;
 }
 
 bool DeviceLayer::wifiConnected() const {
@@ -85,7 +88,7 @@ void DeviceLayer::drawSmokeScreen() {
   unicodeFont_.setCursor(12, 66);
   unicodeFont_.print("横屏 320x170 / 屏幕 OK");
   unicodeFont_.setCursor(12, 98);
-  unicodeFont_.print("BTN0 上一只 / BTN14 下一只");
+  unicodeFont_.print("短按切换 / 长按 BTN0 返回菜单");
   unicodeFont_.setCursor(12, 130);
   unicodeFont_.print(wifiConnected() ? "Wi-Fi: 已连接" : "Wi-Fi: 未连接");
 }

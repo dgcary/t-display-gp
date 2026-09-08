@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "TencentIntradayParser.h"
 #include "TencentParser.h"
 
 namespace {
@@ -37,8 +38,13 @@ ProviderError TencentProvider::fetchQuote(const StockSymbol& symbol, QuoteSnapsh
   return TencentParser::parseQuote(response.body, symbol, out);
 }
 
-ProviderError TencentProvider::fetchIntraday(const StockSymbol&, IntradaySeries&,
+ProviderError TencentProvider::fetchIntraday(const StockSymbol& symbol, IntradaySeries& out,
                                              ProviderDiagnostics* diagnostics) {
-  if (diagnostics) *diagnostics = {};
-  return ProviderError::UNSUPPORTED;
+  if (!symbol.valid()) return ProviderError::UNSUPPORTED;
+  const HttpResponse response = transport_.get(
+      "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=" + symbol.tencentCode(), {});
+  copyDiagnostics(response, diagnostics);
+  const ProviderError transportError = mapTransport(response);
+  if (transportError != ProviderError::NONE) return transportError;
+  return TencentIntradayParser::parse(response.body, symbol, out);
 }

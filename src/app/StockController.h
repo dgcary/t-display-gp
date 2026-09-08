@@ -16,6 +16,7 @@ struct DataChannelHealth {
   uint32_t lastAttemptMs = 0;
   uint32_t lastSuccessMs = 0;
   uint32_t consecutiveFailures = 0;
+  bool hasAttempt = false;
 };
 
 struct StockCacheEntry {
@@ -25,6 +26,7 @@ struct StockCacheEntry {
   bool hasIntraday = false;
   uint32_t quoteUpdatedMs = 0;
   uint32_t intradayUpdatedMs = 0;
+  ProviderId intradayProvider = ProviderId::EAST_MONEY;
   DataChannelHealth quoteHealth;
   DataChannelHealth intradayHealth;
 };
@@ -48,6 +50,7 @@ struct StockViewModel {
   bool intradayDelayed = false;
   bool wifiOnline = false;
   ProviderId provider = ProviderId::EAST_MONEY;
+  ProviderId intradayProvider = ProviderId::EAST_MONEY;
   std::string errorBadge;
 };
 

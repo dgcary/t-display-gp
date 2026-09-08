@@ -3,7 +3,7 @@
 #include <TFT_eSPI.h>
 #include <U8g2_for_TFT_eSPI.h>
 
-#include "ButtonDebouncer.h"
+#include "ButtonInput.h"
 #include "MarketClock.h"
 
 class DeviceLayer {
@@ -11,7 +11,7 @@ class DeviceLayer {
   DeviceLayer();
 
   void begin();
-  ButtonEvent pollButtons(uint32_t nowMs);
+  InputEvent pollButtons(uint32_t nowMs);
   bool wifiConnected() const;
   bool timeSynchronized() const;
   LocalDateTime localDateTime() const;
@@ -24,6 +24,6 @@ class DeviceLayer {
 
   TFT_eSPI tft_;
   U8g2_for_TFT_eSPI unicodeFont_;
-  ButtonDebouncer previousButton_;
-  ButtonDebouncer nextButton_;
+  ButtonInput previousButton_;
+  ButtonInput nextButton_;
 };

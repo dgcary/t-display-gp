@@ -66,26 +66,26 @@ void test_trading_cycle_requests_current_and_only_one_other_quote() {
   TEST_ASSERT_TRUE(lastRequest(q,"600519",MarketRequestType::QUOTE) != nullptr);
 }
 
-void test_three_primary_failures_switch_quotes_to_tencent() {
+void test_three_tencent_failures_switch_quotes_to_eastmoney() {
   FakeQueue q; StockController c(q); c.begin(config3()); c.setWifiOnline(true);
   uint32_t now=5000;
   for(int i=0;i<3;i++){
     c.tick(now,trading());
     const MarketRequest* req=lastRequest(q,"600519",MarketRequestType::QUOTE);
-    TEST_ASSERT_TRUE(req != nullptr); TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, req->provider);
-    MarketResult r; r.requestId=req->requestId; r.type=MarketRequestType::QUOTE; r.error=ProviderError::NETWORK; q.results.push_back(r);
+    TEST_ASSERT_TRUE(req != nullptr); TEST_ASSERT_EQUAL(ProviderId::TENCENT, req->provider);
+    MarketResult r; r.requestId=req->requestId; r.type=MarketRequestType::QUOTE; r.provider=req->provider; r.error=ProviderError::NETWORK; q.results.push_back(r);
     c.consumeMarketResults(); now+=5000;
   }
   c.tick(now,trading());
   const MarketRequest* fallback=lastRequest(q,"600519",MarketRequestType::QUOTE);
-  TEST_ASSERT_TRUE(fallback != nullptr); TEST_ASSERT_EQUAL(ProviderId::TENCENT, fallback->provider);
+  TEST_ASSERT_TRUE(fallback != nullptr); TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, fallback->provider);
 }
 
 void test_offline_keeps_cached_quote_and_sets_badge() {
   FakeQueue q; StockController c(q); c.begin(config3()); c.setWifiOnline(true); c.tick(5000,trading());
   const MarketRequest* req=lastRequest(q,"600519",MarketRequestType::QUOTE); TEST_ASSERT_TRUE(req != nullptr);
   MarketResult r; r.requestId=req->requestId; r.type=MarketRequestType::QUOTE; r.error=ProviderError::NONE;
-  r.quote.symbol=StockSymbol::parse("600519"); r.quote.name="贵州茅台"; r.quote.last=1410.25; r.quote.prevClose=1400; r.quote.provider=ProviderId::EAST_MONEY;
+  r.quote.symbol=StockSymbol::parse("600519"); r.quote.name="贵州茅台"; r.quote.last=1410.25; r.quote.prevClose=1400; r.quote.provider=ProviderId::TENCENT;
   q.results.push_back(r); c.consumeMarketResults();
   c.tick(10000,trading()); c.setWifiOnline(false);
   TEST_ASSERT_TRUE(c.viewModel().hasQuote); TEST_ASSERT_DOUBLE_WITHIN(0.001,1410.25,c.viewModel().quote->last);
@@ -228,7 +228,7 @@ int main(){
   UNITY_BEGIN();
   RUN_TEST(test_button_switch_wraps_and_requests_stale_cache);
   RUN_TEST(test_trading_cycle_requests_current_and_only_one_other_quote);
-  RUN_TEST(test_three_primary_failures_switch_quotes_to_tencent);
+  RUN_TEST(test_three_tencent_failures_switch_quotes_to_eastmoney);
   RUN_TEST(test_offline_keeps_cached_quote_and_sets_badge);
   RUN_TEST(test_intraday_failure_does_not_poison_quote_health_or_clear_cache);
   RUN_TEST(test_quote_success_does_not_clear_intraday_error);

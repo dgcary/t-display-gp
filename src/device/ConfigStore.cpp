@@ -19,11 +19,19 @@ bool ConfigStore::load(AppConfig& out) const {
   if (stored.isEmpty()) return false;
 
   AppConfig parsed;
-  if (!AppConfigCodec::decode(std::string_view(stored.c_str(), stored.length()), parsed) ||
+  uint32_t sourceSchemaVersion = 0;
+  if (!AppConfigCodec::decode(std::string_view(stored.c_str(), stored.length()), parsed,
+                              &sourceSchemaVersion) ||
       !validate(parsed).ok()) {
     return false;
   }
-  out = std::move(parsed);
+
+  out = parsed;
+  if (sourceSchemaVersion == 1) {
+    // Best-effort persistence of the normalized v2 shape. A write failure must
+    // not discard the already decoded and valid in-memory configuration.
+    save(parsed);
+  }
   return true;
 }
 

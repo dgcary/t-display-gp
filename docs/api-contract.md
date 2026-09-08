@@ -1,194 +1,119 @@
-# Market Data API Contract
+# Data Provider / HTTP API Contract
 
-Status date: 2026-08-18
+Status date: 2026-09-08
 
-T-Display GP uses public, unauthenticated, unofficial market endpoints. Provider and parser boundaries remain replaceable because formats/access policy may change.
+Remote payloads stay behind provider/service abstractions. UI consumes structured state.
 
-## Provider matrix
+## Providers
 
-| Capability | EastMoney | Tencent |
-|---|---|---|
-| Quote | Primary | Fallback |
-| Intraday trend | Primary | Not used in V1 |
-| SSE | `1.<code>` | `sh<code>` |
-| SZSE | `0.<code>` | `sz<code>` |
-| BSE | `0.<code>` | `bj<code>` candidate; physical validation required |
+- A-share: Tencent primary / EastMoney fallback
+- Weather: Open-Meteo
+- Home Assistant: existing HA REST API
+- Bambu: Manual Token HTTPS + persistent per-printer Cloud MQTT
+- Bad Apple: local compiled asset
+- Device Info: local state
 
-## EastMoney quote
+# Home Assistant
 
-```text
-GET https://push2.eastmoney.com/api/qt/stock/get?secid=<secid>&fields=f57,f58,f43,f44,f45,f46,f47,f48,f60,f86,f169,f170
-Referer: https://quote.eastmoney.com/
-```
+Read-only `GET /api/states/<entity_id>`. HTTP only on trusted LAN; HTTPS requires configured CA; no service writes or secret echo.
 
-Consumed fields:
+# Bambu Lab Cloud
 
-| Field | Meaning |
-|---|---|
-| `f57` | code; must match requested symbol |
-| `f58` | UTF-8 name |
-| `f43` | last |
-| `f44` | high |
-| `f45` | low |
-| `f46` | open |
-| `f47` | volume |
-| `f48` | amount |
-| `f60` | previous close |
-| `f86` | Unix quote timestamp |
-| `f169` | change |
-| `f170` | change percent |
+## Config / portal
 
-Integer-like price/change values use the existing ÷100 scaling rule; decimal values are used directly. Missing, malformed, mismatched-symbol or structurally invalid payloads are rejected and do not replace cache.
+Schema v2: `enabled, region, accessToken, cloudUserId, printers[4]{serial,name}, printerCount, activePrinterIndex`. Enabled config requires Token + User ID + >=1 printer. Max 4 configured entries, unique safe serials. Legacy account/password auth stays retired.
 
-## EastMoney intraday
+One `WebServer{8081}` serves HA plus:
 
 ```text
-GET https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=<secid>&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=1&iscr=0&iscca=0
-Referer: https://quote.eastmoney.com/
+GET  /api/bambu/status
+GET  /api/bambu/printers
+POST /api/bambu/discover
+POST /api/bambu/config
+POST /api/bambu/logout
 ```
 
-Each trend row uses column 0 time, 1 price, 5 volume and 7 average price. Only 09:30–11:30 and 13:00–15:00 are retained. Duplicate/out-of-order minutes are skipped; series is capped at 242 points.
+Status contains non-secret metadata only. Printer list is local saved data. Discovery is explicit and Save-gated. Blank Token preserves stored Token. Old login/verify/resend endpoints unsupported.
 
-Parser strictness is unchanged by the stability work. Unknown malformed payloads are not accepted merely to improve apparent success rate.
-
-## Tencent quote fallback
+## Active printer control
 
 ```text
-GET https://qt.gtimg.cn/q=<market-prefix><code>
+GPIO0 PREV_SHORT  -> cycleActivePrinter(-1)
+GPIO14 NEXT_SHORT -> cycleActivePrinter(+1)
 ```
 
-Important zero-based fields:
+`activePrinterIndex` is presentation selection. With an unchanged connection set, switching persists the new index but does **not** increment a connection-affecting revision, disconnect sockets, clear sibling slot cache, or perform Cloud discovery/login. `snapshot()` and `status()` read the selected slot.
 
-| Index | Meaning |
-|---:|---|
-| 1 | name |
-| 2 | code |
-| 3 | last |
-| 4 | previous close |
-| 5 | open |
-| 6 | volume |
-| 30 | China-local `YYYYMMDDhhmmss` timestamp |
-| 31 | change |
-| 32 | change percent |
-| 33 | high |
-| 34 | low |
-| 37 | amount (V1 converts ten-thousand units to base units) |
+## Token HTTPS client
 
-Tencent remains quote-only fallback. No intraday fallback is added in this change.
+`BambuCloudClient`: `fetchUserId(token,region)` and `fetchPrinters(token,region)` only. Strict CA + shared `NetworkArbiter`; no `setInsecure()`.
 
-## HTTP transport contract
-
-- HTTP 200 is required for successful Provider parsing.
-- TCP/connect timeout: 1500 ms.
-- TLS handshake timeout: **5 seconds**. Arduino-ESP32 2.0.14 otherwise defaults the secure-client handshake loop to 120 seconds.
-- HTTP/read timeout setting: 2500 ms. `HTTPClient` applies the corresponding rounded Stream/socket timeout after connection; transport code must not pass this millisecond value directly to `WiFiClientSecure::setTimeout()`, whose 2.0.14 API is seconds-based.
-- Maximum retained response body: 32 KiB.
-- Declared/streamed oversize responses are rejected.
-- Content-Length mismatch after an otherwise successful read is classified as truncated transport failure.
-- `HTTPClient::setReuse(false)` remains unchanged for this stability release.
-- Current V1 keeps its existing `WiFiClientSecure::setInsecure()` behavior; certificate-verification hardening is a separate security task.
-- All market HTTP executes in `MarketDataWorker`; UI/main loop does not perform blocking market HTTP.
-
-Transport diagnostics preserve:
-
-- HTTP status
-- native HTTPClient error code
-- TLS last error when available
-- expected Content-Length
-- received byte count
-- elapsed time
-
-The timeout/source contract is guarded by `tools/validate_http_transport_contract.py` in CI.
-
-## Worker scheduling contract
-
-Request priority:
-
-1. latest current-page quote
-2. background quote
-3. EastMoney recovery probe
-4. intraday
-5. intraday retry
-
-Waiting intraday uses latest-wins semantics: only one not-yet-started intraday item is retained. A newer current-stock trend request replaces an older pending trend request; the replaced request produces an explicit cancellation result so Controller outstanding state is released.
-
-TTL values follow the approved design spec exactly:
-
-- current-page quote: **8 s** from request creation
-- background quote: **12 s** from request creation
-- EastMoney primary probe: **30 s** from request creation
-- normal intraday: **75 s** from request creation
-- intraday retry cycle: **15 s from the first attempt of that refresh cycle**, not 15 s per retry attempt
-
-Expired accepted requests produce an explicit expiry result rather than silently disappearing. Retry attempts retain the first attempt's cycle timestamp while their per-attempt `createdMs` is refreshed for queue-wait diagnostics.
-
-## Intraday retry contract
-
-Only transient failures are eligible:
-
-- transport/network failure, including connection loss/read failure/truncated body
-- HTTP 408
-- HTTP 5xx
-
-No immediate retry for:
-
-- parser/schema errors
-- missing fields
-- body too large
-- unsupported data
-- ordinary HTTP 4xx other than 408
-
-Maximum: **3 total attempts per intraday refresh cycle**.
-
-Deferred delays:
+## MQTT protocol / ownership
 
 ```text
-attempt 2: ~1500 ms ±20%
-attempt 3: ~4000 ms ±20%
+CHINA -> cn.mqtt.bambulab.com:8883
+US_EU -> us.mqtt.bambulab.com:8883
+username = cloudUserId
+password = accessToken
+per slot subscribe = device/<serial>/report
+per slot request   = device/<serial>/request
 ```
 
-Retry never loops inside the Provider; quote work can run between attempts. A retry that would fall outside the 15-second cycle deadline is not allowed to extend the cycle indefinitely.
+Only read-only `pushall` may be published.
 
-## Quote failover contract
+MQTT is main-loop driven: `begin(config,store)` initializes; Arduino `loop()` calls `process(nowMs)`. There is no custom FreeRTOS `bambu-mqtt` task or CPU0 pinning.
 
-1. EastMoney is normal quote Provider.
-2. Three EastMoney quote failures within 60 s switch quote traffic to Tencent.
-3. While Tencent is active, EastMoney recovery probe is no faster than once per 120 s.
-4. Two successful probes restore EastMoney.
-5. Failed probe resets recovery-success count.
-6. Intraday failure does not trigger Tencent intraday use.
+### Persistent multi-printer slots
 
-## Cache and health contract
-
-Quote and intraday have independent health state:
-
-- last error
-- last attempt
-- last success
-- consecutive failed refresh cycles
-
-A quote success clears only quote health. An intraday success clears only intraday health. Failure never erases the corresponding last valid payload.
-
-UI thresholds are evaluated only during active trading:
-
-- existing quote: `报价延迟` when **2 consecutive quote refresh cycles fail OR age >=15 s**
-- existing intraday: `分时延迟` when **2 consecutive intraday refresh cycles fail OR age >=180 s**
-- one isolated intraday failure with a fresh cached chart: no generic page-wide error
-- quote status has priority if quote and intraday are both degraded
-- lunch/closed/non-trading states do not become false delay alarms merely because cached data ages normally
-
-## Request log contract
-
-Each completed/expired/cancelled request emits a concise `[md]` line. Example:
+Runtime contains one `MqttConn` and one `BambuState` cache per configured slot (array capacity 4). Each slot independently owns:
 
 ```text
-[md] id=182 type=INTRADAY symbol=000831 provider=EM attempt=2/3 queue=8ms dur=2680ms http=200 native=-5 tls=-29184 bytes=8192/13824 result=NETWORK
+WiFiClientSecure
+PubSubClient
+status / tokenRejected
+last attempt / backoff counter
+connect time / delayed pushall
+pushall sequence
+BambuState cache
 ```
 
-Do not log full response bodies by default.
+Connected slots are serviced first every loop pass. If one or more slots need connection, `process()` starts at most one blocking attempt per pass, preferring active slot then siblings. Callback routes `device/<serial>/report` to the matching slot by topic/Serial.
 
-## Validation policy
+Per-slot connection attempt:
 
-PC `curl`/Windows Schannel behavior is useful external evidence, but is not treated as proof of the ESP32 failure type. Device-side `[md]` diagnostics are the source used to classify actual ESP32 transport failures.
+```text
+release stale objects for that slot only
+acquire NetworkArbiter
+new WiFiClientSecure + CA bundle + setTimeout(15)
+new PubSubClient + 40960 buffer + keepalive 30
+random bblp_* client ID
+mqtt.connect(clientId, cloudUserId, accessToken)
+subscribe device/<slot serial>/report
+release NetworkArbiter
+>=2000 ms later -> one read-only pushall for that slot
+```
 
-If at least 30 physical intraday refresh cycles still have <80% final-cycle success after bounded retries, open a separate design review for an intraday fallback Provider rather than weakening parser or retry limits.
+Per-slot backoff: failures 0..4 →30 s; 5..14 →60 s; >=15 →120 s. rc 4/5 latches rejected-token state. Failure/reconnect of one slot must not tear down sibling online slots.
+
+A config save that changes only active index and/or printer names preserves connection objects and cached state. Credential, region, enablement, printer count or serial-set changes are connection-affecting and rebuild runtime.
+
+The Stage-2/3/4 explicit `mqtt_real_tls_*`, layered preflight and project `MQTT_SOCKET_TIMEOUT` overrides remain retired. PubSubClient owns TCP/TLS establishment. Strict CA required; `setInsecure()` forbidden.
+
+`esp_task_wdt_reset()` may be used around known long connect/callback/publish operations, matching BambuHelper; disabling/deleting watchdogs is forbidden.
+
+Secret-safe logs use `slot=<n>` and may include rc/elapsed/RSSI/heap/backoff; never Token, Cloud User ID, Cookie/Authorization or auth payload.
+
+## Presentation / concurrency
+
+BambuScreen uses partial redraw; full display clear only explicit full redraw. Active-slot change can full redraw presentation but must not imply MQTT teardown.
+
+```text
+Stock -> dedicated MarketDataWorker
+Weather + HA -> shared AppDataWorker
+Bambu -> loop-driven persistent per-printer MQTT slots
+DeviceInfo -> local-only
+```
+
+Short-lived HTTP/TLS and new Bambu connection transactions use `NetworkArbiter`; established MQTT sockets do not hold it.
+
+Code capacity is 4 slots. Current physical acceptance target is 2 simultaneous real printers; 4 simultaneous connections require separate hardware/resource validation.

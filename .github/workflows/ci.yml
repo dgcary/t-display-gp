@@ -15,9 +15,50 @@ jobs:
       - run: python tools/validate_tdisplay_setup.py
       - run: python tools/validate_provisioning_contract.py
       - run: python tools/validate_http_transport_contract.py
+      - run: python tools/validate_app_shell_contract.py
+      - run: python tools/validate_dashboard_apps_contract.py
+      - run: python tools/validate_bambu_cloud_contract.py
+      - run: python tools/validate_bambu_pubsub_timeout_contract.py
+      - run: python tools/validate_bad_apple_contract.py
       - run: pip install platformio
       - run: pio test -e native
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Prepare pinned Bad Apple firmware asset
+        run: python tools/prepare_bad_apple_asset.py
       - run: pio run -e lilygo-t-display-s3
+      - name: Create firmware manifest
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p dist
+          cp .pio/build/lilygo-t-display-s3/firmware.bin dist/firmware.bin
+          cp .pio/build/lilygo-t-display-s3/partitions.bin dist/partitions.bin
+          cp .pio/build/lilygo-t-display-s3/bootloader.bin dist/bootloader.bin
+          {
+            echo "repository=dgcary/t-display-gp"
+            echo "source_sha=${SOURCE_SHA}"
+            echo "workflow_sha=${GITHUB_SHA}"
+            echo "environment=lilygo-t-display-s3"
+            echo "firmware_offset=0x10000"
+            echo "firmware_sha256=$(sha256sum dist/firmware.bin | awk '{print $1}')"
+            echo "partitions_sha256=$(sha256sum dist/partitions.bin | awk '{print $1}')"
+            echo "bootloader_sha256=$(sha256sum dist/bootloader.bin | awk '{print $1}')"
+          } > dist/firmware-manifest.txt
+          cat dist/firmware-manifest.txt
+      - name: Upload verified firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: tdisplay-gp-firmware-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            dist/firmware.bin
+            dist/partitions.bin
+            dist/bootloader.bin
+            dist/firmware-manifest.txt
+          if-no-files-found: error
+          retention-days: 30
 
   native-windows:
     runs-on: windows-latest

@@ -178,7 +178,7 @@ bool StockScreen::sameQuote(const RenderSignature& a, const RenderSignature& b) 
 bool StockScreen::sameIntraday(const RenderSignature& a, const RenderSignature& b) {
   return a.hasIntraday == b.hasIntraday && a.intradaySize == b.intradaySize &&
          a.intradayLastMinute == b.intradayLastMinute && a.intradayLastPrice == b.intradayLastPrice &&
-         a.prevClose == b.prevClose && a.open == b.open;
+         a.intradayProvider == b.intradayProvider && a.prevClose == b.prevClose && a.open == b.open;
 }
 
 StockScreen::RenderSignature StockScreen::signatureFor(const StockViewModel& model) const {
@@ -190,6 +190,7 @@ StockScreen::RenderSignature StockScreen::signatureFor(const StockViewModel& mod
   result.marketStatus = model.marketStatus;
   result.wifiOnline = model.wifiOnline;
   result.provider = model.provider;
+  result.intradayProvider = model.intradayProvider;
   result.errorBadge = model.errorBadge;
   result.hasQuote = model.hasQuote && model.quote;
   if (result.hasQuote) {
@@ -236,8 +237,9 @@ void StockScreen::render(const StockViewModel& model, bool fullRedraw) {
     }
     if (!sameIntraday(previous_, next)) drawChart(model);
     if (previous_.index != next.index || previous_.count != next.count || previous_.wifiOnline != next.wifiOnline ||
-        previous_.provider != next.provider || previous_.errorBadge != next.errorBadge ||
-        previous_.marketStatus != next.marketStatus || !sameQuote(previous_, next)) {
+        previous_.provider != next.provider || previous_.intradayProvider != next.intradayProvider ||
+        previous_.errorBadge != next.errorBadge || previous_.marketStatus != next.marketStatus ||
+        !sameQuote(previous_, next)) {
       drawFooter(model);
     }
   }
@@ -372,11 +374,13 @@ void StockScreen::drawFooter(const StockViewModel& model) {
   drawAscii(*display_, position, 4, 156, 1, UiTheme::TEXT);
   drawAscii(*display_, model.wifiOnline ? "WiFi" : "OFF", 37, 156, 1,
             model.wifiOnline ? UiTheme::MUTED : UiTheme::WARNING);
-  drawAscii(*display_, model.provider == ProviderId::EAST_MONEY ? "EM" : "TX", 73, 156, 1, UiTheme::MUTED);
+  const std::string providers =
+      StockScreenText::providerSummary(model.provider, model.intradayProvider, model.hasIntraday);
+  drawAscii(*display_, providers, 73, 156, 1, UiTheme::MUTED);
   if (!model.errorBadge.empty()) {
     unicodeFont_->setFont(u8g2_font_wqy12_t_gb2312);
     unicodeFont_->setForegroundColor(UiTheme::WARNING);
-    unicodeFont_->drawUTF8(106, 168, StockScreenMath::truncateUtf8(model.errorBadge, 6).c_str());
+    unicodeFont_->drawUTF8(164, 168, StockScreenMath::truncateUtf8(model.errorBadge, 6).c_str());
   }
 }
 #endif  // ARDUINO

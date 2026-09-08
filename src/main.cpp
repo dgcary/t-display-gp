@@ -1,26 +1,93 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <time.h>
 
 #include "AppConfig.h"
-#include "app/StockController.h"
-#include "device/ConfigStore.h"
-#include "device/DeviceLayer.h"
-#include "network/MarketDataWorker.h"
-#include "network/ProvisioningService.h"
-#include "ui/StockScreen.h"
+#include "AppDataWorker.h"
+#include "AppShell.h"
+#include "BambuApp.h"
+#include "BambuCloudClient.h"
+#include "BambuConfig.h"
+#include "BambuConfigStore.h"
+#include "BambuMqttService.h"
+#include "ConfigStore.h"
+#include "DeviceInfoApp.h"
+#include "DeviceLayer.h"
+#include "HomeAssistantApp.h"
+#include "HomeAssistantConfig.h"
+#include "HomeAssistantConfigStore.h"
+#include "IntegrationConfigPortal.h"
+#include "MenuScreen.h"
+#include "NetworkArbiter.h"
+#include "ProvisioningService.h"
+#include "StockApp.h"
+#include "WeatherApp.h"
 
 namespace {
 AppConfig appConfig;
+HomeAssistantConfig homeAssistantConfig;
+BambuConfig bambuConfig;
 ConfigStore configStore;
+HomeAssistantConfigStore homeAssistantConfigStore;
+BambuConfigStore bambuConfigStore;
 ProvisioningService provisioning;
+IntegrationConfigPortal integrationConfigPortal;
+BambuCloudClient bambuCloudClient;
+BambuMqttService bambuMqttService;
 DeviceLayer device;
-MarketDataWorker dataWorker;
-StockController controller(dataWorker);
-StockScreen screen;
+AppDataWorker appDataWorker;
+MenuScreen menuScreen;
+StockApp stockApp(device);
+WeatherApp weatherApp(device, appDataWorker);
+BambuApp bambuApp(device, bambuMqttService);
+HomeAssistantApp homeAssistantApp(device, appDataWorker);
+DeviceInfoApp deviceInfoApp(device);
+MenuApp menuApp({{AppId::STOCK, "股票"},
+                 {AppId::WEATHER, "天气"},
+                 {AppId::BAMBU, "Bambu Lab"},
+                 {AppId::HOME_ASSISTANT, "智能家居"},
+                 {AppId::DEVICE_INFO, "设备信息"}},
+                menuScreen);
+AppManager appManager(menuApp, {&stockApp, &weatherApp, &bambuApp, &homeAssistantApp, &deviceInfoApp});
 bool appReady = false;
+uint32_t nextResourceLogMs = 0;
 
-void startChinaTimeSync() {
-  configTzTime("CST-8", "ntp.aliyun.com", "pool.ntp.org", "time.nist.gov");
+void startChinaTimeSync() { configTzTime("CST-8", "ntp.aliyun.com", "pool.ntp.org", "time.nist.gov"); }
+
+void logNetworkConfig() {
+  const String ip = WiFi.localIP().toString();
+  const String mask = WiFi.subnetMask().toString();
+  const String gateway = WiFi.gatewayIP().toString();
+  const String dns1 = WiFi.dnsIP(0).toString();
+  const String dns2 = WiFi.dnsIP(1).toString();
+  const String bssid = WiFi.BSSIDstr();
+  Serial.printf(
+      "[netcfg] ip=%s mask=%s gateway=%s dns1=%s dns2=%s bssid=%s ch=%d wifi=%d\n",
+      ip.c_str(), mask.c_str(), gateway.c_str(), dns1.c_str(), dns2.c_str(), bssid.c_str(),
+      static_cast<int>(WiFi.channel()), static_cast<int>(WiFi.status()));
+}
+
+const char* appName(AppId id) {
+  switch (id) {
+    case AppId::MENU: return "MENU";
+    case AppId::STOCK: return "STOCK";
+    case AppId::WEATHER: return "WEATHER";
+    case AppId::BAMBU: return "BAMBU";
+    case AppId::HOME_ASSISTANT: return "HOME_ASSISTANT";
+    case AppId::DEVICE_INFO: return "DEVICE_INFO";
+  }
+  return "UNKNOWN";
+}
+
+void logResourceSnapshot(uint32_t nowMs) {
+  Serial.printf("[sys] app=%s heap_free=%u heap_min=%u psram_free=%u psram_total=%u main_stack_hwm=%u\n",
+                appName(appManager.activeAppId()), static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(ESP.getMinFreeHeap()), static_cast<unsigned>(ESP.getFreePsram()),
+                static_cast<unsigned>(ESP.getPsramSize()),
+                static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+  nextResourceLogMs = nowMs + 60000U;
 }
 }  // namespace
 
@@ -28,15 +95,10 @@ void setup() {
   Serial.begin(115200);
   delay(50);
   Serial.println("[boot] T-Display GP starting");
-
-  // Bring up the panel first so provisioning has visible feedback even on a
-  // factory-erased device. DeviceLayer intentionally does not wait for NTP.
   device.begin();
-
-  // Load once for the documented lifecycle. ensureConnected() independently
-  // validates persistent app configuration and forces the captive portal when
-  // it is missing/invalid, even if Wi-Fi credentials already exist.
   configStore.load(appConfig);
+  homeAssistantConfigStore.load(homeAssistantConfig);
+  bambuConfigStore.load(bambuConfig);
   Serial.println("[boot] provisioning start");
   if (!provisioning.ensureConnected(appConfig)) {
     Serial.println("Provisioning failed; restarting");
@@ -44,39 +106,44 @@ void setup() {
     ESP.restart();
     return;
   }
-
-  Serial.println("[boot] provisioning complete; starting application services");
+  Serial.println("[boot] provisioning complete; starting shared services");
+  logNetworkConfig();
   startChinaTimeSync();
   provisioning.beginWebPortal(appConfig);
-
-  if (!dataWorker.begin()) {
-    Serial.println("Market-data worker failed to start");
+  if (!sharedNetworkArbiter().begin()) {
+    Serial.println("Network arbiter failed to start");
     return;
   }
-
-  controller.begin(appConfig);
-  controller.setWifiOnline(device.wifiConnected());
-  screen.begin(device.display(), device.unicodeFont());
+  if (!appDataWorker.begin()) {
+    Serial.println("App-data worker failed to start");
+    return;
+  }
+  if (!bambuMqttService.begin(bambuConfig, bambuConfigStore)) {
+    Serial.println("Bambu MQTT service failed to start");
+    return;
+  }
+  integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService);
+  menuScreen.begin(device.display(), device.unicodeFont());
+  if (!stockApp.begin(appConfig)) { Serial.println("Stock app failed to start"); return; }
+  if (!weatherApp.begin(appConfig)) { Serial.println("Weather app failed to start"); return; }
+  if (!bambuApp.begin()) { Serial.println("Bambu app failed to start"); return; }
+  if (!homeAssistantApp.begin(homeAssistantConfig)) { Serial.println("Home Assistant app failed to start"); return; }
+  if (!deviceInfoApp.begin()) { Serial.println("Device info app failed to start"); return; }
+  if (!appManager.begin(AppId::STOCK)) { Serial.println("App manager failed to start"); return; }
   appReady = true;
-  Serial.println("[boot] market loop ready");
+  Serial.println("[boot] multi-app loop ready");
+  logResourceSnapshot(millis());
 }
 
 void loop() {
   provisioning.process();
-  if (!appReady) {
-    delay(1);
-    return;
-  }
-
+  integrationConfigPortal.process();
+  if (!appReady) { delay(1); return; }
   const uint32_t nowMs = millis();
-  controller.setWifiOnline(device.wifiConnected());
-  controller.onButton(device.pollButtons(nowMs));
-  controller.consumeMarketResults();
-  controller.tick(nowMs, device.localDateTime());
-
-  if (controller.takeDirtyFlag()) {
-    screen.render(controller.viewModel(), controller.takeFullRedrawFlag());
-  }
-
+  bambuMqttService.process(nowMs);
+  appManager.onInput(device.pollButtons(nowMs));
+  appManager.tick(nowMs);
+  appManager.render();
+  if (static_cast<int32_t>(nowMs - nextResourceLogMs) >= 0) logResourceSnapshot(nowMs);
   delay(1);
 }

@@ -24,7 +24,7 @@ struct MarketRequest {
   uint32_t requestId = 0;
   MarketRequestType type = MarketRequestType::QUOTE;
   StockSymbol symbol;
-  ProviderId provider = ProviderId::EAST_MONEY;
+  ProviderId provider = ProviderId::TENCENT;
   uint32_t createdMs = 0;
   uint32_t notBeforeMs = 0;
   uint32_t cycleStartedMs = 0;
@@ -38,7 +38,7 @@ struct MarketResult {
   ProviderError error = ProviderError::NONE;
   QuoteSnapshot quote;
   IntradaySeries intraday;
-  ProviderId provider = ProviderId::EAST_MONEY;
+  ProviderId provider = ProviderId::TENCENT;
   uint8_t attempt = 1;
   uint32_t queueWaitMs = 0;
   ProviderDiagnostics diagnostics;
@@ -92,6 +92,23 @@ inline bool retryable(ProviderError error, const ProviderDiagnostics& diagnostic
   if (error == ProviderError::NETWORK) return true;
   if (error != ProviderError::HTTP_STATUS) return false;
   return diagnostics.httpStatus == 408 || diagnostics.httpStatus >= 500;
+}
+
+inline bool shouldRetryIntraday(const MarketRequest& request, ProviderError error,
+                                const ProviderDiagnostics& diagnostics) {
+  return isIntraday(request) && request.provider == ProviderId::TENCENT &&
+         request.attempt < BuildConfig::INTRADAY_MAX_ATTEMPTS &&
+         retryable(error, diagnostics);
+}
+
+inline bool shouldFallbackIntraday(const MarketRequest& request, ProviderError error,
+                                   const ProviderDiagnostics& diagnostics) {
+  if (!isIntraday(request) || request.provider != ProviderId::TENCENT ||
+      error == ProviderError::NONE || error == ProviderError::CANCELLED ||
+      error == ProviderError::EXPIRED) {
+    return false;
+  }
+  return !shouldRetryIntraday(request, error, diagnostics);
 }
 
 inline uint32_t retryDelayMs(uint8_t nextAttempt, uint32_t requestId) {
@@ -256,6 +273,7 @@ class MarketDataWorker final : public IMarketDataQueue {
   MarketDataWorker& operator=(const MarketDataWorker&) = delete;
 
   bool begin();
+  void setPaused(bool paused);
   bool enqueue(const MarketRequest& request) override;
   bool tryReceive(MarketResult& result) override;
 

@@ -1,184 +1,112 @@
 # T-Display-S3 Hardware Acceptance
 
-本清单只用于 **LILYGO T-Display-S3 真机**。Host tests / firmware build 不能代替实体板验收。
+Only for real LILYGO T-Display-S3. CI does not replace physical acceptance. Record source SHA, Actions run, artifact ID, firmware SHA256 and secret-safe evidence.
 
-## 当前状态
+## Flash / core UI
 
-- 自动化 native tests：由 GitHub Actions 验证
-- ESP32-S3 firmware build：由 GitHub Actions 验证
-- 实体 flash / 横屏 / 按键 / Wi-Fi / 实时行情稳定性：**PENDING，必须在真机完成**
+Normal upgrade: exact `firmware.bin` at manifest offset (normally `0x10000`), preserve NVS/bootloader/partition table; serial 115200. Verify 320×170 UI, menu `股票 / 天气 / Bambu Lab / 智能家居 / 设备信息`, Stock startup and no auto idle switching.
 
-每次真机验收记录：branch、40 位 commit SHA、日期、Wi-Fi 环境和结果。
+## Other app regression
 
-## 1. Build / Flash
+Weather/Bad Apple: current + 今/明, 168×126 x=152,y=27, ~10 FPS, no divider regression/watchdog/leak.
 
-```bash
-pio test -e native
-python tools/validate_tdisplay_setup.py
-python tools/validate_provisioning_contract.py
-python tools/validate_http_transport_contract.py
-pio run -e lilygo-t-display-s3
-pio run -e lilygo-t-display-s3 -t upload --upload-port <PORT>
-pio device monitor --port <PORT> -b 115200
-```
+HA: read-only, trusted-LAN HTTP or configured-CA HTTPS, no insecure fallback or secret echo.
 
-要求：无启动循环、panic、watchdog、MarketDataWorker 启动失败。
+## Bambu security
 
-## 2. 屏幕与按键
+User pastes their browser Token only into local `http://<device-ip>:8081/`; never expose it to ChatGPT/Codex/screenshots/logs. Verify status contains only token-set/non-secret runtime metadata; logout clears credentials/printers.
 
-硬件不变量：
+## Persistent multi-printer acceptance
 
-- GPIO15 屏幕供电 HIGH
-- GPIO38 背光
-- GPIO0 上一只
-- GPIO14 下一只
-- ST7789 物理 170×320
-- 应用逻辑 **320×170 横屏**
+With two saved real printers A/B:
 
-通过标准：
+1. Boot and wait until **both** slots independently reach `mqtt_connect_ok slot=0` and `slot=1` (order may vary) and receive their delayed `mqtt_pushall_initial`/report data.
+2. Confirm A and B caches correspond to the correct Serial/name and live state.
+3. Perform GPIO14/GPIO0 A↔B switching at least 10 times.
+4. When both slots were already online before a switch, the switch itself must not create a new `[bambu] mqtt_connect`/TLS/MQTT login. It should display the target slot on the next normal UI cadence rather than wait for Cloud reconnection.
+5. Switching must not clear or corrupt the sibling cached state. No A data shown under B name or vice versa.
+6. Web active selector follows the same rule when only active index/name changes.
+7. Leave B active and reboot without erase; B remains selected. Connections are naturally re-established after reboot.
+8. With only one configured printer, device prev/next is a no-op.
 
-- 横屏方向正确，无裁切/花屏
-- 中文名称可读
-- 正涨红、下跌绿
-- 左侧价格/涨跌/开高低昨/量额布局可读
-- 右侧分时图充分利用屏幕
-- `昨收` 与 `今开` 参考线可区分；今开无效时不绘制
-- 午休 11:30→13:00 不画假连续线
-- 每次按键只切一只；长按不自动连跳
-- 快速切股无明显 UI 卡死
+Code capacity is 4 slots, but this acceptance only proves the user's actual two-printer simultaneous configuration. Do not label 4 simultaneous slots hardware-validated without a separate test.
 
-## 3. 首次配网
+## Bambu anti-flicker
 
-擦除/无有效配置后：
+Observe >=2 min idle/live. No periodic 500 ms whole-screen blank/flash. First entry or presentation full redraw is allowed; routine fields redraw sections only.
 
-1. `TDisplay-GP-Setup` 可见
-2. 手机可进入 Captive Portal
-3. 可保存 Wi-Fi + 3–5 股票 + 3/4/5 秒刷新
-4. 保存后受控重启
-5. 重启后自动连 Wi-Fi
-6. 串口最终出现：
+## MQTT architecture evidence
+
+Candidate must use `espressif32@6.12.0` / Arduino-ESP32 2.0.17 and BambuHelper-aligned loop-driven persistent slots:
 
 ```text
-[boot] market loop ready
+no dedicated CPU0 bambu-mqtt task
+BambuMqttService::process(nowMs) from Arduino loop
+per-printer MqttConn + BambuState
+strict CA, timeout 15 s
+PubSubClient buffer 40960, keepalive 30 s
+random bblp_* client ID
+per-slot subscribe report topic
+per-slot initial pushall >=2 s after connect
+per-slot 30/60/120 s backoff
 ```
 
-## 4. 行情基本功能
+Old `mqtt_real_tls_*`, layered preflight, explicit production TLS preconnect and project `MQTT_SOCKET_TIMEOUT=3/5` are forbidden acceptance markers. WDT reset around known long operations is allowed; disabling/deleting watchdog is forbidden.
 
-建议至少测试 SSE、SZSE、BSE 示例。
+## Mandatory stability
 
-验证：
+Observe >=10 continuous minutes with both real printer slots configured:
 
-- 当前价和指标合理
-- 报价按配置周期持续更新
-- 分时独立刷新
-- EastMoney 正常时 footer 为 EM
-- EastMoney quote 连续故障后腾讯 quote fallback 能工作
-- 分时仍保持 EastMoney-only，不擅自切腾讯趋势
+- watchdog 0, panic 0, automatic reboot 0;
+- both online slots continue `mqtt.loop()`/report updates while either one is displayed;
+- heap does not monotonically decline under two TLS+MQTT clients;
+- no repeated reconnect caused solely by active printer switching;
+- natural failure of one slot, if observed, only reconnects that slot; sibling remains connected/fresh;
+- no secret leak.
 
-BSE 腾讯备用若真机不符合现有 schema，记录为限制，不猜字段/前缀。
-
-## 5. `[md]` 请求日志
-
-行情运行时必须能看到类似：
+Expected markers:
 
 ```text
-[md] id=... type=QUOTE|INTRADAY|PROBE symbol=... provider=EM|TX attempt=... queue=...ms dur=...ms http=... native=... tls=... bytes=.../... result=...
+[bambu] mqtt_connect slot=<n> ...
+[bambu] mqtt_connect_ok slot=<n> elapsed_ms=...
+[bambu] mqtt_connect_fail slot=<n> rc=... retry_ms=...
+[bambu] mqtt_subscribe_fail slot=<n> ...
+[bambu] mqtt_loop_lost slot=<n> ...
+[bambu] mqtt_pushall_initial slot=<n> ...
 ```
 
-发生失败时记录实际设备错误，不把 Windows Schannel/curl 错误直接等同为 ESP32 错误。
+## Live/background/coexistence
 
-Transport 真机预期：
+Verify progress/ETA/layers/temps/job/filament as available. Leave Bambu for Stock/Weather/HA/DeviceInfo and return; both Bambu slot caches should continue updating. Stock/Weather/HA must remain usable with two persistent MQTT sockets. This regression is important because multi-slot MQTT increases resource pressure.
 
-- TCP/connect 上限约 1.5 秒
-- TLS handshake 显式上限 5 秒
-- HTTP/read timeout setting 2.5 秒
-- 单个异常请求不应因 Arduino-ESP32 默认 120 秒 TLS handshake timeout 长时间占住唯一 Worker
+## Wi-Fi recovery
 
-## 6. 分时失败恢复
+Safe Wi-Fi interruption/recovery: preserve config/active selection; reconnect slots without panic/watchdog/reboot/freeze/monotonic heap leak. One slot may recover before another.
 
-在 EastMoney trends2 波动时重点验证：
-
-- 单次分时失败不清空旧图
-- 单次分时失败不把正常报价标成全局“数据异常”
-- 分时 transient failure 最多 3 次尝试
-- 重试之间报价仍有机会优先执行
-- 新股票的 pending 分时可替换已过时、尚未执行的旧分时
-- 分时持续过旧时显示 `分时延迟`
-- 后续分时成功后自动恢复正常状态
-
-## 7. Quote / Intraday 状态隔离
-
-验证：
-
-- quote 失败不会清空 intraday cache
-- intraday 成功不会清除 quote 错误
-- intraday 失败不会污染 quote health
-- quote 成功不会错误清掉 intraday health
-- 活跃交易时 quote age >=15 秒时可显示 `报价延迟`
-- 活跃交易时 intraday age >=180 秒时可显示 `分时延迟`
-- 午休、收盘、休市时缓存自然变旧不会误报延迟
-
-## 8. Wi-Fi 中断
-
-加载有效画面后断 Wi-Fi 至少 2 分钟：
-
-- 显示 `离线`
-- 已有报价/分时仍可查看
-- 按键仍响应
-- UI 不等待 HTTP 卡死
-- Wi-Fi 恢复后无需人工重启即可恢复请求
-
-## 9. 稳定性量化验收
-
-交易时段使用 5 只股票：
+## Report template
 
 ```text
-股票切换 >=100 次
-quote 请求 >=500 次
-quote 成功率目标 >=99%（测试网络条件）
-intraday 刷新周期 >=30 个
-intraday 有限重试后周期成功率目标 >=80%
-健康 quote Provider 下当前报价 P95 更新间隔 <=7 秒
-单次 intraday 失败时 quote gap <=10 秒
-intraday P95 age <=180 秒
-watchdog = 0
-unexpected reboot = 0
-cache loss = 0
+SOURCE SHA:
+ACTIONS RUN:
+ARTIFACT ID:
+FIRMWARE SHA256:
+FLASH: PASS/FAIL
+NVS ERASED: NO
+BAMBU SLOT0 ONLINE/PUSHALL: PASS/FAIL
+BAMBU SLOT1 ONLINE/PUSHALL: PASS/FAIL
+BAMBU A<->B x10 INSTANT: PASS/FAIL
+NEW MQTT CONNECT CAUSED BY ONLINE SWITCH: YES/NO
+BAMBU SELECTION PERSISTENCE: PASS/FAIL
+STATE CROSS-CONTAMINATION: YES/NO
+BAMBU WHOLE-SCREEN FLICKER: PASS/FAIL
+BAMBU MQTT 10 MIN: PASS/FAIL
+SIBLING SURVIVES SINGLE-SLOT DROP: PASS/FAIL/NOT OBSERVED
+STOCK/WEATHER/HA COEXISTENCE: PASS/FAIL/NOT TESTED
+WATCHDOG COUNT:
+PANIC COUNT:
+AUTOMATIC REBOOT COUNT:
+HEAP START/MIN/END:
+SECRET LEAK: NO
+PHYSICAL ACCEPTANCE: PASS/FAIL/PARTIAL
+RAW SECRET-SAFE LOG:
 ```
-
-如果 30+ 分时周期最终成功率仍 <80%，进入分时备用 Provider 的独立设计评审；不要无限重试或放宽 parser。
-
-## 10. 完整交易日
-
-最终目标：至少运行一次 **09:25–15:10**：
-
-- 开盘前
-- 上午盘
-- 午休
-- 下午盘
-- 收盘
-
-要求全程无异常重启/卡死/缓存丢失，收盘后保留最终报价与分时图。
-
-## Acceptance record
-
-建议在 PR/Issue 或部署记录中写：
-
-```text
-Repository: dgcary/t-display-gp
-Branch:
-Commit SHA:
-Board: LILYGO T-Display-S3
-Port:
-Wi-Fi:
-Date:
-Host tests:
-Firmware build:
-Flash:
-Smoke:
-Stability:
-Full-day:
-Notes:
-```
-
-没有实体板证据的项目必须保持 PENDING。

@@ -1,144 +1,106 @@
 # AGENTS.md — T-Display GP
 
-This repository is the source of truth for the T-Display GP firmware.
-These instructions apply to Codex and other automated coding/deployment agents.
+GitHub `dgcary/t-display-gp` is the source of truth.
 
-## Target
+## Target / workflow
 
-- Repository: `dgcary/t-display-gp`
-- Hardware: **LILYGO T-Display-S3 only**
-- MCU: ESP32-S3
-- Physical TFT: ST7789 170×320, 8-bit parallel
-- Application orientation: **320×170 landscape**
-- Framework: Arduino/C++17 via PlatformIO
-- Primary environment: `lilygo-t-display-s3`
+- LILYGO T-Display-S3 / ESP32-S3 only; ST7789 logical 320×170 landscape rotation 3.
+- Arduino/C++17, PlatformIO `lilygo-t-display-s3`.
+- ESP32 platform pinned `espressif32@6.12.0` / Arduino-ESP32 2.0.17.
+- Web ChatGPT owns source/design/TDD/GitHub/CI/exact-SHA artifact; Codex flashes approved image and performs physical tests.
+- Normal deployment: exact artifact application image only; preserve NVS/bootloader/partitions.
 
-Do not silently retarget to another board, display revision, controller, pinout, or orientation.
-
-## Source-of-truth rule
-
-Before development or deployment, fetch the requested GitHub branch/commit. Do not treat an old local checkout, binary, or previous chat artifact as authoritative.
-
-For normal deployment use the latest approved `main`. If the user requests a feature branch or exact SHA, deploy exactly that ref and record it.
-
-## Required pre-deployment sequence
+Required checks:
 
 ```bash
-pio test -e native
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
+python tools/validate_app_shell_contract.py
+python tools/validate_dashboard_apps_contract.py
+python tools/validate_bambu_cloud_contract.py
+python tools/validate_bambu_pubsub_timeout_contract.py
+python tools/validate_bad_apple_contract.py
+pio test -e native
+python tools/prepare_bad_apple_asset.py
 pio run -e lilygo-t-display-s3
-pio run -e lilygo-t-display-s3 -t upload
-pio device monitor -b 115200
 ```
 
-Rules:
+## Input / shell
 
-1. Do not upload if native tests or firmware build fail.
-2. Do not ignore warnings/errors merely to make CI green.
-3. Do not claim hardware PASS without physical-board evidence.
-4. Record the exact Git SHA for every hardware acceptance run.
+```text
+normal app: GPIO0 short prev; GPIO14 short next; GPIO0 long menu; GPIO14 long no-op
+menu:       GPIO0 short prev; GPIO14 short next; GPIO0 long no-op; GPIO14 long enter
+```
 
-## Hardware invariants
+Menu exactly `股票 / 天气 / Bambu Lab / 智能家居 / 设备信息`; startup Stock; no automatic idle switching.
 
-- GPIO15: display power, HIGH before TFT initialization
-- GPIO38: backlight
-- GPIO0: previous stock, pull-up, active low
-- GPIO14: next stock, pull-up, active low
-- TFT color order: `TFT_RGB`
-- TFT init: `INIT_SEQUENCE_3`
-- Application rotation: 320×170 landscape
+## Other apps
 
-`platformio.ini` must remain aligned with TFT_eSPI `Setup206_LilyGo_T_Display_S3.h`. Run `tools/validate_tdisplay_setup.py` for TFT/build changes.
+Stock: Tencent primary / EastMoney fallback, dedicated `MarketDataWorker`, cache-preserving.
 
-## Market-data architecture invariants
+Weather: Open-Meteo current + Today/Tomorrow. Bad Apple x=152,y=27 168×126, 2190 frames, 10 FPS, local flash, silent loop.
 
-- Main loop must never perform blocking market HTTP.
-- HTTP work belongs in `MarketDataWorker`.
-- UI/Controller depend on Provider abstractions, not raw payload formats.
-- EastMoney remains V1 quote + intraday primary.
-- Tencent remains V1 **quote-only** fallback.
-- Network/provider failure preserves the last valid quote and intraday cache.
-- Quote health and intraday health are independent.
-- Quote traffic has priority over intraday traffic.
-- Waiting intraday work is latest-wins; do not allow old trend requests to build an unbounded queue.
-- Intraday transient retry is bounded and deferred: maximum 3 total attempts; retry must yield to quote traffic.
-- Market TCP connect timeout is 1500 ms, HTTP/read timeout setting is 2500 ms, and TLS handshake timeout is explicitly capped at 5 seconds.
-- Do not pass millisecond timeout constants directly to `WiFiClientSecure::setTimeout()` on Arduino-ESP32 2.0.14; that API is seconds-based.
-- Do not weaken parser validation.
-- Do not add infinite retry, unbounded timeouts, or TLS-security weakening as a stability workaround.
-- Keep `HTTPClient::setReuse(false)` unless a separately approved measurement-driven change says otherwise.
+HA: read-only REST, 1–4 entities, refresh 30–300 s; HTTP trusted LAN only, HTTPS requires configured CA; no credentialed `setInsecure()`.
 
-Run `tools/validate_http_transport_contract.py` whenever transport timeout/reuse logic changes.
+## Bambu Lab Cloud
 
-## Request diagnostics
+Read-only persistent Cloud integration. No printer-LAN MQTT dependency and no pause/resume/stop/light/temperature/camera control. Only permitted publish: read-only `pushall`.
 
-Market requests emit concise `[md]` serial completion lines. When diagnosing live failures, preserve at least:
+### Manual Token / config
 
-- request type and stock
-- provider
-- attempt
-- queue wait and request duration
-- HTTP status
-- native HTTPClient error
-- TLS error when available
-- received/expected bytes
-- final provider result
+No Bambu account/password/SMS/email/TFA login flow, password storage, automatic relogin or token renewal. User pastes browser `token` only into trusted-LAN `http://<device-ip>:8081/`. Never hard-code/log/return Token.
 
-Do not log full market response bodies by default.
+Schema v2: `enabled, region, accessToken, cloudUserId, printers[4]{serial,name}, printerCount, activePrinterIndex`. Max 4 config slots, safe unique serials. Physical concurrent-slot acceptance is currently required for the user's real 2-printer setup; do not claim 4 simultaneous sockets hardware-validated until tested.
 
-## UI invariants
+Device switching:
 
-- Logical layout is 320×170 landscape.
-- Left side contains price and compact metrics; right side contains the intraday chart.
-- A-share positive change is red and negative change is green.
-- Intraday chart preserves the lunch discontinuity.
-- Chart includes distinct previous-close (`昨收`) and valid today-open (`今开`) reference lines.
-- A single intraday failure with a fresh cached chart must not become a generic page-wide error.
-- Stale quote and stale intraday are reported independently (`报价延迟` / `分时延迟`).
-- Delay badges are active-trading health signals; lunch/closed/non-trading cached data aging must not produce false delay alarms.
+```text
+GPIO0 short  -> previous saved printer
+GPIO14 short -> next saved printer
+```
 
-## Provider caution
+Selection wraps and persists. **Switching active printer is local selection only: do not disconnect persistent MQTT slots, do not clear sibling state caches, do not bump a connection-affecting revision.** `snapshot()` / `status()` expose the selected slot cache/status. With fewer than 2 printers, switch is no-op.
 
-EastMoney/Tencent endpoints are public, unofficial contracts and can change. When a provider fails:
+Rendering stays partial; whole-screen fill only explicit full redraw/first entry. Routine polling must not flash the screen.
 
-1. Capture actual device diagnostics/status first.
-2. Add/update a regression fixture or behavior test before changing Provider/Parser behavior.
-3. Change the Provider/transport boundary where possible.
-4. Never relax parsing simply to accept unknown malformed data.
-5. Do not add an intraday fallback Provider without a separate approved design review.
+### Portal
 
-See `docs/api-contract.md`.
+Exactly one `WebServer{8081}`: HA status/config plus Bambu status/printers/discover/config/logout. Old Bambu login/verify/resend routes stay retired. Token input password-type, never echoed; blank preserves Token. Discovery explicit-only; `/api/bambu/printers` local-only.
 
-## First physical acceptance
+### MQTT — persistent multi-printer BambuHelper alignment
 
-At minimum verify:
+Reference `Keralots/BambuHelper` MIT, pinned migration reference `d7a898394c046495798d87e50afd91ecf63f6ce7`.
 
-- LCD is landscape and fully visible.
-- Chinese stock names are legible.
-- red/green color direction is correct.
-- GPIO0/GPIO14 each trigger once per press; holds do not auto-repeat.
-- `TDisplay-GP-Setup` provisioning still works.
-- device reaches `[boot] market loop ready`.
-- quotes continue to refresh when an intraday request fails/retries.
-- cached quote/chart remain visible during failures.
-- `昨收` and `今开` chart references render correctly.
-- no watchdog reset or unexpected reboot.
+```text
+CHINA -> cn.mqtt.bambulab.com:8883
+US_EU -> us.mqtt.bambulab.com:8883
+username = cloudUserId
+password = accessToken
+per slot subscribe = device/<serial>/report
+per slot request   = device/<serial>/request
+```
 
-Use `docs/hardware-acceptance.md` for complete acceptance.
+Runtime contract:
 
-## Scope and safety
+- `begin()` initialization only; no custom MQTT task.
+- `process(nowMs)` called from Arduino loop; no CPU0-pinned `bambu-mqtt` task.
+- `std::array<MqttConn,4>` + `std::array<BambuState,4>` provide independent per-printer connection/runtime/cache.
+- service all connected slots first; at most one blocking new/reconnect attempt per loop pass.
+- each slot owns its own fresh-on-reconnect `WiFiClientSecure + PubSubClient`; strict CA, `setTimeout(15)`, buffer 40960, keepalive 30, random `bblp_*` client ID.
+- PubSubClient owns TCP/TLS establishment; no normal-path preflight or explicit `tls_->connect(...)`.
+- callback routes report topic by Serial to the correct slot.
+- initial per-slot `pushall` >=2000 ms after connect.
+- per-slot backoff 30 s, 60 s after 5 failures, 120 s after 15.
+- one slot failure/reconnect must not tear down sibling online slots.
+- active index/name-only config changes preserve sockets and slot caches; credential/region/serial-set changes rebuild affected runtime via config revision.
+- rc 4/5 latches token-invalid protection.
+- `esp_task_wdt_reset()` allowed around known long operations, but watchdog disable/delete forbidden.
+- `setInsecure()` forbidden; no background login/discovery/token renewal.
+- old Stage-2/3/4 `mqtt_real_tls_*`, layered preflight and project `MQTT_SOCKET_TIMEOUT` overrides stay retired.
 
-Deployment is limited to the connected T-Display-S3 and this repository. Do not modify unrelated servers, routers, DHCP, Wi-Fi infrastructure, or other devices. Never hard-code Wi-Fi passwords, GitHub credentials, API secrets, broker credentials, or personal account data.
+Secret-safe serial markers include `slot=<n>` with mqtt_connect/ok/fail/subscribe_fail/loop_lost/pushall. Never print Token, Cloud User ID, Cookie/Authorization/auth payload.
 
-## Documentation
+## Diagnostics / acceptance
 
-When behavior, pins, Provider contracts, build commands, market scheduling, or UI orientation change, update the relevant files in the same PR:
-
-- `README.md`
-- `docs/deployment.md`
-- `docs/api-contract.md`
-- `docs/hardware-acceptance.md`
-
-A change that makes these documents materially wrong is incomplete.
+Physical acceptance must include: exact firmware/NVS preservation; 2 saved real printers both reach their own `mqtt_connect_ok slot=0/1` and `mqtt_pushall_initial`; then >=10 A↔B switches should create **no new mqtt_connect solely because of switching** and should feel near-immediate; per-slot live data/caches must not cross-contaminate; selected active index persists reboot; no periodic full-screen flash; >=10 min no watchdog/panic/automatic reboot; one slot reconnect must not drop the other; check Stock/Weather/HA coexistence and heap under 2 persistent MQTT/TLS slots.
