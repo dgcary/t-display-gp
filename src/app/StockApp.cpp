@@ -32,6 +32,16 @@ void StockApp::onButton(InputEvent event) {
   }
 }
 
+bool StockApp::selectPage(size_t pageIndex) {
+  if (pageIndex >= pageCount()) return false;
+  const bool selected = controller_.selectIndex(pageIndex);
+  if (selected && active_) {
+    forceDirty_ = true;
+    forceFullRedraw_ = true;
+  }
+  return selected;
+}
+
 void StockApp::tick(uint32_t nowMs) {
   if (!initialized_ || !active_) return;
   controller_.setWifiOnline(device_.wifiConnected());
