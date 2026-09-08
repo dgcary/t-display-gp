@@ -103,19 +103,44 @@ If the Token is rejected with MQTT rc 4/5, service enters `token_invalid` and st
 
 Legacy Bambu NVS schema v1 is migrated to v2 when possible. Reusable Token/User ID/single printer are retained; account/password are dropped.
 
-### MQTT diagnostics
+### Layered MQTT/TLS diagnostic firmware
 
-When diagnosing unstable Cloud MQTT, serial may emit secret-safe lines such as:
+When the Cloud MQTT problem cannot be localized from `rc=-2` / numeric TLS error alone, the diagnostic build performs one bounded preflight inside the same `NetworkArbiter` critical section before the real MQTT CONNECT:
 
 ```text
-[bambu] mqtt_connect broker=<host> wifi=<status> rssi=<dBm> heap=<bytes>
-[bambu] mqtt_connect_ok rssi=<dBm> heap=<bytes>
-[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> wifi=<status> rssi=<dBm> heap=<bytes>
-[bambu] mqtt_subscribe_fail rc=<mqtt> wifi=<status> rssi=<dBm> heap=<bytes>
-[bambu] mqtt_loop_lost rc=<mqtt> wifi=<status> rssi=<dBm> heap=<bytes>
+DNS resolve broker
+plain TCP connect broker:8883
+strict-CA TLS preflight broker:8883
+real PubSubClient MQTT CONNECT
 ```
 
-These lines must never include Access Token, Cloud User ID, Cookie/Authorization, account data or raw authentication payloads. Diagnostic instrumentation does not by itself justify changing CA, keepalive or retry cadence; collect physical evidence first.
+Serial 115200 should show:
+
+```text
+[netcfg] ip=<...> mask=<...> gateway=<...> dns1=<...> dns2=<...> bssid=<...> ch=<...> wifi=<...>
+[bambu] mqtt_diag_heap phase=before_probe internal_free=<...> internal_largest=<...> dma_free=<...> heap_free=<...>
+[bambu] mqtt_diag_dns ok=<0|1> ip=<resolved-ip> elapsed_ms=<...>
+[bambu] mqtt_diag_tcp ok=<0|1> ip=<resolved-ip> port=8883 elapsed_ms=<...>
+[bambu] mqtt_diag_tls ok=<0|1> tls=<numeric> elapsed_ms=<...>
+[bambu] mqtt_diag_heap phase=after_probe ...
+[bambu] mqtt_diag_heap phase=after_mqtt_buffer ...
+[bambu] mqtt_connect_ok elapsed_ms=<...> ...
+[bambu] mqtt_connect_fail rc=<mqtt> tls=<numeric> elapsed_ms=<...> internal_free=<...> internal_largest=<...> dma_free=<...>
+```
+
+Interpretation:
+
+```text
+DNS fail                         -> resolver/network config layer
+DNS pass + TCP fail             -> route/socket/TCP layer
+TCP pass + strict TLS fail      -> TLS/CA/handshake/resource layer
+TLS preflight pass + real rc=-2 -> compare after_mqtt_buffer heap/largest block and real-connect elapsed
+TLS pass + rc 4/5               -> MQTT authentication / Token layer
+```
+
+The probes are diagnostic instrumentation only and intentionally create extra short-lived TCP/TLS connections during reconnect attempts. They are not a permanent optimization or fallback. Do not use them to justify disabling CA, changing Token handling or adding new publishes. Keep MQTT keepalive = 30 s and reconnect cadence = 30 s unless later physical evidence supports a separate policy change.
+
+Never include Access Token, Cloud User ID, Cookie/Authorization, account data, auth payloads or raw credential-bearing TLS error text in logs. Numeric errors, broker/IP, elapsed time and heap metrics are allowed.
 
 ## Physical smoke
 
@@ -132,7 +157,7 @@ These lines must never include Access Token, Cloud User ID, Cookie/Authorization
 11. Optionally test explicit discovery once; verify it populates form but does not overwrite saved config until Save.
 12. Reboot with NVS preserved; saved Token/list/active printer should restore.
 13. Leave Bambu app and verify background freshness while Stock/Weather/HA remain usable.
-14. For any MQTT drop, preserve the new `[bambu]` diagnostic lines and correlate them with `/api/bambu/status`, Wi-Fi reachability and PC-side TCP 8883/TLS tests before changing policy.
+14. For any MQTT failure, preserve one complete `[netcfg]` + `mqtt_diag_heap/dns/tcp/tls` + real `mqtt_connect_*` sequence. Correlate it with `/api/bambu/status` and, where available, firewall/PC-side evidence before changing policy.
 15. Wi-Fi loss/recovery must reconnect without panic/watchdog/heap leak.
 16. Token-invalid test only if safe; do not intentionally lock the account.
 
