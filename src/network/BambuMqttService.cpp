@@ -10,7 +10,6 @@
 #include <cstdio>
 #include <new>
 #include <string>
-#include <string_view>
 
 #include "BambuCloudProtocol.h"
 #include "NetworkArbiter.h"
@@ -48,7 +47,19 @@ bool elapsed(uint32_t nowMs, uint32_t sinceMs, uint32_t intervalMs) {
 
 bool configuredForMqtt(const BambuConfig& config) {
   return config.enabled && !config.accessToken.empty() && !config.cloudUserId.empty() &&
-         activeBambuPrinter(config) != nullptr;
+         config.printerCount > 0U;
+}
+
+bool sameConnectionSet(const BambuConfig& lhs, const BambuConfig& rhs) {
+  if (lhs.enabled != rhs.enabled || lhs.region != rhs.region ||
+      lhs.accessToken != rhs.accessToken || lhs.cloudUserId != rhs.cloudUserId ||
+      lhs.printerCount != rhs.printerCount) {
+    return false;
+  }
+  for (size_t slot = 0; slot < lhs.printerCount; ++slot) {
+    if (lhs.printers[slot].serial != rhs.printers[slot].serial) return false;
+  }
+  return true;
 }
 }  // namespace
 
@@ -61,10 +72,9 @@ bool BambuMqttService::begin(const BambuConfig& config, BambuConfigStore& store)
 
   store_ = &store;
   config_ = config;
-  status_.configured = configuredForMqtt(config_);
-  status_.tokenSet = !config_.accessToken.empty();
-  status_.session = config_.enabled ? BambuSessionState::MQTT_CONNECTING
-                                    : BambuSessionState::INTEGRATION_DISABLED;
+  for (size_t slot = 0; slot < BambuConfigLimits::PRINTER_COUNT; ++slot) {
+    resetSlotRuntime(slot, config_);
+  }
   activeInstance_ = this;
   return true;
 }
@@ -75,63 +85,83 @@ void BambuMqttService::process(uint32_t nowMs) {
 
   if (revision != observedExternalConfigRevision_) {
     observedExternalConfigRevision_ = revision;
-    disconnectMqtt();
-    mqttAttempted_ = false;
-    tokenRejected_ = false;
-    consecutiveFails_ = 0U;
-    lastMqttAttemptMs_ = 0U;
-    connectTimeMs_ = 0U;
+    disconnectAll();
+    for (size_t slot = 0; slot < BambuConfigLimits::PRINTER_COUNT; ++slot) {
+      resetSlotRuntime(slot, config);
+    }
   }
 
   if (!config.enabled) {
-    if (mqtt_ || tls_) disconnectMqtt();
-    setSession(BambuSessionState::INTEGRATION_DISABLED);
-    return;
-  }
-
-  if (!configuredForMqtt(config)) {
-    if (mqtt_ || tls_) disconnectMqtt();
-    setSession(config.accessToken.empty() ? BambuSessionState::TOKEN_INVALID
-                                          : BambuSessionState::UNCONFIGURED);
-    return;
-  }
-
-  if (tokenRejected_) {
-    if (mqtt_ || tls_) disconnectMqtt();
-    setSession(BambuSessionState::TOKEN_INVALID);
-    return;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    if (mqtt_ || tls_) disconnectMqtt();
-    setSession(BambuSessionState::NETWORK_ERROR);
-    return;
-  }
-
-  if (!mqtt_ || !mqtt_->connected()) {
-    setConnectivity(false);
-    if (!mqttAttempted_ || elapsed(nowMs, lastMqttAttemptMs_, reconnectIntervalMs())) {
-      connectMqtt(nowMs);
+    disconnectAll();
+    for (size_t slot = 0; slot < BambuConfigLimits::PRINTER_COUNT; ++slot) {
+      setSlotSession(slot, BambuSessionState::INTEGRATION_DISABLED);
     }
     return;
   }
 
-  if (!mqtt_->loop()) {
-    const int rc = mqtt_->state();
-    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
-    setConnectivity(false);
-    setSession(BambuSessionState::NETWORK_ERROR, rc);
-    Serial.printf("[bambu] mqtt_loop_lost rc=%d wifi=%d rssi=%d heap=%u fails=%u\n",
-                  rc, static_cast<int>(WiFi.status()), WiFi.RSSI(),
-                  static_cast<unsigned>(esp_get_free_heap_size()),
-                  static_cast<unsigned>(consecutiveFails_));
-    disconnectMqtt();
+  if (!configuredForMqtt(config)) {
+    disconnectAll();
+    const BambuSessionState session = config.accessToken.empty()
+                                          ? BambuSessionState::TOKEN_INVALID
+                                          : BambuSessionState::UNCONFIGURED;
+    for (size_t slot = 0; slot < BambuConfigLimits::PRINTER_COUNT; ++slot) {
+      setSlotSession(slot, session);
+    }
     return;
   }
 
-  if (initialPushallPending_ && connectTimeMs_ != 0U &&
-      elapsed(nowMs, connectTimeMs_, BAMBU_PUSHALL_INITIAL_DELAY_MS)) {
-    publishInitialPushall();
+  if (WiFi.status() != WL_CONNECTED) {
+    for (size_t slot = 0; slot < config.printerCount; ++slot) {
+      disconnectSlot(slot);
+      setSlotSession(slot, BambuSessionState::NETWORK_ERROR);
+    }
+    return;
+  }
+
+  // Service all already-established sockets before starting any potentially
+  // blocking new Cloud connection. This mirrors BambuHelper's persistent
+  // multi-printer model and keeps active printers fresh while a sibling slot
+  // is waiting for reconnect/backoff.
+  for (size_t slot = 0; slot < config.printerCount; ++slot) {
+    MqttConn& conn = conns_[slot];
+    if (!conn.mqtt || !conn.mqtt->connected()) continue;
+
+    if (!conn.mqtt->loop()) {
+      const int rc = conn.mqtt->state();
+      if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+      setSlotConnectivity(slot, false);
+      setSlotSession(slot, BambuSessionState::NETWORK_ERROR, rc);
+      Serial.printf("[bambu] mqtt_loop_lost slot=%u rc=%d wifi=%d rssi=%d heap=%u fails=%u\n",
+                    static_cast<unsigned>(slot), rc, static_cast<int>(WiFi.status()),
+                    WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()),
+                    static_cast<unsigned>(conn.consecutiveFails));
+      disconnectSlot(slot);
+      continue;
+    }
+
+    if (conn.initialPushallPending && conn.connectTimeMs != 0U &&
+        elapsed(nowMs, conn.connectTimeMs, BAMBU_PUSHALL_INITIAL_DELAY_MS)) {
+      publishInitialPushall(slot);
+    }
+  }
+
+  // At most one blocking connect attempt per Arduino loop pass. Prefer the
+  // currently selected printer, then walk the remaining configured slots.
+  for (size_t offset = 0; offset < config.printerCount; ++offset) {
+    const size_t slot = (config.activePrinterIndex + offset) % config.printerCount;
+    MqttConn& conn = conns_[slot];
+    if (conn.mqtt && conn.mqtt->connected()) continue;
+    if (conn.tokenRejected) {
+      setSlotSession(slot, BambuSessionState::TOKEN_INVALID, conn.status.lastMqttRc);
+      continue;
+    }
+
+    setSlotConnectivity(slot, false);
+    if (!conn.mqttAttempted ||
+        elapsed(nowMs, conn.lastMqttAttemptMs, reconnectIntervalMs(conn))) {
+      connectSlot(slot, nowMs);
+      return;
+    }
   }
 }
 
@@ -139,7 +169,10 @@ BambuState BambuMqttService::snapshot() const {
   BambuState copy;
   if (!mutex_) return copy;
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-    copy = state_;
+    const size_t slot = config_.activePrinterIndex < config_.printerCount
+                            ? config_.activePrinterIndex
+                            : 0U;
+    copy = states_[slot];
     xSemaphoreGive(mutex_);
   }
   return copy;
@@ -149,7 +182,12 @@ BambuMqttStatus BambuMqttService::status() const {
   BambuMqttStatus copy;
   if (!mutex_) return copy;
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-    copy = status_;
+    const size_t slot = config_.activePrinterIndex < config_.printerCount
+                            ? config_.activePrinterIndex
+                            : 0U;
+    copy = conns_[slot].status;
+    copy.configured = configuredForMqtt(config_);
+    copy.tokenSet = !config_.accessToken.empty();
     xSemaphoreGive(mutex_);
   }
   return copy;
@@ -160,21 +198,39 @@ BambuConfig BambuMqttService::configSnapshot() const { return configCopy(); }
 void BambuMqttService::applyConfigLocked(const BambuConfig& config) {
   config_ = config;
   ++externalConfigRevision_;
-  state_ = BambuState{};
-  status_.mqttConnected = false;
-  status_.lastMessageMs = 0U;
-  status_.lastMqttRc = -1;
-  status_.configured = configuredForMqtt(config_);
-  status_.tokenSet = !config_.accessToken.empty();
-  status_.session = config_.enabled ? BambuSessionState::MQTT_CONNECTING
-                                    : BambuSessionState::INTEGRATION_DISABLED;
+  for (size_t slot = 0; slot < BambuConfigLimits::PRINTER_COUNT; ++slot) {
+    states_[slot] = BambuState{};
+    conns_[slot].status.mqttConnected = false;
+    conns_[slot].status.lastMessageMs = 0U;
+    conns_[slot].status.lastMqttRc = -1;
+    conns_[slot].status.configured = configuredForMqtt(config_) && slot < config_.printerCount;
+    conns_[slot].status.tokenSet = !config_.accessToken.empty();
+    conns_[slot].status.session = config_.enabled
+                                      ? BambuSessionState::MQTT_CONNECTING
+                                      : BambuSessionState::INTEGRATION_DISABLED;
+  }
 }
 
 bool BambuMqttService::replaceConfig(const BambuConfig& config) {
   if (!store_ || !mutex_ || !validateBambuConfig(config).ok()) return false;
   if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
+
+  const bool connectionSetUnchanged = sameConnectionSet(config_, config);
   const bool saved = store_->save(config);
-  if (saved) applyConfigLocked(config);
+  if (saved) {
+    if (connectionSetUnchanged) {
+      // Name/active-slot changes are presentation/config changes only. Keep all
+      // persistent MQTT sockets and their per-printer cached state alive.
+      config_ = config;
+      for (size_t slot = 0; slot < BambuConfigLimits::PRINTER_COUNT; ++slot) {
+        conns_[slot].status.configured = configuredForMqtt(config_) && slot < config_.printerCount;
+        conns_[slot].status.tokenSet = !config_.accessToken.empty();
+      }
+    } else {
+      applyConfigLocked(config);
+    }
+  }
+
   xSemaphoreGive(mutex_);
   return saved;
 }
@@ -182,13 +238,21 @@ bool BambuMqttService::replaceConfig(const BambuConfig& config) {
 bool BambuMqttService::cycleActivePrinter(int direction) {
   if (!store_ || !mutex_ || direction == 0) return false;
   if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) return false;
+
   BambuConfig next = config_;
   if (!selectRelativeBambuPrinter(next, direction)) {
     xSemaphoreGive(mutex_);
     return false;
   }
+
   const bool saved = store_->save(next);
-  if (saved) applyConfigLocked(next);
+  if (saved) {
+    // Switching printers is intentionally a local active-slot selection only.
+    // Each configured printer keeps its own TLS/MQTT connection and cached
+    // BambuState, matching upstream BambuHelper's simultaneous-connection model.
+    config_ = next;
+  }
+
   xSemaphoreGive(mutex_);
   return saved;
 }
@@ -198,95 +262,100 @@ void BambuMqttService::mqttCallbackThunk(char* topic, uint8_t* payload, unsigned
   if (activeInstance_) activeInstance_->handleMessage(topic, payload, length);
 }
 
+size_t BambuMqttService::findSlotForTopic(const char* topic) const {
+  if (!topic) return BambuConfigLimits::PRINTER_COUNT;
+  const BambuConfig config = configCopy();
+  for (size_t slot = 0; slot < config.printerCount; ++slot) {
+    const std::string expected = bambuReportTopic(config.printers[slot].serial);
+    if (!expected.empty() && expected == topic) return slot;
+  }
+  return BambuConfigLimits::PRINTER_COUNT;
+}
+
 void BambuMqttService::handleMessage(const char* topic, const uint8_t* payload,
                                      unsigned int length) {
-  const BambuConfig config = configCopy();
-  const BambuPrinterConfig* active = activeBambuPrinter(config);
-  if (!active) return;
-
-  const std::string expected = bambuReportTopic(active->serial);
-  if (!topic || expected.empty() || expected != topic || !payload || length == 0U ||
+  const size_t slot = findSlotForTopic(topic);
+  if (slot >= BambuConfigLimits::PRINTER_COUNT || !payload || length == 0U ||
       length > BambuStateLimits::REPORT_JSON) {
     return;
   }
 
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) return;
   const std::string_view json(reinterpret_cast<const char*>(payload), length);
-  if (applyBambuReport(json, millis(), state_)) {
-    state_.connected = true;
-    status_.mqttConnected = true;
-    status_.session = BambuSessionState::ONLINE;
-    status_.lastMessageMs = state_.lastUpdateMs;
-    status_.lastMqttRc = 0;
+  if (applyBambuReport(json, millis(), states_[slot])) {
+    states_[slot].connected = true;
+    conns_[slot].status.mqttConnected = true;
+    conns_[slot].status.session = BambuSessionState::ONLINE;
+    conns_[slot].status.lastMessageMs = states_[slot].lastUpdateMs;
+    conns_[slot].status.lastMqttRc = 0;
   }
   xSemaphoreGive(mutex_);
 }
 
-uint32_t BambuMqttService::reconnectIntervalMs() const {
-  if (consecutiveFails_ >= BAMBU_BACKOFF_PHASE3_FAILS) {
+uint32_t BambuMqttService::reconnectIntervalMs(const MqttConn& conn) const {
+  if (conn.consecutiveFails >= BAMBU_BACKOFF_PHASE3_FAILS) {
     return BAMBU_CLOUD_RECONNECT_PHASE3_MS;
   }
-  if (consecutiveFails_ >= BAMBU_BACKOFF_PHASE1_FAILS) {
+  if (conn.consecutiveFails >= BAMBU_BACKOFF_PHASE1_FAILS) {
     return BAMBU_CLOUD_RECONNECT_PHASE2_MS;
   }
   return BAMBU_CLOUD_RECONNECT_BASE_MS;
 }
 
-bool BambuMqttService::connectMqtt(uint32_t nowMs) {
-  lastMqttAttemptMs_ = nowMs;
-  mqttAttempted_ = true;
+bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
+  if (slot >= BambuConfigLimits::PRINTER_COUNT) return false;
+  MqttConn& conn = conns_[slot];
+  conn.lastMqttAttemptMs = nowMs;
+  conn.mqttAttempted = true;
 
   const BambuConfig config = configCopy();
-  const BambuPrinterConfig* active = activeBambuPrinter(config);
-  if (!active || config.cloudUserId.empty() || config.accessToken.empty()) {
-    setSession(BambuSessionState::UNCONFIGURED);
+  if (slot >= config.printerCount || config.cloudUserId.empty() || config.accessToken.empty()) {
+    setSlotSession(slot, BambuSessionState::UNCONFIGURED);
     return false;
   }
 
-  // Adapted from Keralots/BambuHelper (MIT): Cloud reconnects always rebuild
-  // both client objects so no stale TLS/socket/session state survives.
-  disconnectMqtt();
-  setSession(BambuSessionState::MQTT_CONNECTING);
+  disconnectSlot(slot);
+  setSlotSession(slot, BambuSessionState::MQTT_CONNECTING);
 
   esp_task_wdt_reset();
   NetworkRequestGuard guard(sharedNetworkArbiter());
   if (!guard.locked()) {
-    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
-    setSession(BambuSessionState::NETWORK_ERROR, -2);
+    if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    setSlotSession(slot, BambuSessionState::NETWORK_ERROR, -2);
     return false;
   }
   esp_task_wdt_reset();
 
   const char* broker = bambuBrokerForRegion(config.region);
-  Serial.printf("[bambu] mqtt_connect broker=%s wifi=%d rssi=%d heap=%u fails=%u\n",
-                broker, static_cast<int>(WiFi.status()), WiFi.RSSI(),
-                static_cast<unsigned>(esp_get_free_heap_size()),
-                static_cast<unsigned>(consecutiveFails_));
+  Serial.printf("[bambu] mqtt_connect slot=%u broker=%s wifi=%d rssi=%d heap=%u fails=%u\n",
+                static_cast<unsigned>(slot), broker, static_cast<int>(WiFi.status()),
+                WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()),
+                static_cast<unsigned>(conn.consecutiveFails));
 
-  tls_ = new (std::nothrow) WiFiClientSecure();
-  if (!tls_) {
-    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
-    setSession(BambuSessionState::BUFFER_ERROR, -2);
-    disconnectMqtt();
+  conn.tls = new (std::nothrow) WiFiClientSecure();
+  if (!conn.tls) {
+    if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    setSlotSession(slot, BambuSessionState::BUFFER_ERROR, -2);
+    disconnectSlot(slot);
     return false;
   }
-  tls_->setCACertBundle(rootca_crt_bundle_start);
-  tls_->setTimeout(15);
+  conn.tls->setCACertBundle(rootca_crt_bundle_start);
+  conn.tls->setTimeout(15);
 
-  mqtt_ = new (std::nothrow) PubSubClient(*tls_);
-  if (!mqtt_) {
-    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
-    setSession(BambuSessionState::BUFFER_ERROR, -2);
-    disconnectMqtt();
+  conn.mqtt = new (std::nothrow) PubSubClient(*conn.tls);
+  if (!conn.mqtt) {
+    if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    setSlotSession(slot, BambuSessionState::BUFFER_ERROR, -2);
+    disconnectSlot(slot);
     return false;
   }
-  mqtt_->setServer(broker, BAMBU_MQTT_PORT);
-  mqtt_->setCallback(mqttCallbackThunk);
-  mqtt_->setKeepAlive(BAMBU_MQTT_KEEPALIVE_SEC);
-  if (!mqtt_->setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)) {
-    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
-    setSession(BambuSessionState::BUFFER_ERROR, -2);
-    disconnectMqtt();
+  conn.mqtt->setServer(broker, BAMBU_MQTT_PORT);
+  conn.mqtt->setCallback(mqttCallbackThunk);
+  conn.mqtt->setKeepAlive(BAMBU_MQTT_KEEPALIVE_SEC);
+  if (!conn.mqtt->setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)) {
+    if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    setSlotSession(slot, BambuSessionState::BUFFER_ERROR, -2);
+    disconnectSlot(slot);
     return false;
   }
 
@@ -297,113 +366,144 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
 
   const uint32_t startedMs = millis();
   esp_task_wdt_reset();
-  const bool connected =
-      mqtt_->connect(clientId, config.cloudUserId.c_str(), config.accessToken.c_str());
+  const bool connected = conn.mqtt->connect(
+      clientId, config.cloudUserId.c_str(), config.accessToken.c_str());
   const uint32_t connectElapsedMs = static_cast<uint32_t>(millis() - startedMs);
 
   if (!connected) {
-    const int rc = mqtt_->state();
+    const int rc = conn.mqtt->state();
     if (rc == 4 || rc == 5) {
-      tokenRejected_ = true;
-    } else if (consecutiveFails_ < UINT16_MAX) {
-      ++consecutiveFails_;
+      conn.tokenRejected = true;
+    } else if (conn.consecutiveFails < UINT16_MAX) {
+      ++conn.consecutiveFails;
     }
     Serial.printf(
-        "[bambu] mqtt_connect_fail rc=%d elapsed_ms=%lu wifi=%d rssi=%d heap=%u fails=%u retry_ms=%lu\n",
-        rc, static_cast<unsigned long>(connectElapsedMs), static_cast<int>(WiFi.status()),
-        WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()),
-        static_cast<unsigned>(consecutiveFails_),
-        static_cast<unsigned long>(reconnectIntervalMs()));
-    setSession((rc == 4 || rc == 5) ? BambuSessionState::TOKEN_INVALID
-                                    : BambuSessionState::NETWORK_ERROR,
-               rc);
-    disconnectMqtt();
+        "[bambu] mqtt_connect_fail slot=%u rc=%d elapsed_ms=%lu wifi=%d rssi=%d heap=%u fails=%u retry_ms=%lu\n",
+        static_cast<unsigned>(slot), rc, static_cast<unsigned long>(connectElapsedMs),
+        static_cast<int>(WiFi.status()), WiFi.RSSI(),
+        static_cast<unsigned>(esp_get_free_heap_size()),
+        static_cast<unsigned>(conn.consecutiveFails),
+        static_cast<unsigned long>(reconnectIntervalMs(conn)));
+    setSlotSession(slot, (rc == 4 || rc == 5) ? BambuSessionState::TOKEN_INVALID
+                                              : BambuSessionState::NETWORK_ERROR,
+                   rc);
+    disconnectSlot(slot);
     return false;
   }
 
-  const std::string reportTopic = bambuReportTopic(active->serial);
-  if (reportTopic.empty() || !mqtt_->subscribe(reportTopic.c_str())) {
-    const int rc = mqtt_->state();
-    if (consecutiveFails_ < UINT16_MAX) ++consecutiveFails_;
-    Serial.printf("[bambu] mqtt_subscribe_fail rc=%d wifi=%d rssi=%d heap=%u fails=%u\n",
-                  rc, static_cast<int>(WiFi.status()), WiFi.RSSI(),
-                  static_cast<unsigned>(esp_get_free_heap_size()),
-                  static_cast<unsigned>(consecutiveFails_));
-    setSession(BambuSessionState::NETWORK_ERROR, rc);
-    disconnectMqtt();
+  const std::string reportTopic = bambuReportTopic(config.printers[slot].serial);
+  if (reportTopic.empty() || !conn.mqtt->subscribe(reportTopic.c_str())) {
+    const int rc = conn.mqtt->state();
+    if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    Serial.printf(
+        "[bambu] mqtt_subscribe_fail slot=%u rc=%d wifi=%d rssi=%d heap=%u fails=%u\n",
+        static_cast<unsigned>(slot), rc, static_cast<int>(WiFi.status()), WiFi.RSSI(),
+        static_cast<unsigned>(esp_get_free_heap_size()),
+        static_cast<unsigned>(conn.consecutiveFails));
+    setSlotSession(slot, BambuSessionState::NETWORK_ERROR, rc);
+    disconnectSlot(slot);
     return false;
   }
 
-  consecutiveFails_ = 0U;
-  tokenRejected_ = false;
-  connectTimeMs_ = millis();
-  initialPushallPending_ = true;
-  setConnectivity(true);
-  setSession(BambuSessionState::ONLINE, 0);
-  Serial.printf("[bambu] mqtt_connect_ok elapsed_ms=%lu rssi=%d heap=%u\n",
-                static_cast<unsigned long>(connectElapsedMs), WiFi.RSSI(),
-                static_cast<unsigned>(esp_get_free_heap_size()));
+  conn.consecutiveFails = 0U;
+  conn.tokenRejected = false;
+  conn.connectTimeMs = millis();
+  conn.initialPushallPending = true;
+  setSlotConnectivity(slot, true);
+  setSlotSession(slot, BambuSessionState::ONLINE, 0);
+  Serial.printf("[bambu] mqtt_connect_ok slot=%u elapsed_ms=%lu rssi=%d heap=%u\n",
+                static_cast<unsigned>(slot), static_cast<unsigned long>(connectElapsedMs),
+                WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()));
   return true;
 }
 
-bool BambuMqttService::publishInitialPushall() {
-  if (!mqtt_ || !mqtt_->connected()) return false;
+bool BambuMqttService::publishInitialPushall(size_t slot) {
+  if (slot >= BambuConfigLimits::PRINTER_COUNT) return false;
+  MqttConn& conn = conns_[slot];
+  if (!conn.mqtt || !conn.mqtt->connected()) return false;
 
   const BambuConfig config = configCopy();
-  const BambuPrinterConfig* active = activeBambuPrinter(config);
-  if (!active) return false;
+  if (slot >= config.printerCount) return false;
 
-  const std::string requestTopic = "device/" + active->serial + "/request";
-  const uint32_t sequence = pushallSequence_++;
+  const std::string requestTopic = "device/" + config.printers[slot].serial + "/request";
+  const uint32_t sequence = conn.pushallSequence++;
   char request[144];
   std::snprintf(request, sizeof(request),
                 "{\"pushing\":{\"sequence_id\":\"%lu\",\"command\":\"pushall\",\"version\":1,\"push_target\":1}}",
                 static_cast<unsigned long>(sequence));
 
   esp_task_wdt_reset();
-  const bool published = mqtt_->publish(requestTopic.c_str(), request);
+  const bool published = conn.mqtt->publish(requestTopic.c_str(), request);
   if (published) {
-    initialPushallPending_ = false;
-    Serial.printf("[bambu] mqtt_pushall_initial seq=%lu delay_ms=%lu\n",
-                  static_cast<unsigned long>(sequence),
-                  static_cast<unsigned long>(millis() - connectTimeMs_));
+    conn.initialPushallPending = false;
+    Serial.printf("[bambu] mqtt_pushall_initial slot=%u seq=%lu delay_ms=%lu\n",
+                  static_cast<unsigned>(slot), static_cast<unsigned long>(sequence),
+                  static_cast<unsigned long>(millis() - conn.connectTimeMs));
   } else {
-    Serial.printf("[bambu] mqtt_pushall_initial_fail rc=%d\n", mqtt_->state());
+    Serial.printf("[bambu] mqtt_pushall_initial_fail slot=%u rc=%d\n",
+                  static_cast<unsigned>(slot), conn.mqtt->state());
   }
   return published;
 }
 
-void BambuMqttService::disconnectMqtt() {
-  initialPushallPending_ = false;
-  if (mqtt_) {
-    if (mqtt_->connected()) mqtt_->disconnect();
-    delete mqtt_;
-    mqtt_ = nullptr;
+void BambuMqttService::disconnectSlot(size_t slot) {
+  if (slot >= BambuConfigLimits::PRINTER_COUNT) return;
+  MqttConn& conn = conns_[slot];
+  conn.initialPushallPending = false;
+  if (conn.mqtt) {
+    if (conn.mqtt->connected()) conn.mqtt->disconnect();
+    delete conn.mqtt;
+    conn.mqtt = nullptr;
   }
-  if (tls_) {
-    tls_->stop();
-    delete tls_;
-    tls_ = nullptr;
+  if (conn.tls) {
+    conn.tls->stop();
+    delete conn.tls;
+    conn.tls = nullptr;
   }
-  setConnectivity(false);
+  setSlotConnectivity(slot, false);
 }
 
-void BambuMqttService::setConnectivity(bool connected) {
-  if (!mutex_) return;
+void BambuMqttService::disconnectAll() {
+  for (size_t slot = 0; slot < BambuConfigLimits::PRINTER_COUNT; ++slot) {
+    disconnectSlot(slot);
+  }
+}
+
+void BambuMqttService::resetSlotRuntime(size_t slot, const BambuConfig& config) {
+  if (slot >= BambuConfigLimits::PRINTER_COUNT) return;
+  MqttConn& conn = conns_[slot];
+  conn.lastMqttAttemptMs = 0U;
+  conn.connectTimeMs = 0U;
+  conn.mqttAttempted = false;
+  conn.tokenRejected = false;
+  conn.initialPushallPending = false;
+  conn.consecutiveFails = 0U;
+  conn.pushallSequence = 1U;
+  conn.status = BambuMqttStatus{};
+  conn.status.configured = configuredForMqtt(config) && slot < config.printerCount;
+  conn.status.tokenSet = !config.accessToken.empty();
+  conn.status.session = !config.enabled
+                            ? BambuSessionState::INTEGRATION_DISABLED
+                            : (conn.status.configured ? BambuSessionState::MQTT_CONNECTING
+                                                      : BambuSessionState::UNCONFIGURED);
+}
+
+void BambuMqttService::setSlotConnectivity(size_t slot, bool connected) {
+  if (!mutex_ || slot >= BambuConfigLimits::PRINTER_COUNT) return;
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-    state_.connected = connected;
-    status_.mqttConnected = connected;
+    states_[slot].connected = connected;
+    conns_[slot].status.mqttConnected = connected;
     xSemaphoreGive(mutex_);
   }
 }
 
-void BambuMqttService::setSession(BambuSessionState session, int mqttRc) {
-  if (!mutex_) return;
+void BambuMqttService::setSlotSession(size_t slot, BambuSessionState session, int mqttRc) {
+  if (!mutex_ || slot >= BambuConfigLimits::PRINTER_COUNT) return;
   if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-    status_.session = session;
-    if (mqttRc != -1) status_.lastMqttRc = mqttRc;
-    status_.configured = configuredForMqtt(config_);
-    status_.tokenSet = !config_.accessToken.empty();
+    conns_[slot].status.session = session;
+    if (mqttRc != -1) conns_[slot].status.lastMqttRc = mqttRc;
+    conns_[slot].status.configured = configuredForMqtt(config_) && slot < config_.printerCount;
+    conns_[slot].status.tokenSet = !config_.accessToken.empty();
     xSemaphoreGive(mutex_);
   }
 }

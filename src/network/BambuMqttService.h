@@ -3,6 +3,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include "BambuConfig.h"
@@ -33,34 +35,41 @@ class BambuMqttService {
   bool cycleActivePrinter(int direction);
 
  private:
+  struct MqttConn {
+    WiFiClientSecure* tls = nullptr;
+    PubSubClient* mqtt = nullptr;
+    BambuMqttStatus status{};
+    uint32_t lastMqttAttemptMs = 0U;
+    uint32_t connectTimeMs = 0U;
+    bool mqttAttempted = false;
+    bool tokenRejected = false;
+    bool initialPushallPending = false;
+    uint16_t consecutiveFails = 0U;
+    uint32_t pushallSequence = 1U;
+  };
+
   static void mqttCallbackThunk(char* topic, uint8_t* payload, unsigned int length);
 
   void handleMessage(const char* topic, const uint8_t* payload, unsigned int length);
-  bool connectMqtt(uint32_t nowMs);
-  bool publishInitialPushall();
-  uint32_t reconnectIntervalMs() const;
-  void disconnectMqtt();
-  void setConnectivity(bool connected);
-  void setSession(BambuSessionState state, int mqttRc = -1);
+  size_t findSlotForTopic(const char* topic) const;
+  bool connectSlot(size_t slot, uint32_t nowMs);
+  bool publishInitialPushall(size_t slot);
+  uint32_t reconnectIntervalMs(const MqttConn& conn) const;
+  void disconnectSlot(size_t slot);
+  void disconnectAll();
+  void resetSlotRuntime(size_t slot, const BambuConfig& config);
+  void setSlotConnectivity(size_t slot, bool connected);
+  void setSlotSession(size_t slot, BambuSessionState state, int mqttRc = -1);
   BambuConfig configCopy(uint32_t* externalRevision = nullptr) const;
   void applyConfigLocked(const BambuConfig& config);
 
   BambuConfigStore* store_ = nullptr;
-  WiFiClientSecure* tls_ = nullptr;
-  PubSubClient* mqtt_ = nullptr;
   mutable SemaphoreHandle_t mutex_ = nullptr;
   BambuConfig config_;
-  BambuState state_;
-  BambuMqttStatus status_;
+  std::array<MqttConn, BambuConfigLimits::PRINTER_COUNT> conns_{};
+  std::array<BambuState, BambuConfigLimits::PRINTER_COUNT> states_{};
   uint32_t externalConfigRevision_ = 0U;
   uint32_t observedExternalConfigRevision_ = 0U;
-  uint32_t lastMqttAttemptMs_ = 0U;
-  uint32_t connectTimeMs_ = 0U;
-  bool mqttAttempted_ = false;
-  bool tokenRejected_ = false;
-  bool initialPushallPending_ = false;
-  uint16_t consecutiveFails_ = 0U;
-  uint32_t pushallSequence_ = 1U;
 
   static BambuMqttService* activeInstance_;
 };
