@@ -2,13 +2,41 @@
 
 Only for real LILYGO T-Display-S3. CI does not replace physical acceptance. Record source SHA, Actions run, artifact ID, firmware SHA256 and secret-safe evidence.
 
-## Flash / core UI
+## Flash / direct UI
 
-Normal upgrade: exact `firmware.bin` at manifest offset (normally `0x10000`), preserve NVS/bootloader/partition table; serial 115200. Verify 320×170 UI, menu `股票 / 天气 / Bambu Lab / 智能家居 / 设备信息`, Stock startup and no auto idle switching.
+Normal upgrade: exact `firmware.bin` at manifest offset (normally `0x10000`), preserve NVS/bootloader/partition table; serial 115200.
+
+Verify startup lands directly on **Weather**. Runtime menu must not appear.
+
+Button contract:
+
+```text
+GPIO0 short  previous page
+GPIO14 short next page
+GPIO0 long   no-op
+GPIO14 long  no-op
+```
+
+Expected forward order, with absent configured slots skipped automatically:
+
+```text
+Weather
+-> Stock1 -> Stock2 -> Stock3 -> Stock4
+-> Bambu1 -> Bambu2
+-> Home Assistant
+-> Device Info
+-> Weather
+```
+
+Reverse navigation must traverse the same existing pages in reverse. Direct navigation exposes no more than the first 4 configured stocks and first 2 configured Bambu printers. Example: with only 3 configured stocks and one printer, Stock4 and Bambu2 must not appear.
+
+Configuration remains Web-based: stock/weather on the normal settings portal and HA/Bambu on trusted-LAN port 8081.
 
 ## Other app regression
 
 Weather/Bad Apple: current + 今/明, 168×126 x=152,y=27, ~10 FPS, no divider regression/watchdog/leak.
+
+Stock: every exposed Stock page must match the configured order and symbol/name. Moving Stock1->Stock2 etc. must select the requested stock directly without intermediate app exit/re-entry.
 
 HA: read-only, trusted-LAN HTTP or configured-CA HTTPS, no insecure fallback or secret echo.
 
@@ -16,24 +44,24 @@ HA: read-only, trusted-LAN HTTP or configured-CA HTTPS, no insecure fallback or 
 
 User pastes their browser Token only into local `http://<device-ip>:8081/`; never expose it to ChatGPT/Codex/screenshots/logs. Verify status contains only token-set/non-secret runtime metadata; logout clears credentials/printers.
 
-## Persistent multi-printer acceptance
+## Persistent multi-printer / direct Bambu page acceptance
 
 With two saved real printers A/B:
 
-1. Boot and wait until **both** slots independently reach `mqtt_connect_ok slot=0` and `slot=1` (order may vary) and receive their delayed `mqtt_pushall_initial`/report data.
+1. Boot and wait until **both** slots independently reach `mqtt_connect_ok slot=0` and `slot=1` and receive their delayed `mqtt_pushall_initial`/report data.
 2. Confirm A and B caches correspond to the correct Serial/name and live state.
-3. Perform GPIO14/GPIO0 A↔B switching at least 10 times.
-4. When both slots were already online before a switch, the switch itself must not create a new `[bambu] mqtt_connect`/TLS/MQTT login. It should display the target slot on the next normal UI cadence rather than wait for Cloud reconnection.
-5. Switching must not clear or corrupt the sibling cached state. No A data shown under B name or vice versa.
-6. Web active selector follows the same rule when only active index/name changes.
-7. Leave B active and reboot without erase; B remains selected. Connections are naturally re-established after reboot.
-8. With only one configured printer, device prev/next is a no-op.
+3. Navigate into Bambu1, then Bambu2, then back to Bambu1 at least 10 cycles using the global previous/next page controls.
+4. When both slots were already online, moving between Bambu pages must not create a new `[bambu] mqtt_connect`/TLS/MQTT login solely because of navigation. It should display the target slot on the next normal UI cadence rather than wait for Cloud reconnection.
+5. Navigation must not clear or corrupt sibling cached state. No A data shown under B name or vice versa.
+6. Leave Bambu2 selected, move to another application and back; Bambu2 remains the active printer page unless subsequent global navigation explicitly selects Bambu1.
+7. Reboot without erase and verify the persisted Bambu active index remains valid.
+8. With only one configured printer, the Bambu2 page is absent from the global chain rather than showing an empty page.
 
-Code capacity is 4 slots, but this acceptance only proves the user's actual two-printer simultaneous configuration. Do not label 4 simultaneous slots hardware-validated without a separate test.
+Code capacity is 4 Bambu slots, but direct navigation intentionally exposes only the first two printer pages. Do not label 4 simultaneous slots hardware-validated without a separate test.
 
 ## Bambu anti-flicker
 
-Observe >=2 min idle/live. No periodic 500 ms whole-screen blank/flash. First entry or presentation full redraw is allowed; routine fields redraw sections only.
+Observe >=2 min idle/live. No periodic 500 ms whole-screen blank/flash. First entry or explicit page/full redraw is allowed; routine fields redraw sections only.
 
 ## MQTT architecture evidence
 
@@ -55,12 +83,13 @@ Old `mqtt_real_tls_*`, layered preflight, explicit production TLS preconnect and
 
 ## Mandatory stability
 
-Observe >=10 continuous minutes with both real printer slots configured:
+Observe >=10 continuous minutes with the real configured page set and both real printer slots configured:
 
 - watchdog 0, panic 0, automatic reboot 0;
-- both online slots continue `mqtt.loop()`/report updates while either one is displayed;
+- direct navigation remains responsive and preserves exact ordering/wrap behavior;
+- both online Bambu slots continue `mqtt.loop()`/report updates while either one or another app is displayed;
 - heap does not monotonically decline under two TLS+MQTT clients;
-- no repeated reconnect caused solely by active printer switching;
+- no repeated reconnect caused solely by moving between Bambu pages;
 - natural failure of one slot, if observed, only reconnects that slot; sibling remains connected/fresh;
 - no secret leak.
 
@@ -77,7 +106,7 @@ Expected markers:
 
 ## Live/background/coexistence
 
-Verify progress/ETA/layers/temps/job/filament as available. Leave Bambu for Stock/Weather/HA/DeviceInfo and return; both Bambu slot caches should continue updating. Stock/Weather/HA must remain usable with two persistent MQTT sockets. This regression is important because multi-slot MQTT increases resource pressure.
+Verify Bambu progress/ETA/layers/temps/job/filament as available. Leave Bambu for Stock/Weather/HA/DeviceInfo and return; both Bambu slot caches should continue updating. Stock/Weather/HA must remain usable with persistent MQTT sockets.
 
 ## Wi-Fi recovery
 
@@ -92,15 +121,20 @@ ARTIFACT ID:
 FIRMWARE SHA256:
 FLASH: PASS/FAIL
 NVS ERASED: NO
+STARTUP WEATHER: PASS/FAIL
+FORWARD PAGE ORDER: PASS/FAIL
+REVERSE PAGE ORDER: PASS/FAIL
+MISSING SLOT AUTO-SKIP: PASS/FAIL
+LONG PRESS NO-OP: PASS/FAIL
+STOCK PAGE MAPPING: PASS/FAIL
 BAMBU SLOT0 ONLINE/PUSHALL: PASS/FAIL
 BAMBU SLOT1 ONLINE/PUSHALL: PASS/FAIL
-BAMBU A<->B x10 INSTANT: PASS/FAIL
-NEW MQTT CONNECT CAUSED BY ONLINE SWITCH: YES/NO
+BAMBU PAGE1<->PAGE2 x10 INSTANT: PASS/FAIL
+NEW MQTT CONNECT CAUSED BY ONLINE PAGE SWITCH: YES/NO
 BAMBU SELECTION PERSISTENCE: PASS/FAIL
 STATE CROSS-CONTAMINATION: YES/NO
 BAMBU WHOLE-SCREEN FLICKER: PASS/FAIL
 BAMBU MQTT 10 MIN: PASS/FAIL
-SIBLING SURVIVES SINGLE-SLOT DROP: PASS/FAIL/NOT OBSERVED
 STOCK/WEATHER/HA COEXISTENCE: PASS/FAIL/NOT TESTED
 WATCHDOG COUNT:
 PANIC COUNT:
