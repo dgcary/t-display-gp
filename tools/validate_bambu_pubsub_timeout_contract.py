@@ -7,13 +7,14 @@ mqtt = (ROOT / "src/network/BambuMqttService.cpp").read_text(encoding="utf-8")
 
 errors = []
 
-# Stage-3 diagnosis/fix: use one real strict-CA TLS socket for MQTT, bounded to
-# 5 seconds, then let PubSubClient reuse that already-connected Client. The
-# previous extra TLS preflight must not run immediately before the real MQTT
-# connection because physical testing showed the second TLS path can block long
-# enough to starve CPU0 IDLE and trigger the task watchdog.
+# Stage-4 A/B diagnosis: physical testing proved the explicit strict-CA TLS
+# connection can return successfully, but mqtt_->connect() can still starve
+# CPU0 until the task watchdog fires. PubSubClient 2.8 performs a tight
+# while (!_client->available()) CONNACK wait with no delay/yield before its
+# socket timeout. Reduce only that timeout to 3 seconds so it expires with
+# rc=-4 before the watchdog window. This is diagnostic, not the final fix.
 for required in (
-    "-DMQTT_SOCKET_TIMEOUT=5",
+    "-DMQTT_SOCKET_TIMEOUT=3",
     "mqtt_real_tls_begin",
     "mqtt_real_tls_ok",
     "mqtt_real_tls_fail",
@@ -22,7 +23,7 @@ for required in (
 ):
     haystack = pio if required.startswith("-D") else mqtt
     if required not in haystack:
-        errors.append(f"missing single-real-TLS marker: {required}")
+        errors.append(f"missing stage-4 CONNACK boundary marker: {required}")
 
 if "runLayeredConnectionProbe(broker);" in mqtt:
     errors.append("real MQTT path must not perform the old extra TLS preflight before MQTT")
@@ -65,4 +66,4 @@ if errors:
         print(f"ERROR: {error}")
     sys.exit(1)
 
-print("Bambu single-real-TLS + 5s PubSubClient timeout watchdog contract: OK")
+print("Bambu single-real-TLS + 3s PubSubClient CONNACK boundary diagnostic: OK")
