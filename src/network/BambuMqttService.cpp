@@ -3,7 +3,9 @@
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
+#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 
 #include <cstdio>
@@ -23,6 +25,7 @@ constexpr uint16_t BAMBU_MQTT_KEEPALIVE_SEC = 30U;
 constexpr uint32_t BAMBU_MQTT_RECONNECT_MS = 30000U;
 constexpr uint32_t BAMBU_TASK_SLEEP_MS = 50U;
 constexpr uint32_t BAMBU_WIFI_WAIT_MS = 500U;
+constexpr int32_t BAMBU_DIAG_PROBE_TIMEOUT_MS = 5000;
 
 class NetworkRequestGuard {
  public:
@@ -42,6 +45,60 @@ bool elapsed(uint32_t nowMs, uint32_t sinceMs, uint32_t intervalMs) {
 bool configuredForMqtt(const BambuConfig& config) {
   return config.enabled && !config.accessToken.empty() && !config.cloudUserId.empty() &&
          activeBambuPrinter(config) != nullptr;
+}
+
+void logHeapDiagnostic(const char* phase) {
+  const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const size_t internalLargest =
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const size_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
+  Serial.printf(
+      "[bambu] mqtt_diag_heap phase=%s internal_free=%u internal_largest=%u dma_free=%u heap_free=%u\n",
+      phase, static_cast<unsigned>(internalFree), static_cast<unsigned>(internalLargest),
+      static_cast<unsigned>(dmaFree), static_cast<unsigned>(esp_get_free_heap_size()));
+}
+
+void runLayeredConnectionProbe(const char* broker) {
+  logHeapDiagnostic("before_probe");
+
+  IPAddress resolvedIp;
+  const uint32_t dnsStartedMs = millis();
+  const int dnsOk = WiFi.hostByName(broker, resolvedIp);
+  const uint32_t dnsElapsedMs = static_cast<uint32_t>(millis() - dnsStartedMs);
+  const String resolvedText = dnsOk == 1 ? resolvedIp.toString() : String("0.0.0.0");
+  Serial.printf("[bambu] mqtt_diag_dns ok=%d ip=%s elapsed_ms=%lu\n",
+                dnsOk == 1 ? 1 : 0, resolvedText.c_str(),
+                static_cast<unsigned long>(dnsElapsedMs));
+
+  if (dnsOk == 1) {
+    WiFiClient tcpProbe;
+    const uint32_t tcpStartedMs = millis();
+    const int tcpOk = tcpProbe.connect(resolvedIp, BAMBU_MQTT_PORT, BAMBU_DIAG_PROBE_TIMEOUT_MS);
+    const uint32_t tcpElapsedMs = static_cast<uint32_t>(millis() - tcpStartedMs);
+    Serial.printf("[bambu] mqtt_diag_tcp ok=%d ip=%s port=%u elapsed_ms=%lu\n",
+                  tcpOk == 1 ? 1 : 0, resolvedText.c_str(),
+                  static_cast<unsigned>(BAMBU_MQTT_PORT),
+                  static_cast<unsigned long>(tcpElapsedMs));
+    tcpProbe.stop();
+  } else {
+    Serial.printf("[bambu] mqtt_diag_tcp ok=0 ip=unresolved port=%u elapsed_ms=0\n",
+                  static_cast<unsigned>(BAMBU_MQTT_PORT));
+  }
+
+  WiFiClientSecure tlsProbe;
+  tlsProbe.setCACertBundle(rootca_crt_bundle_start);
+  tlsProbe.setHandshakeTimeout(BuildConfig::HTTP_TLS_HANDSHAKE_TIMEOUT_SEC);
+  tlsProbe.setTimeout(5);
+  const uint32_t tlsStartedMs = millis();
+  const int tlsOk = tlsProbe.connect(broker, BAMBU_MQTT_PORT, BAMBU_DIAG_PROBE_TIMEOUT_MS);
+  const uint32_t tlsElapsedMs = static_cast<uint32_t>(millis() - tlsStartedMs);
+  char tlsErrorText[96] = {};
+  const int tlsError = tlsOk == 1 ? 0 : tlsProbe.lastError(tlsErrorText, sizeof(tlsErrorText));
+  Serial.printf("[bambu] mqtt_diag_tls ok=%d tls=%d elapsed_ms=%lu\n",
+                tlsOk == 1 ? 1 : 0, tlsError, static_cast<unsigned long>(tlsElapsedMs));
+  tlsProbe.stop();
+
+  logHeapDiagnostic("after_probe");
 }
 }  // namespace
 
@@ -214,7 +271,19 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
     setSession(BambuSessionState::UNCONFIGURED);
     return false;
   }
+
   disconnectMqtt();
+  setSession(BambuSessionState::MQTT_CONNECTING);
+  NetworkRequestGuard guard(sharedNetworkArbiter());
+  if (!guard.locked()) { setSession(BambuSessionState::NETWORK_ERROR); return false; }
+
+  const char* broker = bambuBrokerForRegion(config.region);
+  Serial.printf("[bambu] mqtt_connect broker=%s wifi=%d rssi=%d heap=%u\n",
+                broker, static_cast<int>(WiFi.status()), WiFi.RSSI(),
+                static_cast<unsigned>(esp_get_free_heap_size()));
+
+  runLayeredConnectionProbe(broker);
+
   tls_ = new (std::nothrow) WiFiClientSecure();
   if (!tls_) { setSession(BambuSessionState::BUFFER_ERROR); return false; }
   tls_->setCACertBundle(rootca_crt_bundle_start);
@@ -222,7 +291,6 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   tls_->setTimeout(15);
   mqtt_ = new (std::nothrow) PubSubClient(*tls_);
   if (!mqtt_) { disconnectMqtt(); setSession(BambuSessionState::BUFFER_ERROR); return false; }
-  const char* broker = bambuBrokerForRegion(config.region);
   mqtt_->setServer(broker, BAMBU_MQTT_PORT);
   mqtt_->setCallback(mqttCallbackThunk);
   mqtt_->setKeepAlive(BAMBU_MQTT_KEEPALIVE_SEC);
@@ -231,29 +299,34 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
     setSession(BambuSessionState::BUFFER_ERROR);
     return false;
   }
-  setSession(BambuSessionState::MQTT_CONNECTING);
-  NetworkRequestGuard guard(sharedNetworkArbiter());
-  if (!guard.locked()) { disconnectMqtt(); setSession(BambuSessionState::NETWORK_ERROR); return false; }
-
-  Serial.printf("[bambu] mqtt_connect broker=%s wifi=%d rssi=%d heap=%u\n",
-                broker, static_cast<int>(WiFi.status()), WiFi.RSSI(),
-                static_cast<unsigned>(esp_get_free_heap_size()));
+  logHeapDiagnostic("after_mqtt_buffer");
 
   char clientId[32];
   std::snprintf(clientId, sizeof(clientId), "tdgp_%08lx%04x",
                 static_cast<unsigned long>(esp_random()), static_cast<unsigned>(esp_random() & 0xFFFFU));
+  const uint32_t mqttStartedMs = millis();
   if (!mqtt_->connect(clientId, config.cloudUserId.c_str(), config.accessToken.c_str())) {
+    const uint32_t mqttElapsedMs = static_cast<uint32_t>(millis() - mqttStartedMs);
     const int rc = mqtt_->state();
     char tlsErrorText[96] = {};
     const int tlsError = tls_->lastError(tlsErrorText, sizeof(tlsErrorText));
-    Serial.printf("[bambu] mqtt_connect_fail rc=%d tls=%d wifi=%d rssi=%d heap=%u\n",
-                  rc, tlsError, static_cast<int>(WiFi.status()), WiFi.RSSI(),
-                  static_cast<unsigned>(esp_get_free_heap_size()));
+    const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t internalLargest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    Serial.printf(
+        "[bambu] mqtt_connect_fail rc=%d tls=%d elapsed_ms=%lu wifi=%d rssi=%d heap=%u internal_free=%u internal_largest=%u dma_free=%u\n",
+        rc, tlsError, static_cast<unsigned long>(mqttElapsedMs), static_cast<int>(WiFi.status()),
+        WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()),
+        static_cast<unsigned>(internalFree), static_cast<unsigned>(internalLargest),
+        static_cast<unsigned>(dmaFree));
     if (rc == 4 || rc == 5) tokenRejected_ = true;
     setSession((rc == 4 || rc == 5) ? BambuSessionState::TOKEN_INVALID : BambuSessionState::NETWORK_ERROR, rc);
     disconnectMqtt();
     return false;
   }
+  const uint32_t mqttElapsedMs = static_cast<uint32_t>(millis() - mqttStartedMs);
+
   const std::string reportTopic = bambuReportTopic(active->serial);
   if (reportTopic.empty() || !mqtt_->subscribe(reportTopic.c_str())) {
     const int rc = mqtt_->state();
@@ -273,8 +346,9 @@ bool BambuMqttService::connectMqtt(uint32_t nowMs) {
   tokenRejected_ = false;
   setConnectivity(true);
   setSession(BambuSessionState::ONLINE, 0);
-  Serial.printf("[bambu] mqtt_connect_ok rssi=%d heap=%u\n",
-                WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()));
+  Serial.printf("[bambu] mqtt_connect_ok elapsed_ms=%lu rssi=%d heap=%u\n",
+                static_cast<unsigned long>(mqttElapsedMs), WiFi.RSSI(),
+                static_cast<unsigned>(esp_get_free_heap_size()));
   return true;
 }
 
