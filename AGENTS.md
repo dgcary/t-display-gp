@@ -181,7 +181,37 @@ request   = device/<activeSerial>/request
 - other network failures may retry on bounded reconnect cadence;
 - no background Cloud login/discovery/token renewal.
 
-MQTT diagnostics may print only secret-safe connection metadata. Approved prefixes/fields include `mqtt_connect`, `mqtt_connect_ok`, `mqtt_connect_fail`, `mqtt_subscribe_fail`, `mqtt_loop_lost` with MQTT rc, numeric TLS error, Wi-Fi status/RSSI and free heap. Never print Token, Cloud User ID, Authorization/Cookie values, request payload credentials, or raw TLS error text if it may contain remote/credential material. Diagnostic instrumentation alone must not silently change keepalive/reconnect/CA policy; stability changes require physical evidence.
+### Layered network diagnostics
+
+Diagnostic firmware may instrument each MQTT connection attempt with a bounded, secret-safe preflight while preserving the existing CA/Token/keepalive/reconnect/read-only policy.
+
+Required diagnostic sequence:
+
+```text
+startup network config
+DNS resolve broker
+plain TCP connect to broker:8883
+strict-CA TLS preflight to broker:8883
+actual PubSubClient MQTT CONNECT
+```
+
+Approved serial markers include:
+
+```text
+[netcfg] ip mask gateway dns1 dns2 bssid ch wifi
+[bambu] mqtt_diag_heap phase internal_free internal_largest dma_free heap_free
+[bambu] mqtt_diag_dns ok ip elapsed_ms
+[bambu] mqtt_diag_tcp ok ip port elapsed_ms
+[bambu] mqtt_diag_tls ok tls elapsed_ms
+[bambu] mqtt_connect / mqtt_connect_ok / mqtt_connect_fail
+[bambu] mqtt_subscribe_fail / mqtt_loop_lost
+```
+
+`mqtt_diag_heap` must include `heap_caps_get_free_size(MALLOC_CAP_INTERNAL...)`, `heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL...)`, and DMA-capable free memory so total free heap is not mistaken for contiguous internal-memory availability.
+
+The diagnostic plain TCP/TLS probes are instrumentation only. They may add short-lived connections during a reconnect attempt, but they must not become a hidden permanent transport policy, skip MQTT authentication, weaken CA validation, alter Token handling, change keepalive/reconnect timing, or add control publishes. Once physical evidence establishes the failing layer, remove/reassess probes rather than treating them as the final fix.
+
+Never print Token, Cloud User ID, Authorization/Cookie values, request payload credentials, raw account data or raw credential-bearing TLS error text. Numeric TLS/socket result codes, broker hostname/resolved IP, elapsed time and heap metrics are allowed.
 
 `BambuApp`/`BambuScreen` are passive readers/renderers except for invoking `cycleActivePrinter()` on the two short-button events.
 
@@ -199,13 +229,14 @@ MQTT diagnostics may print only secret-safe connection metadata. Approved prefix
 [md]      Stock
 [appdata] WEATHER / HOME_ASSISTANT
 [net]     short-lived transport
-[bambu]   secret-safe MQTT connection diagnostics only
+[netcfg]  startup IP/mask/gateway/DNS/BSSID/channel snapshot
+[bambu]   secret-safe MQTT connection/layered probe diagnostics only
 [sys]     MENU|STOCK|WEATHER|BAMBU|HOME_ASSISTANT|DEVICE_INFO
 ```
 
 ## Physical acceptance
 
-Must verify: five-app UI; Stock startup/no idle switch; Weather/Bad Apple; HA regression; Manual Token setup without echo; at least two local Bambu printers; web and device-side active printer switching without reboot/login; selected active index persists; MQTT reconnects to selected serial; old printer state is not shown after switching; Bambu page has no periodic whole-screen flash; optional explicit discover; Token-invalid behavior; background freshness; Wi-Fi recovery; Stock/Weather/HA coexistence; safe MQTT diagnostics around any drop; no watchdog/panic/heap leak.
+Must verify: five-app UI; Stock startup/no idle switch; Weather/Bad Apple; HA regression; Manual Token setup without echo; at least two local Bambu printers; web and device-side active printer switching without reboot/login; selected active index persists; MQTT reconnects to selected serial; old printer state is not shown after switching; Bambu page has no periodic whole-screen flash; optional explicit discover; Token-invalid behavior; background freshness; Wi-Fi recovery; Stock/Weather/HA coexistence; layered DNS/TCP/TLS/MQTT evidence around any drop; no watchdog/panic/heap leak.
 
 ## Safety
 
