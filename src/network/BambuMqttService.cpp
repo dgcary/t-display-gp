@@ -26,6 +26,7 @@ constexpr uint32_t BAMBU_CLOUD_RECONNECT_PHASE3_MS = 120000U;
 constexpr uint16_t BAMBU_BACKOFF_PHASE1_FAILS = 5U;
 constexpr uint16_t BAMBU_BACKOFF_PHASE3_FAILS = 15U;
 constexpr uint32_t BAMBU_PUSHALL_INITIAL_DELAY_MS = 2000U;
+constexpr uint32_t BAMBU_TASK_SLEEP_MS = 50U;
 
 class NetworkRequestGuard {
  public:
@@ -66,7 +67,7 @@ bool sameConnectionSet(const BambuConfig& lhs, const BambuConfig& rhs) {
 BambuMqttService* BambuMqttService::activeInstance_ = nullptr;
 
 bool BambuMqttService::begin(const BambuConfig& config, BambuConfigStore& store) {
-  if (mutex_ || activeInstance_) return false;
+  if (task_ || mutex_ || activeInstance_) return false;
   mutex_ = xSemaphoreCreateMutex();
   if (!mutex_) return false;
 
@@ -75,8 +76,30 @@ bool BambuMqttService::begin(const BambuConfig& config, BambuConfigStore& store)
   for (size_t slot = 0; slot < BambuConfigLimits::PRINTER_COUNT; ++slot) {
     resetSlotRuntime(slot, config_);
   }
+
   activeInstance_ = this;
+  const BaseType_t created = xTaskCreatePinnedToCore(
+      taskThunk, "bambu-mqtt", 8192, this, 1, &task_, 0);
+  if (created != pdPASS) {
+    activeInstance_ = nullptr;
+    task_ = nullptr;
+    store_ = nullptr;
+    vSemaphoreDelete(mutex_);
+    mutex_ = nullptr;
+    return false;
+  }
   return true;
+}
+
+void BambuMqttService::taskThunk(void* arg) {
+  static_cast<BambuMqttService*>(arg)->taskLoop();
+}
+
+void BambuMqttService::taskLoop() {
+  for (;;) {
+    process(millis());
+    vTaskDelay(pdMS_TO_TICKS(BAMBU_TASK_SLEEP_MS));
+  }
 }
 
 void BambuMqttService::process(uint32_t nowMs) {
@@ -119,9 +142,8 @@ void BambuMqttService::process(uint32_t nowMs) {
   }
 
   // Service all already-established sockets before starting any potentially
-  // blocking new Cloud connection. This mirrors BambuHelper's persistent
-  // multi-printer model and keeps active printers fresh while a sibling slot
-  // is waiting for reconnect/backoff.
+  // blocking new Cloud connection. The blocking connect itself runs only on
+  // the dedicated Bambu worker, never on the Arduino UI loop.
   for (size_t slot = 0; slot < config.printerCount; ++slot) {
     MqttConn& conn = conns_[slot];
     if (!conn.mqtt || !conn.mqtt->connected()) continue;
@@ -129,12 +151,15 @@ void BambuMqttService::process(uint32_t nowMs) {
     if (!conn.mqtt->loop()) {
       const int rc = conn.mqtt->state();
       if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+      conn.lastMqttAttemptMs = millis();
+      conn.mqttAttempted = true;
       setSlotConnectivity(slot, false);
       setSlotSession(slot, BambuSessionState::NETWORK_ERROR, rc);
-      Serial.printf("[bambu] mqtt_loop_lost slot=%u rc=%d wifi=%d rssi=%d heap=%u fails=%u\n",
+      Serial.printf("[bambu] mqtt_loop_lost slot=%u rc=%d wifi=%d rssi=%d heap=%u fails=%u retry_ms=%lu\n",
                     static_cast<unsigned>(slot), rc, static_cast<int>(WiFi.status()),
                     WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()),
-                    static_cast<unsigned>(conn.consecutiveFails));
+                    static_cast<unsigned>(conn.consecutiveFails),
+                    static_cast<unsigned long>(reconnectIntervalMs(conn)));
       disconnectSlot(slot);
       continue;
     }
@@ -145,8 +170,8 @@ void BambuMqttService::process(uint32_t nowMs) {
     }
   }
 
-  // At most one blocking connect attempt per Arduino loop pass. Prefer the
-  // currently selected printer, then walk the remaining configured slots.
+  // At most one new/reconnect attempt per worker pass. Prefer the currently
+  // selected printer, then walk the remaining configured slots.
   for (size_t offset = 0; offset < config.printerCount; ++offset) {
     const size_t slot = (config.activePrinterIndex + offset) % config.printerCount;
     MqttConn& conn = conns_[slot];
@@ -304,12 +329,16 @@ uint32_t BambuMqttService::reconnectIntervalMs(const MqttConn& conn) const {
 
 bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
   if (slot >= BambuConfigLimits::PRINTER_COUNT) return false;
+  static_cast<void>(nowMs);
   MqttConn& conn = conns_[slot];
-  conn.lastMqttAttemptMs = nowMs;
-  conn.mqttAttempted = true;
+  auto markAttemptComplete = [&conn]() {
+    conn.lastMqttAttemptMs = millis();
+    conn.mqttAttempted = true;
+  };
 
   const BambuConfig config = configCopy();
   if (slot >= config.printerCount || config.cloudUserId.empty() || config.accessToken.empty()) {
+    markAttemptComplete();
     setSlotSession(slot, BambuSessionState::UNCONFIGURED);
     return false;
   }
@@ -321,6 +350,7 @@ bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
   NetworkRequestGuard guard(sharedNetworkArbiter());
   if (!guard.locked()) {
     if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    markAttemptComplete();
     setSlotSession(slot, BambuSessionState::NETWORK_ERROR, -2);
     return false;
   }
@@ -335,16 +365,19 @@ bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
   conn.tls = new (std::nothrow) WiFiClientSecure();
   if (!conn.tls) {
     if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    markAttemptComplete();
     setSlotSession(slot, BambuSessionState::BUFFER_ERROR, -2);
     disconnectSlot(slot);
     return false;
   }
   conn.tls->setCACertBundle(rootca_crt_bundle_start);
-  conn.tls->setTimeout(15);
+  conn.tls->setTimeout(BuildConfig::BAMBU_MQTT_CONNECT_TIMEOUT_SEC);
+  conn.tls->setHandshakeTimeout(BuildConfig::BAMBU_MQTT_CONNECT_TIMEOUT_SEC);
 
   conn.mqtt = new (std::nothrow) PubSubClient(*conn.tls);
   if (!conn.mqtt) {
     if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    markAttemptComplete();
     setSlotSession(slot, BambuSessionState::BUFFER_ERROR, -2);
     disconnectSlot(slot);
     return false;
@@ -352,8 +385,10 @@ bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
   conn.mqtt->setServer(broker, BAMBU_MQTT_PORT);
   conn.mqtt->setCallback(mqttCallbackThunk);
   conn.mqtt->setKeepAlive(BAMBU_MQTT_KEEPALIVE_SEC);
+  conn.mqtt->setSocketTimeout(BuildConfig::BAMBU_MQTT_CONNECT_TIMEOUT_SEC);
   if (!conn.mqtt->setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)) {
     if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    markAttemptComplete();
     setSlotSession(slot, BambuSessionState::BUFFER_ERROR, -2);
     disconnectSlot(slot);
     return false;
@@ -369,6 +404,7 @@ bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
   const bool connected = conn.mqtt->connect(
       clientId, config.cloudUserId.c_str(), config.accessToken.c_str());
   const uint32_t connectElapsedMs = static_cast<uint32_t>(millis() - startedMs);
+  markAttemptComplete();
 
   if (!connected) {
     const int rc = conn.mqtt->state();
@@ -395,11 +431,13 @@ bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
   if (reportTopic.empty() || !conn.mqtt->subscribe(reportTopic.c_str())) {
     const int rc = conn.mqtt->state();
     if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
+    markAttemptComplete();
     Serial.printf(
-        "[bambu] mqtt_subscribe_fail slot=%u rc=%d wifi=%d rssi=%d heap=%u fails=%u\n",
+        "[bambu] mqtt_subscribe_fail slot=%u rc=%d wifi=%d rssi=%d heap=%u fails=%u retry_ms=%lu\n",
         static_cast<unsigned>(slot), rc, static_cast<int>(WiFi.status()), WiFi.RSSI(),
         static_cast<unsigned>(esp_get_free_heap_size()),
-        static_cast<unsigned>(conn.consecutiveFails));
+        static_cast<unsigned>(conn.consecutiveFails),
+        static_cast<unsigned long>(reconnectIntervalMs(conn)));
     setSlotSession(slot, BambuSessionState::NETWORK_ERROR, rc);
     disconnectSlot(slot);
     return false;
