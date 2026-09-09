@@ -17,6 +17,7 @@ python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 python tools/validate_app_shell_contract.py
+python tools/validate_direct_navigation_contract.py
 python tools/validate_dashboard_apps_contract.py
 python tools/validate_bambu_cloud_contract.py
 python tools/validate_bambu_pubsub_timeout_contract.py
@@ -26,18 +27,35 @@ python tools/prepare_bad_apple_asset.py
 pio run -e lilygo-t-display-s3
 ```
 
-## Input / shell
+## Input / direct page shell
+
+There is no runtime menu.
 
 ```text
-normal app: GPIO0 short prev; GPIO14 short next; GPIO0 long menu; GPIO14 long no-op
-menu:       GPIO0 short prev; GPIO14 short next; GPIO0 long no-op; GPIO14 long enter
+GPIO0 short  -> previous page
+GPIO14 short -> next page
+GPIO0 long   -> no-op
+GPIO14 long  -> no-op
 ```
 
-Menu exactly `股票 / 天气 / Bambu Lab / 智能家居 / 设备信息`; startup Stock; no automatic idle switching.
+Flattened order, wrapping at both ends:
+
+```text
+WEATHER
+-> STOCK page 1..min(configured stocks, 4)
+-> BAMBU page 1..min(configured printers, 2)
+-> HOME_ASSISTANT
+-> DEVICE_INFO
+-> WEATHER
+```
+
+Apps whose `pageCount()==0` are skipped automatically. Startup is WEATHER. Same-app page changes must not call `onExit()/onEnter()`; switching between apps does. Short presses are consumed by `AppManager` for navigation and are not forwarded to app-local button handlers. Configuration changes remain Web-portal driven rather than button-editable.
+
+Legacy `MenuApp/MenuScreen` source may remain for compile/history compatibility but must not be instantiated by `main.cpp` or reachable in the runtime navigation path.
 
 ## Other apps
 
-Stock: Tencent primary / EastMoney fallback, dedicated `MarketDataWorker`, cache-preserving.
+Stock: Tencent primary / EastMoney fallback, dedicated `MarketDataWorker`, cache-preserving. Direct navigation exposes at most the first 4 configured stocks. `StockController::selectIndex()` performs exact selection rather than walking through intermediate stocks.
 
 Weather: Open-Meteo current + Today/Tomorrow. Bad Apple x=152,y=27 168×126, 2190 frames, 10 FPS, local flash, silent loop.
 
@@ -51,16 +69,9 @@ Read-only persistent Cloud integration. No printer-LAN MQTT dependency and no pa
 
 No Bambu account/password/SMS/email/TFA login flow, password storage, automatic relogin or token renewal. User pastes browser `token` only into trusted-LAN `http://<device-ip>:8081/`. Never hard-code/log/return Token.
 
-Schema v2: `enabled, region, accessToken, cloudUserId, printers[4]{serial,name}, printerCount, activePrinterIndex`. Max 4 config slots, safe unique serials. Physical concurrent-slot acceptance is currently required for the user's real 2-printer setup; do not claim 4 simultaneous sockets hardware-validated until tested.
+Schema v2: `enabled, region, accessToken, cloudUserId, printers[4]{serial,name}, printerCount, activePrinterIndex`. Max 4 config slots, safe unique serials. Direct hardware navigation exposes only the first two configured printer slots as pages; background runtime may still maintain all configured slots. Do not claim 4 simultaneous sockets hardware-validated until tested.
 
-Device switching:
-
-```text
-GPIO0 short  -> previous saved printer
-GPIO14 short -> next saved printer
-```
-
-Selection wraps and persists. **Switching active printer is local selection only: do not disconnect persistent MQTT slots, do not clear sibling state caches, do not bump a connection-affecting revision.** `snapshot()` / `status()` expose the selected slot cache/status. With fewer than 2 printers, switch is no-op.
+Direct navigation chooses Bambu page 0/1 by updating active index only. It must preserve all persistent MQTT sockets and sibling caches; no TLS/MQTT reconnect may be caused solely by moving between Bambu page 1 and 2.
 
 Rendering stays partial; whole-screen fill only explicit full redraw/first entry. Routine polling must not flash the screen.
 
@@ -68,7 +79,7 @@ Rendering stays partial; whole-screen fill only explicit full redraw/first entry
 
 Exactly one `WebServer{8081}`: HA status/config plus Bambu status/printers/discover/config/logout. Old Bambu login/verify/resend routes stay retired. Token input password-type, never echoed; blank preserves Token. Discovery explicit-only; `/api/bambu/printers` local-only.
 
-### MQTT — persistent multi-printer BambuHelper alignment
+### MQTT — persistent multi-printer, background worker
 
 Reference `Keralots/BambuHelper` MIT, pinned migration reference `d7a898394c046495798d87e50afd91ecf63f6ce7`.
 
@@ -83,24 +94,26 @@ per slot request   = device/<serial>/request
 
 Runtime contract:
 
-- `begin()` initialization only; no custom MQTT task.
-- `process(nowMs)` called from Arduino loop; no CPU0-pinned `bambu-mqtt` task.
+- `begin()` starts one dedicated CPU0 priority-1 `bambu-mqtt` FreeRTOS worker with 8192-byte stack.
+- Arduino `loop()` must not call `BambuMqttService::process()` or perform blocking Bambu TCP/TLS/MQTT connect work.
 - `std::array<MqttConn,4>` + `std::array<BambuState,4>` provide independent per-printer connection/runtime/cache.
-- service all connected slots first; at most one blocking new/reconnect attempt per loop pass.
-- each slot owns its own fresh-on-reconnect `WiFiClientSecure + PubSubClient`; strict CA, `setTimeout(15)`, buffer 40960, keepalive 30, random `bblp_*` client ID.
+- worker services all connected slots first; at most one blocking new/reconnect attempt per worker pass.
+- each slot owns its own fresh-on-reconnect `WiFiClientSecure + PubSubClient`; strict CA; TCP/socket timeout 5 s; TLS handshake timeout 5 s; PubSubClient socket timeout 5 s; buffer 40960; keepalive 30; random `bblp_*` client ID.
 - PubSubClient owns TCP/TLS establishment; no normal-path preflight or explicit `tls_->connect(...)`.
 - callback routes report topic by Serial to the correct slot.
 - initial per-slot `pushall` >=2000 ms after connect.
-- per-slot backoff 30 s, 60 s after 5 failures, 120 s after 15.
+- per-slot backoff 30 s, 60 s after 5 failures, 120 s after 15; the retry anchor is recorded when a failed connect returns, never before the blocking call starts.
 - one slot failure/reconnect must not tear down sibling online slots.
 - active index/name-only config changes preserve sockets and slot caches; credential/region/serial-set changes rebuild affected runtime via config revision.
 - rc 4/5 latches token-invalid protection.
-- `esp_task_wdt_reset()` allowed around known long operations, but watchdog disable/delete forbidden.
-- `setInsecure()` forbidden; no background login/discovery/token renewal.
-- old Stage-2/3/4 `mqtt_real_tls_*`, layered preflight and project `MQTT_SOCKET_TIMEOUT` overrides stay retired.
+- shared `NetworkArbiter` remains in place to serialize expensive network/TLS starts, but a failed Bambu attempt is bounded and cannot freeze the Arduino UI loop or local `/api/bambu/status` handling.
+- watchdog disable/delete forbidden. `setInsecure()` forbidden; no background login/discovery/token renewal.
+- old Stage-2/3/4 `mqtt_real_tls_*`, layered preflight and project `MQTT_SOCKET_TIMEOUT` macro overrides stay retired.
 
 Secret-safe serial markers include `slot=<n>` with mqtt_connect/ok/fail/subscribe_fail/loop_lost/pushall. Never print Token, Cloud User ID, Cookie/Authorization/auth payload.
 
 ## Diagnostics / acceptance
 
-Physical acceptance must include: exact firmware/NVS preservation; 2 saved real printers both reach their own `mqtt_connect_ok slot=0/1` and `mqtt_pushall_initial`; then >=10 A↔B switches should create **no new mqtt_connect solely because of switching** and should feel near-immediate; per-slot live data/caches must not cross-contaminate; selected active index persists reboot; no periodic full-screen flash; >=10 min no watchdog/panic/automatic reboot; one slot reconnect must not drop the other; check Stock/Weather/HA coexistence and heap under 2 persistent MQTT/TLS slots.
+Physical acceptance must include: exact firmware/NVS preservation; startup on Weather; verify the full direct page order in both directions; verify absent stock/printer pages are skipped; both long presses remain no-op; with two saved real printers both reach their own `mqtt_connect_ok slot=0/1` and `mqtt_pushall_initial`; moving between Bambu page 1/2 must create no new mqtt_connect solely because of navigation; per-slot live data/caches must not cross-contaminate; no periodic whole-screen flash; >=10 min no watchdog/panic/automatic reboot; one slot reconnect must not drop the other; check Stock/Weather/HA coexistence and heap under two persistent MQTT/TLS slots.
+
+Mandatory failure-path acceptance: if Bambu Cloud cannot connect, GPIO navigation and local `:8081/api/bambu/status` must remain responsive during the attempt; `mqtt_connect_fail elapsed_ms` must stay far below the former ~120 s failure and target <=20 s; after failure, the next `mqtt_connect` must not occur before the logged 30/60/120 s retry interval has elapsed.

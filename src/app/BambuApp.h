@@ -9,6 +9,8 @@
 
 class BambuApp final : public IApp {
  public:
+  static constexpr size_t MAX_NAVIGATION_PAGES = 2U;
+
   BambuApp(DeviceLayer& device, BambuMqttService& service)
       : device_(device), service_(service) {}
 
@@ -22,6 +24,9 @@ class BambuApp final : public IApp {
   bool takeDirtyFlag() override;
   bool takeFullRedrawFlag() override;
   void render(bool fullRedraw) override;
+  size_t pageCount() const override;
+  bool selectPage(size_t pageIndex) override;
+  size_t selectedPage() const override;
 
  private:
   DeviceLayer& device_;

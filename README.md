@@ -2,11 +2,20 @@
 
 LILYGO T-Display-S3 320×170 多应用桌面终端。
 
+设备不再使用菜单。GPIO14 短按下一页、GPIO0 短按上一页，首尾循环；两个长按均保留为无操作。开机默认天气页。
+
+页面顺序：
+
 ```text
-股票 / 天气 / Bambu Lab / 智能家居 / 设备信息
+天气
+→ 股票1 → 股票2 → 股票3 → 股票4
+→ 拓竹打印机1 → 拓竹打印机2
+→ 智能家居
+→ 设备信息
+→ 天气
 ```
 
-默认启动 Stock，没有自动 idle 跳转。
+股票页只展开已配置股票中的前 4 只；拓竹页只展开已配置打印机中的前 2 台。没有配置的槽位自动跳过。股票、天气、拓竹和 HA 的具体配置仍通过设备 Web 后台修改，不通过按键编辑。
 
 ## Bambu Lab Cloud
 
@@ -21,21 +30,14 @@ http://<T-Display-IP>:8081/
 1. 浏览器正常登录对应区域的 Bambu 网站；
 2. 从开发者工具 Cookies 复制 `token`；
 3. 在 `:8081` 粘贴 Access Token；
-4. 添加 1–4 台打印机的 `名称 + Serial`；
-5. 选择当前打印机并保存。
+4. 添加打印机 `名称 + Serial`；
+5. 保存配置。
 
 Token 留空保存表示保留现有 Token。固件不会在状态 API/串口中回显 Token。“用 Token 获取我的打印机”只有用户主动点击才访问 Cloud，结果 Save 前不写 NVS。
 
-设备端切换：
+运行时仍为每台已配置打印机保留独立常驻 MQTT/TLS slot 和状态缓存。全局页面导航只把前两台打印机作为“拓竹打印机1/2”页面暴露；在这两页之间切换只是改变 active slot，不断开另一台、不重新 TLS/MQTT 登录、不等待 pushall。目标 slot 尚未在线时，页面显示该 slot 当前缓存/连接状态，后台按自己的重连节奏恢复。
 
-```text
-GPIO0 short  -> 上一台
-GPIO14 short -> 下一台
-```
-
-选择首尾循环并立即持久化。**配置中的每台打印机都有独立的常驻 MQTT/TLS slot 和状态缓存；A↔B 切换只切 active slot，不断开另一台、不重新 TLS/MQTT 登录、不等待 pushall。** 如果目标 slot 尚未在线，页面显示该 slot 当前缓存/连接状态，后台按自己的重连节奏恢复。
-
-代码支持最多 4 个 slot；当前主要真机验收目标是用户实际的 2 台打印机同时在线。4 台同时在线需要单独做资源/稳定性验收后再视为已验证能力。
+代码层 Bambu 配置仍支持最多 4 个 slot；直接按键导航当前只暴露前 2 个打印机页。4 台同时在线需要单独做资源/稳定性验收后再视为已验证能力。
 
 ### Anti-flicker
 
@@ -85,7 +87,7 @@ Arduino loop()
 - strict CA，禁止 `setInsecure()`；
 - 旧 `mqtt_real_tls_*` / layered preflight / 项目 `MQTT_SOCKET_TIMEOUT=3/5` 已退出生产路径。
 
-Bambu 是设备级后台服务，离开 Bambu App 不断开。Stock/Weather/HA 的短连接仍通过 `NetworkArbiter` 与新 MQTT 建连事务串行；已经建立的持久 MQTT sockets 不长期占用 arbiter。
+Bambu 是设备级后台服务，离开 Bambu 页面不断开。Stock/Weather/HA 的短连接仍通过 `NetworkArbiter` 与新 MQTT 建连事务串行；已经建立的持久 MQTT sockets 不长期占用 arbiter。
 
 ## Home Assistant
 
@@ -97,13 +99,14 @@ Open-Meteo；UI 显示 current + 今/明。Bad Apple：168×126 at x=152,y=27，
 
 ## Stock / DeviceInfo
 
-Stock：Tencent primary，EastMoney fallback；quote/intraday health 独立，失败保留 cache。
+Stock：Tencent primary，EastMoney fallback；quote/intraday health 独立，失败保留 cache。直接导航最多显示前 4 只已配置股票。
 
 DeviceInfo：IP、SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM、Web 地址；不显示 secret。
 
 ## Architecture
 
 ```text
+Direct page navigator -> Weather / Stock[0..3] / Bambu[0..1] / HA / DeviceInfo
 Stock -> dedicated MarketDataWorker
 Weather + HomeAssistant -> one shared AppDataWorker
 Bambu -> loop-driven persistent per-printer Cloud MQTT slots + local config
@@ -118,6 +121,7 @@ python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
 python tools/validate_http_transport_contract.py
 python tools/validate_app_shell_contract.py
+python tools/validate_direct_navigation_contract.py
 python tools/validate_dashboard_apps_contract.py
 python tools/validate_bambu_cloud_contract.py
 python tools/validate_bambu_pubsub_timeout_contract.py

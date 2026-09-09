@@ -19,7 +19,6 @@
 #include "HomeAssistantConfig.h"
 #include "HomeAssistantConfigStore.h"
 #include "IntegrationConfigPortal.h"
-#include "MenuScreen.h"
 #include "NetworkArbiter.h"
 #include "ProvisioningService.h"
 #include "StockApp.h"
@@ -38,19 +37,12 @@ BambuCloudClient bambuCloudClient;
 BambuMqttService bambuMqttService;
 DeviceLayer device;
 AppDataWorker appDataWorker;
-MenuScreen menuScreen;
 StockApp stockApp(device);
 WeatherApp weatherApp(device, appDataWorker);
 BambuApp bambuApp(device, bambuMqttService);
 HomeAssistantApp homeAssistantApp(device, appDataWorker);
 DeviceInfoApp deviceInfoApp(device);
-MenuApp menuApp({{AppId::STOCK, "股票"},
-                 {AppId::WEATHER, "天气"},
-                 {AppId::BAMBU, "Bambu Lab"},
-                 {AppId::HOME_ASSISTANT, "智能家居"},
-                 {AppId::DEVICE_INFO, "设备信息"}},
-                menuScreen);
-AppManager appManager(menuApp, {&stockApp, &weatherApp, &bambuApp, &homeAssistantApp, &deviceInfoApp});
+AppManager appManager({&weatherApp, &stockApp, &bambuApp, &homeAssistantApp, &deviceInfoApp});
 bool appReady = false;
 uint32_t nextResourceLogMs = 0;
 
@@ -82,10 +74,10 @@ const char* appName(AppId id) {
 }
 
 void logResourceSnapshot(uint32_t nowMs) {
-  Serial.printf("[sys] app=%s heap_free=%u heap_min=%u psram_free=%u psram_total=%u main_stack_hwm=%u\n",
-                appName(appManager.activeAppId()), static_cast<unsigned>(ESP.getFreeHeap()),
-                static_cast<unsigned>(ESP.getMinFreeHeap()), static_cast<unsigned>(ESP.getFreePsram()),
-                static_cast<unsigned>(ESP.getPsramSize()),
+  Serial.printf("[sys] app=%s page=%u heap_free=%u heap_min=%u psram_free=%u psram_total=%u main_stack_hwm=%u\n",
+                appName(appManager.activeAppId()), static_cast<unsigned>(appManager.activePageIndex()),
+                static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMinFreeHeap()),
+                static_cast<unsigned>(ESP.getFreePsram()), static_cast<unsigned>(ESP.getPsramSize()),
                 static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   nextResourceLogMs = nowMs + 60000U;
 }
@@ -123,15 +115,14 @@ void setup() {
     return;
   }
   integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService);
-  menuScreen.begin(device.display(), device.unicodeFont());
   if (!stockApp.begin(appConfig)) { Serial.println("Stock app failed to start"); return; }
   if (!weatherApp.begin(appConfig)) { Serial.println("Weather app failed to start"); return; }
   if (!bambuApp.begin()) { Serial.println("Bambu app failed to start"); return; }
   if (!homeAssistantApp.begin(homeAssistantConfig)) { Serial.println("Home Assistant app failed to start"); return; }
   if (!deviceInfoApp.begin()) { Serial.println("Device info app failed to start"); return; }
-  if (!appManager.begin(AppId::STOCK)) { Serial.println("App manager failed to start"); return; }
+  if (!appManager.begin()) { Serial.println("App manager failed to start"); return; }
   appReady = true;
-  Serial.println("[boot] multi-app loop ready");
+  Serial.println("[boot] direct-page loop ready");
   logResourceSnapshot(millis());
 }
 
@@ -140,7 +131,6 @@ void loop() {
   integrationConfigPortal.process();
   if (!appReady) { delay(1); return; }
   const uint32_t nowMs = millis();
-  bambuMqttService.process(nowMs);
   appManager.onInput(device.pollButtons(nowMs));
   appManager.tick(nowMs);
   appManager.render();
