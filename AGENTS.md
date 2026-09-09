@@ -79,7 +79,7 @@ Rendering stays partial; whole-screen fill only explicit full redraw/first entry
 
 Exactly one `WebServer{8081}`: HA status/config plus Bambu status/printers/discover/config/logout. Old Bambu login/verify/resend routes stay retired. Token input password-type, never echoed; blank preserves Token. Discovery explicit-only; `/api/bambu/printers` local-only.
 
-### MQTT — persistent multi-printer BambuHelper alignment
+### MQTT — persistent multi-printer, background worker
 
 Reference `Keralots/BambuHelper` MIT, pinned migration reference `d7a898394c046495798d87e50afd91ecf63f6ce7`.
 
@@ -94,24 +94,26 @@ per slot request   = device/<serial>/request
 
 Runtime contract:
 
-- `begin()` initialization only; no custom MQTT task.
-- `process(nowMs)` called from Arduino loop; no CPU0-pinned `bambu-mqtt` task.
+- `begin()` starts one dedicated CPU0 priority-1 `bambu-mqtt` FreeRTOS worker with 8192-byte stack.
+- Arduino `loop()` must not call `BambuMqttService::process()` or perform blocking Bambu TCP/TLS/MQTT connect work.
 - `std::array<MqttConn,4>` + `std::array<BambuState,4>` provide independent per-printer connection/runtime/cache.
-- service all connected slots first; at most one blocking new/reconnect attempt per loop pass.
-- each slot owns its own fresh-on-reconnect `WiFiClientSecure + PubSubClient`; strict CA, `setTimeout(15)`, buffer 40960, keepalive 30, random `bblp_*` client ID.
+- worker services all connected slots first; at most one blocking new/reconnect attempt per worker pass.
+- each slot owns its own fresh-on-reconnect `WiFiClientSecure + PubSubClient`; strict CA; TCP/socket timeout 5 s; TLS handshake timeout 5 s; PubSubClient socket timeout 5 s; buffer 40960; keepalive 30; random `bblp_*` client ID.
 - PubSubClient owns TCP/TLS establishment; no normal-path preflight or explicit `tls_->connect(...)`.
 - callback routes report topic by Serial to the correct slot.
 - initial per-slot `pushall` >=2000 ms after connect.
-- per-slot backoff 30 s, 60 s after 5 failures, 120 s after 15.
+- per-slot backoff 30 s, 60 s after 5 failures, 120 s after 15; the retry anchor is recorded when a failed connect returns, never before the blocking call starts.
 - one slot failure/reconnect must not tear down sibling online slots.
 - active index/name-only config changes preserve sockets and slot caches; credential/region/serial-set changes rebuild affected runtime via config revision.
 - rc 4/5 latches token-invalid protection.
-- `esp_task_wdt_reset()` allowed around known long operations, but watchdog disable/delete forbidden.
-- `setInsecure()` forbidden; no background login/discovery/token renewal.
-- old Stage-2/3/4 `mqtt_real_tls_*`, layered preflight and project `MQTT_SOCKET_TIMEOUT` overrides stay retired.
+- shared `NetworkArbiter` remains in place to serialize expensive network/TLS starts, but a failed Bambu attempt is bounded and cannot freeze the Arduino UI loop or local `/api/bambu/status` handling.
+- watchdog disable/delete forbidden. `setInsecure()` forbidden; no background login/discovery/token renewal.
+- old Stage-2/3/4 `mqtt_real_tls_*`, layered preflight and project `MQTT_SOCKET_TIMEOUT` macro overrides stay retired.
 
 Secret-safe serial markers include `slot=<n>` with mqtt_connect/ok/fail/subscribe_fail/loop_lost/pushall. Never print Token, Cloud User ID, Cookie/Authorization/auth payload.
 
 ## Diagnostics / acceptance
 
 Physical acceptance must include: exact firmware/NVS preservation; startup on Weather; verify the full direct page order in both directions; verify absent stock/printer pages are skipped; both long presses remain no-op; with two saved real printers both reach their own `mqtt_connect_ok slot=0/1` and `mqtt_pushall_initial`; moving between Bambu page 1/2 must create no new mqtt_connect solely because of navigation; per-slot live data/caches must not cross-contaminate; no periodic whole-screen flash; >=10 min no watchdog/panic/automatic reboot; one slot reconnect must not drop the other; check Stock/Weather/HA coexistence and heap under two persistent MQTT/TLS slots.
+
+Mandatory failure-path acceptance: if Bambu Cloud cannot connect, GPIO navigation and local `:8081/api/bambu/status` must remain responsive during the attempt; `mqtt_connect_fail elapsed_ms` must stay far below the former ~120 s failure and target <=20 s; after failure, the next `mqtt_connect` must not occur before the logged 30/60/120 s retry interval has elapsed.
