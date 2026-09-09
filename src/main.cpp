@@ -131,7 +131,6 @@ void loop() {
   integrationConfigPortal.process();
   if (!appReady) { delay(1); return; }
   const uint32_t nowMs = millis();
-  bambuMqttService.process(nowMs);
   appManager.onInput(device.pollButtons(nowMs));
   appManager.tick(nowMs);
   appManager.render();
