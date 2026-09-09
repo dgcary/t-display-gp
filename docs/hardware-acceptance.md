@@ -44,6 +44,21 @@ HA: read-only, trusted-LAN HTTP or configured-CA HTTPS, no insecure fallback or 
 
 User pastes their browser Token only into local `http://<device-ip>:8081/`; never expose it to ChatGPT/Codex/screenshots/logs. Verify status contains only token-set/non-secret runtime metadata; logout clears credentials/printers.
 
+## Bambu blocking-connect regression
+
+This is mandatory because the pre-fix firmware reproduced a deterministic ~120 s synchronous freeze on failed Bambu Cloud MQTT connects.
+
+With Bambu Cloud configured and a connect failure naturally present or safely reproducible:
+
+1. Observe a `[bambu] mqtt_connect slot=...` line.
+2. During the in-progress Cloud attempt, press GPIO14/GPIO0 repeatedly. Page navigation must remain responsive; the Arduino UI loop must not freeze waiting for MQTT/TLS.
+3. During the same attempt, request `http://<device-ip>:8081/api/bambu/status`. It must answer locally instead of timing out for the full Cloud-connect duration.
+4. The eventual `mqtt_connect_fail` must report `elapsed_ms <= 20000`; any recurrence near 120000 ms is FAIL.
+5. Record the failure timestamp and its logged `retry_ms`. The next `mqtt_connect` for that same slot must not start before the full 30/60/120 s retry interval has elapsed from the failure-return time. An ~8 ms immediate reconnect is FAIL.
+6. Confirm there is no watchdog, panic, automatic reboot, credential leak or NVS change during the failure loop.
+
+The recovered runtime must show a dedicated background `bambu-mqtt` worker, explicit 5 s TCP/socket timeout, explicit 5 s TLS handshake timeout and 5 s PubSubClient socket timeout. Shared `NetworkArbiter` serialization may delay other external network requests briefly, but must never recreate the old two-minute UI/portal freeze.
+
 ## Persistent multi-printer / direct Bambu page acceptance
 
 With two saved real printers A/B:
@@ -65,21 +80,24 @@ Observe >=2 min idle/live. No periodic 500 ms whole-screen blank/flash. First en
 
 ## MQTT architecture evidence
 
-Candidate must use `espressif32@6.12.0` / Arduino-ESP32 2.0.17 and BambuHelper-aligned loop-driven persistent slots:
+Candidate must use `espressif32@6.12.0` / Arduino-ESP32 2.0.17 and a background-worker persistent-slot runtime:
 
 ```text
-no dedicated CPU0 bambu-mqtt task
-BambuMqttService::process(nowMs) from Arduino loop
+one CPU0 priority-1 bambu-mqtt worker, stack 8192
+Arduino loop does not synchronously call BambuMqttService::process
 per-printer MqttConn + BambuState
-strict CA, timeout 15 s
+strict CA
+TCP/socket timeout 5 s
+TLS handshake timeout 5 s
+PubSubClient socket timeout 5 s
 PubSubClient buffer 40960, keepalive 30 s
 random bblp_* client ID
 per-slot subscribe report topic
 per-slot initial pushall >=2 s after connect
-per-slot 30/60/120 s backoff
+per-slot 30/60/120 s backoff anchored after failure return
 ```
 
-Old `mqtt_real_tls_*`, layered preflight, explicit production TLS preconnect and project `MQTT_SOCKET_TIMEOUT=3/5` are forbidden acceptance markers. WDT reset around known long operations is allowed; disabling/deleting watchdog is forbidden.
+Old `mqtt_real_tls_*`, layered preflight, explicit production TLS preconnect and project `MQTT_SOCKET_TIMEOUT` macro overrides are forbidden acceptance markers. WDT disable/delete is forbidden.
 
 ## Mandatory stability
 
@@ -91,6 +109,7 @@ Observe >=10 continuous minutes with the real configured page set and both real 
 - heap does not monotonically decline under two TLS+MQTT clients;
 - no repeated reconnect caused solely by moving between Bambu pages;
 - natural failure of one slot, if observed, only reconnects that slot; sibling remains connected/fresh;
+- failed Cloud reconnects do not freeze GPIO or local port 8081;
 - no secret leak.
 
 Expected markers:
@@ -98,9 +117,9 @@ Expected markers:
 ```text
 [bambu] mqtt_connect slot=<n> ...
 [bambu] mqtt_connect_ok slot=<n> elapsed_ms=...
-[bambu] mqtt_connect_fail slot=<n> rc=... retry_ms=...
-[bambu] mqtt_subscribe_fail slot=<n> ...
-[bambu] mqtt_loop_lost slot=<n> ...
+[bambu] mqtt_connect_fail slot=<n> rc=... elapsed_ms=... retry_ms=...
+[bambu] mqtt_subscribe_fail slot=<n> ... retry_ms=...
+[bambu] mqtt_loop_lost slot=<n> ... retry_ms=...
 [bambu] mqtt_pushall_initial slot=<n> ...
 ```
 
@@ -127,6 +146,10 @@ REVERSE PAGE ORDER: PASS/FAIL
 MISSING SLOT AUTO-SKIP: PASS/FAIL
 LONG PRESS NO-OP: PASS/FAIL
 STOCK PAGE MAPPING: PASS/FAIL
+BAMBU CONNECT FAILURE ELAPSED_MS:
+GPIO RESPONSIVE DURING FAILED CONNECT: PASS/FAIL
+PORT 8081 STATUS RESPONSIVE DURING FAILED CONNECT: PASS/FAIL
+RETRY INTERVAL ACTUALLY HONORED: PASS/FAIL
 BAMBU SLOT0 ONLINE/PUSHALL: PASS/FAIL
 BAMBU SLOT1 ONLINE/PUSHALL: PASS/FAIL
 BAMBU PAGE1<->PAGE2 x10 INSTANT: PASS/FAIL
