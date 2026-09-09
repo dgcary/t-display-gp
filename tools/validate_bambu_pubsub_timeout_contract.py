@@ -84,13 +84,36 @@ for required in (
     if required not in mqtt:
         errors.append(f"missing bounded Bambu TCP/TLS timeout: {required}")
 
-# Backoff starts when a failed blocking call RETURNS, not when it started. If the
-# start timestamp is used, a long failure consumes the whole retry interval and
-# causes the observed immediate reconnect loop.
-if "conn.lastMqttAttemptMs = nowMs;" in mqtt:
-    errors.append("retry anchor must not be captured before the blocking connect call")
-if "conn.lastMqttAttemptMs = millis();" not in mqtt:
-    errors.append("retry anchor must be recorded from failure completion time")
+# Backoff semantics differ by event type:
+# - a blocking connect failure must start its retry clock when the call RETURNS;
+# - mqtt_loop_lost is non-blocking in this pass, so it must use this pass's
+#   nowMs. Using a later millis() and then comparing against the stale nowMs in
+#   the same process pass can unsigned-underflow and trigger an immediate retry.
+connect_match = re.search(
+    r"bool BambuMqttService::connectSlot\(size_t slot, uint32_t nowMs\)\s*\{(.*?)\n\}\n\nbool BambuMqttService::publishInitialPushall",
+    mqtt,
+    re.S,
+)
+if not connect_match:
+    errors.append("connectSlot implementation missing")
+else:
+    connect_body = connect_match.group(1)
+    if "conn.lastMqttAttemptMs = nowMs;" in connect_body:
+        errors.append("blocking connect retry anchor must not be captured from pre-call nowMs")
+    if "conn.lastMqttAttemptMs = millis();" not in connect_body:
+        errors.append("blocking connect retry anchor must be recorded from failure completion time")
+
+process_match = re.search(
+    r"void BambuMqttService::process\(uint32_t nowMs\)\s*\{(.*?)\n\}\n\nBambuState BambuMqttService::snapshot",
+    mqtt,
+    re.S,
+)
+if not process_match:
+    errors.append("process implementation missing")
+else:
+    process_body = process_match.group(1)
+    if "mqtt_loop_lost" not in process_body or "conn.lastMqttAttemptMs = nowMs;" not in process_body:
+        errors.append("mqtt_loop_lost backoff must anchor to the current process nowMs")
 
 # Active-printer switching stays local and must not tear down sibling sockets.
 match = re.search(r"bool BambuMqttService::cycleActivePrinter\(int direction\)\s*\{(.*?)\n\}", mqtt, re.S)
@@ -145,4 +168,4 @@ if errors:
         print(f"ERROR: {error}")
     sys.exit(1)
 
-print("Bambu background-worker + bounded-connect + completion-anchored backoff contract: OK")
+print("Bambu background-worker + bounded-connect + event-correct backoff contract: OK")
