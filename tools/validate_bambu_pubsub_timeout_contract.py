@@ -7,20 +7,35 @@ pio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
 mqtt = (ROOT / "src/network/BambuMqttService.cpp").read_text(encoding="utf-8")
 header = (ROOT / "src/network/BambuMqttService.h").read_text(encoding="utf-8")
 main = (ROOT / "src/main.cpp").read_text(encoding="utf-8")
+build_config = (ROOT / "include/build_config.h").read_text(encoding="utf-8")
 
 errors = []
 
-# Keep the proven BambuHelper runtime baseline.
 if "platform = espressif32@6.12.0" not in pio:
     errors.append("ESP32 runtime must remain aligned to espressif32@6.12.0 / Arduino-ESP32 2.0.17")
 if "MQTT_SOCKET_TIMEOUT" in pio:
     errors.append("project must not override PubSubClient MQTT_SOCKET_TIMEOUT")
-if "bambuMqttService.process(nowMs);" not in main:
-    errors.append("main loop must drive BambuMqttService::process(nowMs)")
 
-# High-fidelity multi-printer model: one persistent TLS/MQTT context and one
-# cached state per configured printer. Switching the visible/active slot must
-# not tear down the network connection.
+# Real Cloud connect/TLS must never execute synchronously from the Arduino UI loop.
+if "bambuMqttService.process(nowMs);" in main:
+    errors.append("Arduino loop must not synchronously drive blocking Bambu MQTT connect work")
+for required in (
+    "TaskHandle_t task_ = nullptr;",
+    "static void taskThunk(void* arg);",
+    "void taskLoop();",
+):
+    if required not in header:
+        errors.append(f"missing background Bambu MQTT worker marker: {required}")
+for required in (
+    "xTaskCreatePinnedToCore",
+    '"bambu-mqtt"',
+    "BambuMqttService::taskThunk",
+    "BambuMqttService::taskLoop",
+):
+    if required not in mqtt:
+        errors.append(f"missing background Bambu MQTT worker implementation: {required}")
+
+# Multi-printer model remains: one persistent TLS/MQTT context and cache per slot.
 for required in (
     "struct MqttConn",
     "std::array<MqttConn, BambuConfigLimits::PRINTER_COUNT> conns_",
@@ -41,7 +56,7 @@ for forbidden in (
     "uint16_t consecutiveFails_",
 ):
     if forbidden in header:
-        errors.append(f"single-active-printer runtime state must be retired: {forbidden}")
+        errors.append(f"single-active-printer runtime state must remain retired: {forbidden}")
 
 for required in (
     "for (size_t slot = 0; slot < config.printerCount; ++slot)",
@@ -49,18 +64,35 @@ for required in (
     "conn.tls = new (std::nothrow) WiFiClientSecure()",
     "conn.mqtt = new (std::nothrow) PubSubClient(*conn.tls)",
     "conn.tls->setCACertBundle(rootca_crt_bundle_start)",
-    "conn.tls->setTimeout(15)",
     "conn.mqtt->setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)",
     "conn.mqtt->setKeepAlive(BAMBU_MQTT_KEEPALIVE_SEC)",
     "findSlotForTopic(topic)",
     "states_[slot]",
 ):
     if required not in mqtt:
-        errors.append(f"missing per-slot BambuHelper-aligned MQTT marker: {required}")
+        errors.append(f"missing per-slot persistent MQTT marker: {required}")
 
-# Active-printer switching is now a local UI/NVS operation. It may persist the
-# active index, but must not explicitly disconnect Cloud MQTT or clear all slot
-# state. Extract the function body loosely so comments elsewhere do not matter.
+# Arduino-ESP32 has separate TCP/socket and TLS-handshake timeouts. Both must be
+# explicitly bounded so a failed Cloud handshake cannot fall back to the core's
+# ~120 s default handshake timeout.
+if "BAMBU_MQTT_CONNECT_TIMEOUT_SEC = 5U" not in build_config:
+    errors.append("Bambu MQTT connect phase timeout must be explicitly fixed at 5 seconds")
+for required in (
+    "conn.tls->setTimeout(BuildConfig::BAMBU_MQTT_CONNECT_TIMEOUT_SEC)",
+    "conn.tls->setHandshakeTimeout(BuildConfig::BAMBU_MQTT_CONNECT_TIMEOUT_SEC)",
+):
+    if required not in mqtt:
+        errors.append(f"missing bounded Bambu TCP/TLS timeout: {required}")
+
+# Backoff starts when a failed blocking call RETURNS, not when it started. If the
+# start timestamp is used, a long failure consumes the whole retry interval and
+# causes the observed immediate reconnect loop.
+if "conn.lastMqttAttemptMs = nowMs;" in mqtt:
+    errors.append("retry anchor must not be captured before the blocking connect call")
+if "conn.lastMqttAttemptMs = millis();" not in mqtt:
+    errors.append("retry anchor must be recorded from failure completion time")
+
+# Active-printer switching stays local and must not tear down sibling sockets.
 match = re.search(r"bool BambuMqttService::cycleActivePrinter\(int direction\)\s*\{(.*?)\n\}", mqtt, re.S)
 if not match:
     errors.append("cycleActivePrinter implementation missing")
@@ -70,8 +102,6 @@ else:
         if forbidden in body:
             errors.append(f"active printer switch must not tear down persistent slots: {forbidden}")
 
-# Per-slot reconnect cleanup must exist for failed/stale connections, while a
-# successful connection remains alive when another printer becomes active.
 for required in (
     "delete conn.mqtt",
     "conn.mqtt = nullptr",
@@ -82,12 +112,7 @@ for required in (
     if required not in mqtt:
         errors.append(f"per-slot reconnect cleanup missing: {required}")
 
-# Preserve known-good runtime/security boundaries.
 for forbidden in (
-    "xTaskCreatePinnedToCore",
-    '"bambu-mqtt"',
-    "taskThunk",
-    "taskLoop",
     "setInsecure",
     "disableCore0WDT",
     "disableCore1WDT",
@@ -107,10 +132,9 @@ for required in (
     "BAMBU_PUSHALL_INITIAL_DELAY_MS = 2000U",
     "BAMBU_MQTT_KEEPALIVE_SEC = 30U",
     '"bblp_%08',
-    "esp_task_wdt_reset",
 ):
     if required not in mqtt:
-        errors.append(f"missing retained BambuHelper runtime marker: {required}")
+        errors.append(f"missing retained Bambu runtime marker: {required}")
 
 for forbidden in ("pause", "resume", "stop_print", "ledctrl", "temperature"):
     if f'"{forbidden}"' in mqtt:
@@ -121,4 +145,4 @@ if errors:
         print(f"ERROR: {error}")
     sys.exit(1)
 
-print("BambuHelper-aligned persistent multi-printer MQTT runtime contract: OK")
+print("Bambu background-worker + bounded-connect + completion-anchored backoff contract: OK")
