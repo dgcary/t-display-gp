@@ -61,16 +61,20 @@ require("mqtt_h", [
     "configSnapshot()", "replaceConfig(", "cycleActivePrinter(", "externalConfigRevision_",
     "struct MqttConn", "std::array<MqttConn, BambuConfigLimits::PRINTER_COUNT> conns_",
     "std::array<BambuState, BambuConfigLimits::PRINTER_COUNT> states_",
+    "TaskHandle_t task_ = nullptr;", "static void taskThunk(void* arg);", "void taskLoop();",
 ])
 forbid("mqtt_h", [
     "BambuCloudClient", "BambuSessionModel sessionModel_", "setPendingVerification",
     "submitVerificationCode", "requestVerificationCode", "pendingTfaKey", "passwordSet",
-    "verificationRequired", "verificationType", "TaskHandle_t task_", "taskThunk", "taskLoop",
+    "verificationRequired", "verificationType",
     "WiFiClientSecure* tls_ = nullptr", "PubSubClient* mqtt_ = nullptr", "BambuState state_;",
 ])
 require("mqtt_cpp", [
     "PubSubClient", "WiFiClientSecure", "setCACertBundle", "rootca_crt_bundle_start",
-    "conn.tls->setTimeout(15)", "conn.mqtt->setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)",
+    "conn.tls->setTimeout(BuildConfig::BAMBU_MQTT_CONNECT_TIMEOUT_SEC)",
+    "conn.tls->setHandshakeTimeout(BuildConfig::BAMBU_MQTT_CONNECT_TIMEOUT_SEC)",
+    "conn.mqtt->setSocketTimeout(BuildConfig::BAMBU_MQTT_CONNECT_TIMEOUT_SEC)",
+    "conn.mqtt->setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)",
     "sharedNetworkArbiter", "selectRelativeBambuPrinter", "cycleActivePrinter(",
     "bambuBrokerForRegion", "bambuReportTopic", "pushall", "conn.mqtt->loop()",
     "externalConfigRevision_", "states_[slot] = BambuState{}", "conn.tokenRejected",
@@ -78,12 +82,13 @@ require("mqtt_cpp", [
     "esp_get_free_heap_size()", "esp_task_wdt_reset", '"bblp_%08',
     "BAMBU_PUSHALL_INITIAL_DELAY_MS = 2000U", "BAMBU_CLOUD_RECONNECT_PHASE2_MS = 60000U",
     "BAMBU_CLOUD_RECONNECT_PHASE3_MS = 120000U", "findSlotForTopic(topic)",
+    "xTaskCreatePinnedToCore", '"bambu-mqtt"', "BambuMqttService::taskLoop",
 ])
 forbid("mqtt_cpp", [
     "setInsecure", "performRelogin", "setPendingVerification", "submitVerificationCode",
     "requestVerificationCode", "fetchPrinters(", "fetchUserId(", "VERIFICATION_REQUIRED",
-    "result=CHALLENGE", "config.accessToken.c_str(), WiFi.RSSI", "xTaskCreatePinnedToCore",
-    '"bambu-mqtt"', "mqtt_real_tls_begin", "mqtt_real_tls_ok", "mqtt_real_tls_fail",
+    "result=CHALLENGE", "config.accessToken.c_str(), WiFi.RSSI",
+    "mqtt_real_tls_begin", "mqtt_real_tls_ok", "mqtt_real_tls_fail",
     "runLayeredConnectionProbe(broker);",
 ])
 if text("mqtt_cpp").count("conn.mqtt->publish") != 1:
@@ -104,8 +109,9 @@ if text("screen_cpp").count("display_->fillScreen(UiTheme::BACKGROUND);") != 1:
     errors.append("Bambu screen must clear the whole display only in the single full-redraw path")
 forbid("screen_cpp", ["void BambuScreen::render(const BambuViewModel& model, bool) {"])
 
-require("main", ["bambuMqttService.begin(bambuConfig, bambuConfigStore)", "bambuMqttService.process(nowMs);", "integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService)", "WiFi.gatewayIP()", "WiFi.subnetMask()", "WiFi.dnsIP(0)", "[netcfg]"])
-require("build", ['BAMBU_CONFIG_NAMESPACE[] = "bambucloud"', "BAMBU_MQTT_BUFFER_BYTES = 40960"])
+require("main", ["bambuMqttService.begin(bambuConfig, bambuConfigStore)", "integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService)", "WiFi.gatewayIP()", "WiFi.subnetMask()", "WiFi.dnsIP(0)", "[netcfg]"])
+forbid("main", ["bambuMqttService.process(nowMs);"])
+require("build", ['BAMBU_CONFIG_NAMESPACE[] = "bambucloud"', "BAMBU_MQTT_BUFFER_BYTES = 40960", "BAMBU_MQTT_CONNECT_TIMEOUT_SEC = 5U"])
 require("pio", ["platform = espressif32@6.12.0", "knolleary/PubSubClient", "+<network/BambuPortalModel.cpp>"])
 forbid("pio", ["MQTT_SOCKET_TIMEOUT"])
 require("notices", ["Keralots/BambuHelper", "knolleary/PubSubClient"])
@@ -118,4 +124,4 @@ if errors:
     for error in errors:
         print(f"ERROR: {error}")
     sys.exit(1)
-print("Bambu manual-token + persistent multi-printer + instant device-switch + partial-render + BambuHelper-aligned read-only MQTT contract: OK")
+print("Bambu manual-token + persistent multi-printer + background-worker + bounded read-only MQTT contract: OK")
