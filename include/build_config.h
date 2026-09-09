@@ -17,6 +17,7 @@ constexpr uint32_t WEATHER_DEFAULT_REFRESH_MIN = 15;
 constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 1500;
 constexpr uint32_t HTTP_READ_TIMEOUT_MS = 2500;
 constexpr uint32_t HTTP_TLS_HANDSHAKE_TIMEOUT_SEC = 5;
+constexpr uint32_t BAMBU_MQTT_CONNECT_TIMEOUT_SEC = 5U;
 constexpr size_t HTTP_MAX_BODY_BYTES = 32768;
 constexpr size_t BAMBU_HTTPS_MAX_BODY_BYTES = 16384;
 constexpr size_t BAMBU_MQTT_BUFFER_BYTES = 40960;
