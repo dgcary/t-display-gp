@@ -79,7 +79,7 @@ require("mqtt_cpp", [
     "bambuBrokerForRegion", "bambuReportTopic", "pushall", "conn.mqtt->loop()",
     "externalConfigRevision_", "states_[slot] = BambuState{}", "conn.tokenRejected",
     "conn.consecutiveFails", "conn.initialPushallPending", "mqtt_connect_fail", "WiFi.RSSI()",
-    "esp_get_free_heap_size()", "esp_task_wdt_reset", '"bblp_%08',
+    "esp_get_free_heap_size()", '"bblp_%08',
     "BAMBU_PUSHALL_INITIAL_DELAY_MS = 2000U", "BAMBU_CLOUD_RECONNECT_PHASE2_MS = 60000U",
     "BAMBU_CLOUD_RECONNECT_PHASE3_MS = 120000U", "findSlotForTopic(topic)",
     "xTaskCreatePinnedToCore", '"bambu-mqtt"', "BambuMqttService::taskLoop",
@@ -89,7 +89,7 @@ forbid("mqtt_cpp", [
     "requestVerificationCode", "fetchPrinters(", "fetchUserId(", "VERIFICATION_REQUIRED",
     "result=CHALLENGE", "config.accessToken.c_str(), WiFi.RSSI",
     "mqtt_real_tls_begin", "mqtt_real_tls_ok", "mqtt_real_tls_fail",
-    "runLayeredConnectionProbe(broker);",
+    "runLayeredConnectionProbe(broker);", "esp_task_wdt_reset",
 ])
 if text("mqtt_cpp").count("conn.mqtt->publish") != 1:
     errors.append("Bambu MQTT may publish only the single read-only pushall request")
