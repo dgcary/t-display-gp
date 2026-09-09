@@ -5,7 +5,6 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <esp_system.h>
-#include <esp_task_wdt.h>
 
 #include <cstdio>
 #include <new>
@@ -283,7 +282,6 @@ bool BambuMqttService::cycleActivePrinter(int direction) {
 }
 
 void BambuMqttService::mqttCallbackThunk(char* topic, uint8_t* payload, unsigned int length) {
-  esp_task_wdt_reset();
   if (activeInstance_) activeInstance_->handleMessage(topic, payload, length);
 }
 
@@ -346,7 +344,6 @@ bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
   disconnectSlot(slot);
   setSlotSession(slot, BambuSessionState::MQTT_CONNECTING);
 
-  esp_task_wdt_reset();
   NetworkRequestGuard guard(sharedNetworkArbiter());
   if (!guard.locked()) {
     if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
@@ -354,7 +351,6 @@ bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
     setSlotSession(slot, BambuSessionState::NETWORK_ERROR, -2);
     return false;
   }
-  esp_task_wdt_reset();
 
   const char* broker = bambuBrokerForRegion(config.region);
   Serial.printf("[bambu] mqtt_connect slot=%u broker=%s wifi=%d rssi=%d heap=%u fails=%u\n",
@@ -400,7 +396,6 @@ bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
                 static_cast<unsigned>(esp_random() & 0xFFFFU));
 
   const uint32_t startedMs = millis();
-  esp_task_wdt_reset();
   const bool connected = conn.mqtt->connect(
       clientId, config.cloudUserId.c_str(), config.accessToken.c_str());
   const uint32_t connectElapsedMs = static_cast<uint32_t>(millis() - startedMs);
@@ -470,7 +465,6 @@ bool BambuMqttService::publishInitialPushall(size_t slot) {
                 "{\"pushing\":{\"sequence_id\":\"%lu\",\"command\":\"pushall\",\"version\":1,\"push_target\":1}}",
                 static_cast<unsigned long>(sequence));
 
-  esp_task_wdt_reset();
   const bool published = conn.mqtt->publish(requestTopic.c_str(), request);
   if (published) {
     conn.initialPushallPending = false;
