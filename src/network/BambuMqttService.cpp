@@ -150,7 +150,7 @@ void BambuMqttService::process(uint32_t nowMs) {
     if (!conn.mqtt->loop()) {
       const int rc = conn.mqtt->state();
       if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
-      conn.lastMqttAttemptMs = millis();
+      conn.lastMqttAttemptMs = nowMs;
       conn.mqttAttempted = true;
       setSlotConnectivity(slot, false);
       setSlotSession(slot, BambuSessionState::NETWORK_ERROR, rc);
