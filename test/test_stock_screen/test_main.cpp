@@ -18,6 +18,15 @@ void test_layout_fits_320x170_landscape() {
   TEST_ASSERT_TRUE(StockScreenLayout::CHART_Y1 - StockScreenLayout::CHART_Y0 + 1 >= 145);
 }
 
+void test_quote_panel_prioritizes_daily_change_percent() {
+  TEST_ASSERT_TRUE(StockScreenLayout::LEFT_X1 >= 119);
+  TEST_ASSERT_TRUE(StockScreenLayout::CHART_X1 - StockScreenLayout::CHART_X0 + 1 >= 185);
+  TEST_ASSERT_TRUE(StockScreenLayout::CHANGE_Y0 > StockScreenLayout::PRICE_Y0);
+  TEST_ASSERT_TRUE(StockScreenLayout::CHANGE_Y1 < StockScreenLayout::METRICS_Y0);
+  TEST_ASSERT_TRUE(StockScreenLayout::CHANGE_PERCENT_FONT >= 4);
+  TEST_ASSERT_TRUE(StockScreenLayout::METRIC_COL2_X - StockScreenLayout::METRIC_COL1_X >= 56);
+}
+
 void test_chart_range_includes_prev_close_open_and_forces_minimum_span() {
   IntradaySeries flat = {{570, 100.0f, 100.0f, 0}, {571, 100.05f, 100.0f, 0}};
   const ChartRange padded = StockScreenMath::chartRange(flat, 100.0, 0.0);
@@ -69,6 +78,7 @@ void test_provider_summary_distinguishes_quote_and_intraday_sources() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_layout_fits_320x170_landscape);
+  RUN_TEST(test_quote_panel_prioritizes_daily_change_percent);
   RUN_TEST(test_chart_range_includes_prev_close_open_and_forces_minimum_span);
   RUN_TEST(test_chart_x_preserves_small_lunch_gap_in_right_panel);
   RUN_TEST(test_chart_y_maps_max_to_top_and_min_to_bottom);
