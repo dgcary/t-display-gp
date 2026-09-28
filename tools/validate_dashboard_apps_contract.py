@@ -15,7 +15,7 @@ required_files = {
 }
 checks = {
     "src/app/AppShell.h": ["HOME_ASSISTANT"],
-    "src/main.cpp": ["HomeAssistantApp", '"智能家居"', "AppId::HOME_ASSISTANT", "AppDataWorker appDataWorker", "IntegrationConfigPortal"],
+    "src/main.cpp": ["HomeAssistantApp", "AppId::HOME_ASSISTANT", "AppDataWorker appDataWorker", "IntegrationConfigPortal"],
     "src/network/AppDataTypes.h": ["HOME_ASSISTANT", "tryReceive(AppDataRequestType type"],
     "src/network/AppDataWorker.cpp": ["HomeAssistantProvider", "AppDataRequestType::HOME_ASSISTANT", "OpenMeteoProvider"],
     "src/network/HomeAssistantConfig.cpp": ["http://", "https://", "isHttpsUrl", "CA_CERT"],

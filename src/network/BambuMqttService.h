@@ -2,6 +2,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/task.h>
 
 #include <array>
 #include <cstddef>
@@ -27,7 +28,6 @@ struct BambuMqttStatus {
 class BambuMqttService {
  public:
   bool begin(const BambuConfig& config, BambuConfigStore& store);
-  void process(uint32_t nowMs);
   BambuState snapshot() const;
   BambuMqttStatus status() const;
   BambuConfig configSnapshot() const;
@@ -48,8 +48,11 @@ class BambuMqttService {
     uint32_t pushallSequence = 1U;
   };
 
+  static void taskThunk(void* arg);
   static void mqttCallbackThunk(char* topic, uint8_t* payload, unsigned int length);
 
+  void taskLoop();
+  void process(uint32_t nowMs);
   void handleMessage(const char* topic, const uint8_t* payload, unsigned int length);
   size_t findSlotForTopic(const char* topic) const;
   bool connectSlot(size_t slot, uint32_t nowMs);
@@ -65,6 +68,7 @@ class BambuMqttService {
 
   BambuConfigStore* store_ = nullptr;
   mutable SemaphoreHandle_t mutex_ = nullptr;
+  TaskHandle_t task_ = nullptr;
   BambuConfig config_;
   std::array<MqttConn, BambuConfigLimits::PRINTER_COUNT> conns_{};
   std::array<BambuState, BambuConfigLimits::PRINTER_COUNT> states_{};

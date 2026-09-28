@@ -13,6 +13,30 @@ Remote payloads stay behind provider/service abstractions. UI consumes structure
 - Bad Apple: local compiled asset
 - Device Info: local state
 
+# Direct page navigation
+
+There is no runtime menu. Device buttons navigate one flattened page chain:
+
+```text
+GPIO0 short  -> previous page
+GPIO14 short -> next page
+GPIO0 long   -> no-op
+GPIO14 long  -> no-op
+```
+
+Forward order:
+
+```text
+Weather
+-> Stock1 -> Stock2 -> Stock3 -> Stock4
+-> Bambu1 -> Bambu2
+-> Home Assistant
+-> Device Info
+-> Weather
+```
+
+Only configured pages exist. Direct navigation exposes at most the first 4 configured stocks and first 2 configured Bambu printers; absent slots are skipped automatically. Configuration remains Web-portal driven rather than button-editable.
+
 # Home Assistant
 
 Read-only `GET /api/states/<entity_id>`. HTTP only on trusted LAN; HTTPS requires configured CA; no service writes or secret echo.
@@ -35,14 +59,13 @@ POST /api/bambu/logout
 
 Status contains non-secret metadata only. Printer list is local saved data. Discovery is explicit and Save-gated. Blank Token preserves stored Token. Old login/verify/resend endpoints unsupported.
 
-## Active printer control
+## Active printer presentation
 
-```text
-GPIO0 PREV_SHORT  -> cycleActivePrinter(-1)
-GPIO14 NEXT_SHORT -> cycleActivePrinter(+1)
-```
+The global navigator selects Bambu page 1/2 directly. When entering one of these pages it sets `activePrinterIndex` to the corresponding configured slot, then `snapshot()` and `status()` expose that slot's cache/status.
 
-`activePrinterIndex` is presentation selection. With an unchanged connection set, switching persists the new index but does **not** increment a connection-affecting revision, disconnect sockets, clear sibling slot cache, or perform Cloud discovery/login. `snapshot()` and `status()` read the selected slot.
+With an unchanged connection set, changing only the active index is presentation state: it persists the new index but does **not** increment a connection-affecting revision, disconnect sockets, clear sibling slot cache, or perform Cloud discovery/login. Moving Bambu1 <-> Bambu2 therefore must not create a new MQTT/TLS connection solely because of navigation.
+
+The older app-local `GPIO0/GPIO14 -> cycleActivePrinter()` interaction is no longer part of the runtime input contract because short presses are consumed globally by `AppManager` for page navigation.
 
 ## Token HTTPS client
 
@@ -93,7 +116,7 @@ release NetworkArbiter
 >=2000 ms later -> one read-only pushall for that slot
 ```
 
-Per-slot backoff: failures 0..4 →30 s; 5..14 →60 s; >=15 →120 s. rc 4/5 latches rejected-token state. Failure/reconnect of one slot must not tear down sibling online slots.
+Per-slot backoff: failures 0..4 -> 30 s; 5..14 -> 60 s; >=15 -> 120 s. rc 4/5 latches rejected-token state. Failure/reconnect of one slot must not tear down sibling online slots.
 
 A config save that changes only active index and/or printer names preserves connection objects and cached state. Credential, region, enablement, printer count or serial-set changes are connection-affecting and rebuild runtime.
 
@@ -108,6 +131,7 @@ Secret-safe logs use `slot=<n>` and may include rc/elapsed/RSSI/heap/backoff; ne
 BambuScreen uses partial redraw; full display clear only explicit full redraw. Active-slot change can full redraw presentation but must not imply MQTT teardown.
 
 ```text
+Direct page navigator -> Weather / Stock[0..3] / Bambu[0..1] / HA / DeviceInfo
 Stock -> dedicated MarketDataWorker
 Weather + HA -> shared AppDataWorker
 Bambu -> loop-driven persistent per-printer MQTT slots
@@ -116,4 +140,4 @@ DeviceInfo -> local-only
 
 Short-lived HTTP/TLS and new Bambu connection transactions use `NetworkArbiter`; established MQTT sockets do not hold it.
 
-Code capacity is 4 slots. Current physical acceptance target is 2 simultaneous real printers; 4 simultaneous connections require separate hardware/resource validation.
+Code capacity is 4 Bambu slots. Direct navigation exposes the first 2 printer pages. Current physical acceptance target is 2 simultaneous real printers; 4 simultaneous connections require separate hardware/resource validation.
