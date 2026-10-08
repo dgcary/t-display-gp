@@ -59,6 +59,8 @@ With Bambu Cloud configured and a connect failure naturally present or safely re
 
 The recovered runtime must show a dedicated background `bambu-mqtt` worker, explicit 5 s TCP/socket timeout, explicit 5 s TLS handshake timeout and 5 s PubSubClient socket timeout. Shared `NetworkArbiter` serialization may delay other external network requests briefly, but must never recreate the old two-minute UI/portal freeze.
 
+CONNACK/fragmented packet regression: `test_bambu_mqtt_wait` runs the real PubSubClient with absent/delayed/fragmented input and checks scheduler idle opportunities, bounded timeout, unmodified payload, immediate success and rc 4/5. `BambuMqttTransport` must block one tick on empty reads, including `readByte()` waits. On hardware, a naturally missing CONNACK must return rc=-4 without `task_wdt`/`CPU 0: bambu-mqtt`; record reconnect evidence and >=10 minutes of serial plus local status-API latency. Native tests alone do not constitute physical PASS.
+
 ## Persistent multi-printer / direct Bambu page acceptance
 
 With two saved real printers A/B:

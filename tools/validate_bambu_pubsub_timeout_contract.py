@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 pio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
 mqtt = (ROOT / "src/network/BambuMqttService.cpp").read_text(encoding="utf-8")
 header = (ROOT / "src/network/BambuMqttService.h").read_text(encoding="utf-8")
+transport = (ROOT / "src/network/BambuMqttTransport.h").read_text(encoding="utf-8")
 main = (ROOT / "src/main.cpp").read_text(encoding="utf-8")
 build_config = (ROOT / "include/build_config.h").read_text(encoding="utf-8")
 
@@ -61,7 +62,7 @@ for forbidden in (
 for required in (
     "for (size_t slot = 0; slot < config.printerCount; ++slot)",
     "MqttConn& conn = conns_[slot]",
-    "conn.tls = new (std::nothrow) WiFiClientSecure()",
+    "conn.tls = new (std::nothrow) BambuMqttTransport()",
     "conn.mqtt = new (std::nothrow) PubSubClient(*conn.tls)",
     "conn.tls->setCACertBundle(rootca_crt_bundle_start)",
     "conn.mqtt->setBufferSize(BuildConfig::BAMBU_MQTT_BUFFER_BYTES)",
@@ -145,7 +146,7 @@ for forbidden in (
     "mqtt_real_tls_ok",
     "mqtt_real_tls_fail",
 ):
-    if forbidden in mqtt + "\n" + header:
+    if forbidden in mqtt + "\n" + header + "\n" + transport:
         errors.append(f"forbidden legacy/insecure runtime marker: {forbidden}")
 
 for required in (

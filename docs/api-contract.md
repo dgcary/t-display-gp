@@ -84,14 +84,14 @@ per slot request   = device/<serial>/request
 
 Only read-only `pushall` may be published.
 
-MQTT is main-loop driven: `begin(config,store)` initializes; Arduino `loop()` calls `process(nowMs)`. There is no custom FreeRTOS `bambu-mqtt` task or CPU0 pinning.
+`begin(config,store)` starts one CPU0 priority-1 `bambu-mqtt` worker (8192-byte stack, 50 ms between passes). Arduino `loop()` handles UI/Web and never calls blocking MQTT work.
 
 ### Persistent multi-printer slots
 
 Runtime contains one `MqttConn` and one `BambuState` cache per configured slot (array capacity 4). Each slot independently owns:
 
 ```text
-WiFiClientSecure
+BambuMqttTransport (WiFiClientSecure subclass)
 PubSubClient
 status / tokenRejected
 last attempt / backoff counter
@@ -107,8 +107,8 @@ Per-slot connection attempt:
 ```text
 release stale objects for that slot only
 acquire NetworkArbiter
-new WiFiClientSecure + CA bundle + setTimeout(15)
-new PubSubClient + 40960 buffer + keepalive 30
+new BambuMqttTransport + CA bundle + TCP/socket timeout 5 s + handshake timeout 5 s
+new PubSubClient + 40960 buffer + keepalive 30 + socket timeout 5 s
 random bblp_* client ID
 mqtt.connect(clientId, cloudUserId, accessToken)
 subscribe device/<slot serial>/report
@@ -122,7 +122,7 @@ A config save that changes only active index and/or printer names preserves conn
 
 The Stage-2/3/4 explicit `mqtt_real_tls_*`, layered preflight and project `MQTT_SOCKET_TIMEOUT` overrides remain retired. PubSubClient owns TCP/TLS establishment. Strict CA required; `setInsecure()` forbidden.
 
-`esp_task_wdt_reset()` may be used around known long connect/callback/publish operations, matching BambuHelper; disabling/deleting watchdogs is forbidden.
+Empty transport `available()` polls block one FreeRTOS tick, permitting the lower-priority IDLE0 task to run during CONNACK and fragmented-packet waits. Data-ready polls do not sleep. This is required because PubSubClient's connect wait has no yield and its read-byte `yield()` alone does not block the ESP32 worker. Preserve watchdogs and strict CA verification; do not use watchdog resets or disable/delete as a busy-wait workaround.
 
 Secret-safe logs use `slot=<n>` and may include rc/elapsed/RSSI/heap/backoff; never Token, Cloud User ID, Cookie/Authorization or auth payload.
 
@@ -134,7 +134,7 @@ BambuScreen uses partial redraw; full display clear only explicit full redraw. A
 Direct page navigator -> Weather / Stock[0..3] / Bambu[0..1] / HA / DeviceInfo
 Stock -> dedicated MarketDataWorker
 Weather + HA -> shared AppDataWorker
-Bambu -> loop-driven persistent per-printer MQTT slots
+Bambu -> one background worker with persistent per-printer MQTT slots
 DeviceInfo -> local-only
 ```
 

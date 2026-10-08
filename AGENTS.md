@@ -8,6 +8,7 @@ GitHub `dgcary/t-display-gp` is the source of truth.
 - Arduino/C++17, PlatformIO `lilygo-t-display-s3`.
 - ESP32 platform pinned `espressif32@6.12.0` / Arduino-ESP32 2.0.17.
 - Web ChatGPT owns source/design/TDD/GitHub/CI/exact-SHA artifact; Codex flashes approved image and performs physical tests.
+- When the user explicitly authorizes a local source fix and GitHub updates, Codex may implement/build it subject to the same checks and application-only flash rules.
 - Normal deployment: exact artifact application image only; preserve NVS/bootloader/partitions.
 
 Required checks:
@@ -99,6 +100,7 @@ Runtime contract:
 - `std::array<MqttConn,4>` + `std::array<BambuState,4>` provide independent per-printer connection/runtime/cache.
 - worker services all connected slots first; at most one blocking new/reconnect attempt per worker pass.
 - each slot owns its own fresh-on-reconnect `WiFiClientSecure + PubSubClient`; strict CA; TCP/socket timeout 5 s; TLS handshake timeout 5 s; PubSubClient socket timeout 5 s; buffer 40960; keepalive 30; random `bblp_*` client ID.
+- Construct `BambuMqttTransport`, the `WiFiClientSecure` subclass whose empty `available()` polls block for one FreeRTOS tick. PubSubClient CONNACK and fragmented-packet waits must allow IDLE0 to run; `yield()` alone is insufficient. Keep the real PubSubClient native wait-path regression tests.
 - PubSubClient owns TCP/TLS establishment; no normal-path preflight or explicit `tls_->connect(...)`.
 - callback routes report topic by Serial to the correct slot.
 - initial per-slot `pushall` >=2000 ms after connect.

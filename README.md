@@ -61,11 +61,12 @@ password = accessToken
 当前运行时参考 `Keralots/BambuHelper`（MIT，迁移参考 commit `d7a898394c046495798d87e50afd91ecf63f6ce7`）：
 
 ```text
-Arduino loop()
+CPU0 bambu-mqtt worker (priority 1, stack 8192, 50 ms between passes)
  -> BambuMqttService::process(nowMs)
  -> service all connected printer slots
  -> if needed, attempt at most one disconnected slot per loop pass
- -> per-slot fresh WiFiClientSecure, strict CA, timeout 15 s
+ -> per-slot fresh BambuMqttTransport (WiFiClientSecure), strict CA
+ -> TCP/socket + TLS handshake + MQTT socket timeout each 5 s
  -> per-slot PubSubClient@2.8, buffer 40960, keepalive 30 s
  -> random bblp_* client ID
  -> mqtt.connect(cloudUserId, accessToken)
@@ -76,14 +77,15 @@ Arduino loop()
 关键约束：
 
 - `espressif32@6.12.0` / Arduino-ESP32 2.0.17；
-- 没有固定 CPU0 的 `bambu-mqtt` 专用任务；
+- `bambu-mqtt` 后台任务运行在 CPU0，Arduino UI/Web 主循环不执行连接；
+- `BambuMqttTransport::available()` 无数据时阻塞一个 FreeRTOS tick，让 IDLE0 获得运行机会，覆盖 CONNACK 和分片报文等待；有数据时不增加休眠；
 - 每个已配置 printer slot 独立持有 TLS/MQTT、backoff、pushall 序号和 `BambuState`；
 - 已在线 slot 常驻，active printer 切换不会 teardown 网络连接；
 - callback 按 report topic/Serial 路由到对应 slot cache；
 - 单个 slot 掉线只重建该 slot，其他在线 slot 保持；
 - 重连 backoff = 30 s → 60 s（>=5 failures）→ 120 s（>=15 failures）；
 - initial pushall 延迟 2 s；
-- 允许像 BambuHelper 一样在已知长操作前 `esp_task_wdt_reset()`，但绝不关闭/删除 watchdog；
+- 不通过喂狗、关闭 watchdog 或移动 CPU 核心掩盖忙等；
 - strict CA，禁止 `setInsecure()`；
 - 旧 `mqtt_real_tls_*` / layered preflight / 项目 `MQTT_SOCKET_TIMEOUT=3/5` 已退出生产路径。
 
@@ -109,7 +111,7 @@ DeviceInfo：IP、SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM、Web 地�
 Direct page navigator -> Weather / Stock[0..3] / Bambu[0..1] / HA / DeviceInfo
 Stock -> dedicated MarketDataWorker
 Weather + HomeAssistant -> one shared AppDataWorker
-Bambu -> loop-driven persistent per-printer Cloud MQTT slots + local config
+Bambu -> one background worker + persistent per-printer Cloud MQTT slots + local config
 DeviceInfo -> local-only
 Bad Apple -> local flash playback
 ```

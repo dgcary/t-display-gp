@@ -11,6 +11,7 @@
 #include <string>
 
 #include "BambuCloudProtocol.h"
+#include "BambuMqttTransport.h"
 #include "NetworkArbiter.h"
 #include "build_config.h"
 
@@ -358,7 +359,7 @@ bool BambuMqttService::connectSlot(size_t slot, uint32_t nowMs) {
                 WiFi.RSSI(), static_cast<unsigned>(esp_get_free_heap_size()),
                 static_cast<unsigned>(conn.consecutiveFails));
 
-  conn.tls = new (std::nothrow) WiFiClientSecure();
+  conn.tls = new (std::nothrow) BambuMqttTransport();
   if (!conn.tls) {
     if (conn.consecutiveFails < UINT16_MAX) ++conn.consecutiveFails;
     markAttemptComplete();

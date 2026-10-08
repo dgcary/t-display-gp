@@ -4,6 +4,8 @@
 
 Web ChatGPT owns source/design/tests/GitHub/CI/ESP32-S3 build/exact-SHA verification. Codex only flashes approved prebuilt application firmware and performs physical testing.
 
+An explicit user authorization for a local source fix and GitHub updates permits Codex to implement and build that fix, retaining all checks below and application-only flashing. Record the source commit, firmware SHA256 and actual hardware outcome.
+
 ```bash
 python tools/validate_tdisplay_setup.py
 python tools/validate_provisioning_contract.py
@@ -84,6 +86,8 @@ request   device/<slot serial>/request
 ```
 
 `begin()` starts one CPU0 priority-1 `bambu-mqtt` worker with an 8192-byte stack. Arduino `loop()` does not call `BambuMqttService::process()` and must remain responsive while the worker is inside a failed Cloud connection attempt.
+
+The worker uses `BambuMqttTransport`, a `WiFiClientSecure` subclass that blocks for one FreeRTOS tick when `available()` has no data. This makes PubSubClient's CONNACK and fragmented-packet polling cooperative; ESP32 `yield()` alone cannot give the lower-priority IDLE0 task CPU time. Data-ready reads remain immediate. Native tests exercise the actual pinned PubSubClient against a timed socket test double.
 
 The worker services established slots first and starts at most one blocking connection attempt per worker pass, preferring the active slot. A failed/stale slot destroys/rebuilds only its own clients. Backoff per slot: 30 s → 60 s after 5 failures → 120 s after 15 failures, anchored from the time the failed connect returns. Initial read-only `pushall` is sent >=2 s after that slot connects.
 
