@@ -13,21 +13,31 @@ namespace StockScreenLayout {
 constexpr int SCREEN_WIDTH = 320;
 constexpr int SCREEN_HEIGHT = 170;
 constexpr int LEFT_X0 = 0;
-constexpr int LEFT_X1 = 115;
+constexpr int LEFT_X1 = 119;
 constexpr int HEADER_Y0 = 0;
 constexpr int HEADER_Y1 = 24;
 constexpr int PRICE_Y0 = 26;
-constexpr int PRICE_Y1 = 70;
-constexpr int METRICS_Y0 = 72;
+constexpr int PRICE_Y1 = 48;
+constexpr int CHANGE_Y0 = 49;
+constexpr int CHANGE_Y1 = 80;
+constexpr int METRICS_Y0 = 82;
 constexpr int METRICS_Y1 = 124;
 constexpr int TURNOVER_Y0 = 126;
 constexpr int TURNOVER_Y1 = 149;
-constexpr int CHART_X0 = 120;
+constexpr int CHART_X0 = 124;
 constexpr int CHART_X1 = 316;
 constexpr int CHART_Y0 = 4;
 constexpr int CHART_Y1 = 150;
 constexpr int FOOTER_Y0 = 153;
 constexpr int FOOTER_Y1 = 169;
+
+constexpr uint8_t PRICE_FONT = 2;
+constexpr uint8_t CHANGE_PERCENT_FONT = 4;
+constexpr uint8_t CHANGE_AMOUNT_FONT = 1;
+constexpr int METRIC_COL1_X = 4;
+constexpr int METRIC_COL2_X = 62;
+constexpr int METRIC_ROW1_BASELINE = 98;
+constexpr int METRIC_ROW2_BASELINE = 118;
 }  // namespace StockScreenLayout
 
 struct ChartRange {

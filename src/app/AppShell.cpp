@@ -46,34 +46,24 @@ AppId MenuApp::selectedAppId() const {
   return items_[selectedIndex_].id;
 }
 
-AppManager::AppManager(MenuApp& menu, std::initializer_list<IApp*> apps)
-    : menu_(menu), apps_(apps) {}
+AppManager::AppManager(std::initializer_list<IApp*> apps) : apps_(apps) {}
 
-bool AppManager::begin(AppId startupApp) {
-  if (active_) return active_->id() == startupApp;
-  return switchTo(startupApp);
+bool AppManager::begin() {
+  if (active_) return true;
+  for (IApp* app : apps_) {
+    if (app && app->pageCount() > 0U) return activate(app, 0U);
+  }
+  return false;
 }
 
 void AppManager::onInput(InputEvent event) {
   if (!active_ || event == InputEvent::NONE) return;
-
-  if (active_->id() == AppId::MENU) {
-    if (event == InputEvent::NEXT_LONG) {
-      const AppId selected = menu_.selectedAppId();
-      if (selected != AppId::MENU) switchTo(selected);
-      return;
-    }
-    if (event == InputEvent::PREV_LONG) return;
-    active_->onButton(event);
-    return;
+  if (event == InputEvent::PREV_SHORT) {
+    navigate(-1);
+  } else if (event == InputEvent::NEXT_SHORT) {
+    navigate(1);
   }
-
-  if (event == InputEvent::PREV_LONG) {
-    switchTo(AppId::MENU);
-    return;
-  }
-  if (event == InputEvent::NEXT_LONG) return;
-  active_->onButton(event);
+  // Long presses are intentionally reserved/no-op in direct-navigation mode.
 }
 
 void AppManager::tick(uint32_t nowMs) {
@@ -90,20 +80,63 @@ AppId AppManager::activeAppId() const {
   return active_ ? active_->id() : AppId::MENU;
 }
 
+size_t AppManager::activePageIndex() const {
+  return active_ ? active_->selectedPage() : 0U;
+}
+
 IApp* AppManager::findApp(AppId id) const {
-  if (id == AppId::MENU) return const_cast<MenuApp*>(&menu_);
   for (IApp* app : apps_) {
     if (app && app->id() == id) return app;
   }
   return nullptr;
 }
 
-bool AppManager::switchTo(AppId id) {
-  IApp* target = findApp(id);
-  if (!target) return false;
-  if (target == active_) return true;
+bool AppManager::activate(IApp* app, size_t pageIndex) {
+  if (!app || pageIndex >= app->pageCount() || !app->selectPage(pageIndex)) return false;
+  if (app == active_) return true;
   if (active_) active_->onExit();
-  active_ = target;
+  active_ = app;
   active_->onEnter();
   return true;
+}
+
+bool AppManager::navigate(int direction) {
+  if (!active_ || direction == 0 || apps_.empty()) return false;
+
+  const size_t pageCount = active_->pageCount();
+  const size_t pageIndex = active_->selectedPage();
+  if (pageCount > 0U && pageIndex < pageCount) {
+    if (direction > 0 && pageIndex + 1U < pageCount) {
+      return active_->selectPage(pageIndex + 1U);
+    }
+    if (direction < 0 && pageIndex > 0U) {
+      return active_->selectPage(pageIndex - 1U);
+    }
+  }
+
+  size_t activeIndex = apps_.size();
+  for (size_t i = 0; i < apps_.size(); ++i) {
+    if (apps_[i] == active_) {
+      activeIndex = i;
+      break;
+    }
+  }
+  if (activeIndex >= apps_.size()) return false;
+
+  for (size_t step = 1U; step <= apps_.size(); ++step) {
+    size_t candidateIndex = 0U;
+    if (direction > 0) {
+      candidateIndex = (activeIndex + step) % apps_.size();
+    } else {
+      candidateIndex = (activeIndex + apps_.size() - (step % apps_.size())) % apps_.size();
+    }
+
+    IApp* candidate = apps_[candidateIndex];
+    if (!candidate) continue;
+    const size_t candidatePages = candidate->pageCount();
+    if (candidatePages == 0U) continue;
+    const size_t targetPage = direction > 0 ? 0U : candidatePages - 1U;
+    return activate(candidate, targetPage);
+  }
+  return false;
 }

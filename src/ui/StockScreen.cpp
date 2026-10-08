@@ -263,17 +263,23 @@ void StockScreen::drawHeader(const StockViewModel& model) {
 
 void StockScreen::drawQuote(const StockViewModel& model) {
   const int width = StockScreenLayout::LEFT_X1 - StockScreenLayout::LEFT_X0 + 1;
-  const int height = StockScreenLayout::PRICE_Y1 - StockScreenLayout::PRICE_Y0 + 1;
+  const int height = StockScreenLayout::CHANGE_Y1 - StockScreenLayout::PRICE_Y0 + 1;
   display_->fillRect(StockScreenLayout::LEFT_X0, StockScreenLayout::PRICE_Y0, width, height, UiTheme::BACKGROUND);
   if (!model.hasQuote || !model.quote) {
-    drawAscii(*display_, "--", 4, 29, 4, UiTheme::NEUTRAL);
+    drawAscii(*display_, "--", 4, 29, StockScreenLayout::PRICE_FONT, UiTheme::NEUTRAL);
+    drawAscii(*display_, "--", 4, 51, StockScreenLayout::CHANGE_PERCENT_FONT, UiTheme::NEUTRAL);
     return;
   }
+
   const uint16_t color = priceColor(model);
-  drawAscii(*display_, formatPrice(model.quote->last), 3, 28, 4, color);
+  drawAscii(*display_, formatPrice(model.quote->last), 3, 29, StockScreenLayout::PRICE_FONT, color);
+
   std::string change = formatPrice(model.quote->change);
   if (model.quote->change > 0) change = "+" + change;
-  drawAscii(*display_, change + " " + formatPercent(model.quote->changePercent), 4, 58, 1, color);
+  drawAscii(*display_, change, 76, 31, StockScreenLayout::CHANGE_AMOUNT_FONT, color);
+
+  drawAscii(*display_, formatPercent(model.quote->changePercent), 3, 50,
+            StockScreenLayout::CHANGE_PERCENT_FONT, color);
 }
 
 void StockScreen::drawMetrics(const StockViewModel& model) {
@@ -282,16 +288,21 @@ void StockScreen::drawMetrics(const StockViewModel& model) {
   display_->fillRect(StockScreenLayout::LEFT_X0, StockScreenLayout::METRICS_Y0, width, height, UiTheme::BACKGROUND);
   unicodeFont_->setFont(u8g2_font_wqy12_t_gb2312);
   unicodeFont_->setForegroundColor(UiTheme::MUTED);
+
   const char* labels[4] = {"开", "高", "低", "昨"};
   const double values[4] = {
       model.hasQuote && model.quote ? model.quote->open : 0,
       model.hasQuote && model.quote ? model.quote->high : 0,
       model.hasQuote && model.quote ? model.quote->low : 0,
       model.hasQuote && model.quote ? model.quote->prevClose : 0};
+
   for (int i = 0; i < 4; ++i) {
-    const int baseline = 83 + i * 13;
-    unicodeFont_->drawUTF8(4, baseline, labels[i]);
-    drawAscii(*display_, model.hasQuote ? formatPrice(values[i]) : "--", 24, baseline - 11, 1, UiTheme::TEXT);
+    const bool secondColumn = (i % 2) != 0;
+    const int x = secondColumn ? StockScreenLayout::METRIC_COL2_X : StockScreenLayout::METRIC_COL1_X;
+    const int baseline = i < 2 ? StockScreenLayout::METRIC_ROW1_BASELINE
+                               : StockScreenLayout::METRIC_ROW2_BASELINE;
+    unicodeFont_->drawUTF8(x, baseline, labels[i]);
+    drawAscii(*display_, model.hasQuote ? formatPrice(values[i]) : "--", x + 16, baseline - 11, 1, UiTheme::TEXT);
   }
 }
 

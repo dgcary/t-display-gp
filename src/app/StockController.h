@@ -63,6 +63,16 @@ class StockController {
   void onButton(ButtonEvent event);
   void consumeMarketResults();
   void setWifiOnline(bool online);
+  bool selectIndex(size_t stockIndex) {
+    if (stockIndex >= config_.stocks.size()) return false;
+    if (stockIndex == currentIndex_) return true;
+    currentIndex_ = stockIndex;
+    fullRedraw_ = true;
+    dirty_ = true;
+    publishView();
+    if (wifiOnline_) scheduleForCurrent(lastNowMs_, true);
+    return true;
+  }
 
   const StockViewModel& viewModel() const { return view_; }
   bool takeDirtyFlag();

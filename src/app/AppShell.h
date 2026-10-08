@@ -44,6 +44,10 @@ class IApp {
   virtual bool takeDirtyFlag() = 0;
   virtual bool takeFullRedrawFlag() = 0;
   virtual void render(bool fullRedraw) = 0;
+
+  virtual size_t pageCount() const { return 1U; }
+  virtual bool selectPage(size_t pageIndex) { return pageIndex == 0U; }
+  virtual size_t selectedPage() const { return 0U; }
 };
 
 class MenuApp final : public IApp {
@@ -70,17 +74,18 @@ class MenuApp final : public IApp {
 
 class AppManager {
  public:
-  AppManager(MenuApp& menu, std::initializer_list<IApp*> apps);
-  bool begin(AppId startupApp = AppId::STOCK);
+  explicit AppManager(std::initializer_list<IApp*> apps);
+  bool begin();
   void onInput(InputEvent event);
   void tick(uint32_t nowMs);
   void render();
   AppId activeAppId() const;
+  size_t activePageIndex() const;
 
  private:
   IApp* findApp(AppId id) const;
-  bool switchTo(AppId id);
-  MenuApp& menu_;
+  bool activate(IApp* app, size_t pageIndex);
+  bool navigate(int direction);
   std::vector<IApp*> apps_;
   IApp* active_ = nullptr;
 };

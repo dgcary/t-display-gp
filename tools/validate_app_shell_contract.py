@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the final five-app shell contract."""
+"""Validate the final direct-navigation app shell contract."""
 from pathlib import Path
 import sys
 
@@ -9,7 +9,9 @@ main = Path("src/main.cpp").read_text(encoding="utf-8")
 missing = []
 for needle in [
     "BAMBU",
-    "bool begin(AppId startupApp = AppId::STOCK);",
+    "explicit AppManager(std::initializer_list<IApp*> apps);",
+    "bool begin();",
+    "size_t activePageIndex() const;",
 ]:
     if needle not in shell:
         missing.append(f"src/app/AppShell.h: {needle}")
@@ -20,13 +22,9 @@ for needle in [
     "AppId::BAMBU",
     "AppId::HOME_ASSISTANT",
     "AppId::DEVICE_INFO",
-    '"股票"',
-    '"天气"',
-    '"Bambu Lab"',
-    '"智能家居"',
-    '"设备信息"',
     '#include "BambuApp.h"',
-    "appManager.begin(AppId::STOCK)",
+    "AppManager appManager({&weatherApp, &stockApp, &bambuApp, &homeAssistantApp, &deviceInfoApp});",
+    "appManager.begin()",
     'case AppId::BAMBU: return "BAMBU";',
 ]:
     if needle not in main:
@@ -45,15 +43,13 @@ for path, text in [("src/app/AppShell.h", shell), ("src/main.cpp", main)]:
         if needle in text:
             forbidden.append(f"{path}: idle switch {needle}")
 
-# The final main wiring must keep menu order stable.
-ordered = ['"股票"', '"天气"', '"Bambu Lab"', '"智能家居"', '"设备信息"']
-positions = [main.find(item) for item in ordered]
-if all(pos >= 0 for pos in positions) and positions != sorted(positions):
-    missing.append("src/main.cpp: final menu order Stock/Weather/Bambu/HA/DeviceInfo")
+for needle in ["MenuApp menuApp", "MenuScreen menuScreen", '#include "MenuScreen.h"', "appManager.begin(AppId::STOCK)"]:
+    if needle in main:
+        forbidden.append(f"src/main.cpp: {needle}")
 
 if missing or forbidden:
     if missing:
-        print("missing final app-shell contract:")
+        print("missing final direct app-shell contract:")
         for item in missing:
             print(f"  {item}")
     if forbidden:
@@ -62,4 +58,4 @@ if missing or forbidden:
             print(f"  {item}")
     sys.exit(1)
 
-print("Stock startup + final five-app Bambu shell contract: OK")
+print("Weather startup + direct paged navigation shell contract: OK")
