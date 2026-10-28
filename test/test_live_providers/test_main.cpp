@@ -80,7 +80,7 @@ void test_eastmoney_quote_uses_exact_url_and_referer() {
 
   TEST_ASSERT_EQUAL(ProviderError::NONE, provider.fetchQuote(StockSymbol::parse("600519"), quote, &diagnostics));
   TEST_ASSERT_EQUAL_STRING(
-      "https://push2.eastmoney.com/api/qt/stock/get?secid=1.600519&fields=f57,f58,f43,f44,f45,f46,f47,f48,f60,f86,f169,f170",
+      "https://push2.eastmoney.com/api/qt/stock/get?secid=1.600519&fields=f57,f58,f43,f44,f45,f46,f47,f48,f60,f86,f168,f169,f170",
       transport.lastUrl.c_str());
   TEST_ASSERT_TRUE(hasHeader(transport.lastHeaders, "Referer", "https://quote.eastmoney.com/"));
   TEST_ASSERT_DOUBLE_WITHIN(0.001, 1410.25, quote.last);
