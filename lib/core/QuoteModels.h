@@ -30,6 +30,8 @@ struct QuoteSnapshot {
   double prevClose = 0;
   uint64_t volume = 0;
   double amount = 0;
+  double turnoverRate = 0;
+  bool hasTurnoverRate = false;
   uint64_t epochSeconds = 0;
   MarketStatus marketStatus = MarketStatus::UNKNOWN;
   ProviderId provider = ProviderId::EAST_MONEY;
