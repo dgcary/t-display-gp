@@ -8,7 +8,7 @@ LILYGO T-Display-S3 320×170 多应用桌面终端。
 
 ```text
 天气
-→ 股票1 → 股票2 → 股票3 → 股票4
+→ 股票总览 → 股票1 → 股票2 → 股票3 → 股票4 → 股票5
 → 拓竹打印机1 → 拓竹打印机2
 → 智能家居
 → 设备信息
@@ -108,7 +108,7 @@ DeviceInfo：IP、SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM、Web 地�
 ## Architecture
 
 ```text
-Direct page navigator -> Weather / Stock[0..3] / Bambu[0..1] / HA / DeviceInfo
+Direct page navigator -> Weather / StockOverview / Stock[0..4] / Bambu[0..1] / HA / DeviceInfo
 Stock -> dedicated MarketDataWorker
 Weather + HomeAssistant -> one shared AppDataWorker
 Bambu -> one background worker + persistent per-printer Cloud MQTT slots + local config

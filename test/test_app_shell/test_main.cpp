@@ -51,7 +51,7 @@ class FakeApp final : public IApp {
 
 struct ShellFixture {
   FakeApp weather{AppId::WEATHER, "天气", 1U};
-  FakeApp stock{AppId::STOCK, "股票", 4U};
+  FakeApp stock{AppId::STOCK, "股票", 6U};
   FakeApp bambu{AppId::BAMBU, "Bambu Lab", 2U};
   FakeApp homeAssistant{AppId::HOME_ASSISTANT, "智能家居", 1U};
   FakeApp deviceInfo{AppId::DEVICE_INFO, "设备信息", 1U};
@@ -66,14 +66,14 @@ void test_starts_on_weather() {
   TEST_ASSERT_EQUAL_INT(1, f.weather.enters);
 }
 
-void test_next_walks_weather_stock4_bambu2_ha_device_and_wraps() {
+void test_next_walks_weather_overview_stock5_bambu2_ha_device_and_wraps() {
   ShellFixture f;
   f.manager.begin();
 
   f.manager.onInput(InputEvent::NEXT_SHORT);
   TEST_ASSERT_EQUAL(AppId::STOCK, f.manager.activeAppId());
   TEST_ASSERT_EQUAL_UINT32(0, f.manager.activePageIndex());
-  for (size_t expected = 1U; expected < 4U; ++expected) {
+  for (size_t expected = 1U; expected < 6U; ++expected) {
     f.manager.onInput(InputEvent::NEXT_SHORT);
     TEST_ASSERT_EQUAL(AppId::STOCK, f.manager.activeAppId());
     TEST_ASSERT_EQUAL_UINT32(expected, f.manager.activePageIndex());
@@ -178,7 +178,7 @@ void test_active_app_remains_after_long_inactivity() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_starts_on_weather);
-  RUN_TEST(test_next_walks_weather_stock4_bambu2_ha_device_and_wraps);
+  RUN_TEST(test_next_walks_weather_overview_stock5_bambu2_ha_device_and_wraps);
   RUN_TEST(test_prev_walks_reverse_and_wraps);
   RUN_TEST(test_zero_page_apps_are_skipped);
   RUN_TEST(test_same_app_page_switch_does_not_exit_or_reenter);

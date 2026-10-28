@@ -30,7 +30,8 @@ for needle in [
         missing.append(f"src/app/AppShell.cpp: {needle}")
 
 for needle in [
-    "MAX_NAVIGATION_PAGES = 4U",
+    "OVERVIEW_PAGE_INDEX = 0U",
+    "return count == 0U ? 0U : count + 1U;",
     "size_t pageCount() const override",
     "bool selectPage(size_t pageIndex) override",
 ]:
@@ -76,4 +77,4 @@ if missing or forbidden:
             print(f"  {item}")
     sys.exit(1)
 
-print("Direct weather -> stock[1..4] -> Bambu[1..2] -> HA -> device navigation contract: OK")
+print("Direct weather -> stock overview -> stock[1..5] -> Bambu[1..2] -> HA -> device navigation contract: OK")

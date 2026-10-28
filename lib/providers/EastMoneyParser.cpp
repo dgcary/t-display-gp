@@ -347,6 +347,15 @@ ProviderError parseQuote(std::string_view body, const StockSymbol& symbol, Quote
   if (!parseRequiredNumber(data, "f170", parsed.changePercent, true)) return ProviderError::MISSING_FIELD;
   if (!parseRequiredUint(data, "f86", parsed.epochSeconds)) return ProviderError::MISSING_FIELD;
 
+  JsonSlice turnoverSlice;
+  if (extractSlice(data, "f168", turnoverSlice) && turnoverSlice.value != "-") {
+    double turnoverRate = 0;
+    if (decodeScaledNumber(turnoverSlice, turnoverRate) && turnoverRate >= 0) {
+      parsed.turnoverRate = turnoverRate;
+      parsed.hasTurnoverRate = true;
+    }
+  }
+
   if (parsed.last <= 0 || parsed.high < 0 || parsed.low < 0 || parsed.open < 0 || parsed.prevClose < 0 ||
       parsed.amount < 0) {
     return ProviderError::PARSE;
