@@ -158,6 +158,19 @@ void drawDashedLine(TFT_eSPI& tft, int y, int dash, int gap, uint16_t color) {
     tft.drawFastHLine(x, y, remaining < dash ? remaining : dash, color);
   }
 }
+
+uint16_t overviewChangeColor(const StockOverviewRow& row) {
+  if (!row.hasQuote) return UiTheme::NEUTRAL;
+  if (row.changePercent > 0) return UiTheme::POSITIVE;
+  if (row.changePercent < 0) return UiTheme::NEGATIVE;
+  return UiTheme::NEUTRAL;
+}
+
+std::string formatTurnoverRate(double value) {
+  char buffer[16];
+  std::snprintf(buffer, sizeof(buffer), "%.2f%%", value);
+  return buffer;
+}
 }  // namespace
 
 void StockScreen::begin(TFT_eSPI& display, U8g2_for_TFT_eSPI& unicodeFont) {
@@ -167,6 +180,63 @@ void StockScreen::begin(TFT_eSPI& display, U8g2_for_TFT_eSPI& unicodeFont) {
   unicodeFont_->setFontDirection(0);
   unicodeFont_->setBackgroundColor(UiTheme::BACKGROUND);
   rendered_ = false;
+}
+
+
+void StockScreen::renderOverview(const StockOverviewViewModel& model, bool fullRedraw) {
+  if (!display_ || !unicodeFont_) return;
+  if (fullRedraw || !rendered_) display_->fillScreen(UiTheme::BACKGROUND);
+
+  display_->fillRect(0, 0, StockScreenLayout::SCREEN_WIDTH,
+                     StockScreenLayout::OVERVIEW_HEADER_Y1 + 1, UiTheme::BACKGROUND);
+  unicodeFont_->setFont(u8g2_font_wqy12_t_gb2312);
+  unicodeFont_->setForegroundColor(UiTheme::TEXT);
+  unicodeFont_->drawUTF8(4, 14, "股票总览");
+  unicodeFont_->setForegroundColor(UiTheme::MUTED);
+  unicodeFont_->drawUTF8(StockScreenLayout::OVERVIEW_NAME_X, 28, "名称");
+  unicodeFont_->drawUTF8(StockScreenLayout::OVERVIEW_CHANGE_X, 28, "涨跌");
+  unicodeFont_->drawUTF8(StockScreenLayout::OVERVIEW_LAST_X, 28, "现价");
+  unicodeFont_->drawUTF8(StockScreenLayout::OVERVIEW_TURNOVER_X, 28, "换手");
+
+  const size_t rows = std::min(model.rows.size(), StockScreenLayout::OVERVIEW_MAX_ROWS);
+  for (size_t i = 0; i < StockScreenLayout::OVERVIEW_MAX_ROWS; ++i) {
+    const int y = StockScreenLayout::OVERVIEW_ROW_Y0 +
+                  static_cast<int>(i) * StockScreenLayout::OVERVIEW_ROW_HEIGHT;
+    display_->fillRect(0, y, StockScreenLayout::SCREEN_WIDTH,
+                       StockScreenLayout::OVERVIEW_ROW_HEIGHT - 1, UiTheme::BACKGROUND);
+    if (i >= rows) continue;
+
+    const StockOverviewRow& row = model.rows[i];
+    unicodeFont_->setForegroundColor(UiTheme::TEXT);
+    const std::string name = StockScreenMath::truncateUtf8(row.displayName, 7);
+    unicodeFont_->drawUTF8(StockScreenLayout::OVERVIEW_NAME_X, y + 15, name.c_str());
+
+    const uint16_t color = overviewChangeColor(row);
+    drawAscii(*display_, row.hasQuote ? formatPercent(row.changePercent) : "--",
+              StockScreenLayout::OVERVIEW_CHANGE_X, y + 5, 1, color);
+    drawAscii(*display_, row.hasQuote ? formatPrice(row.last) : "--",
+              StockScreenLayout::OVERVIEW_LAST_X, y + 5, 1,
+              row.hasQuote ? UiTheme::TEXT : UiTheme::NEUTRAL);
+    drawAscii(*display_, row.hasQuote && row.hasTurnoverRate
+                              ? formatTurnoverRate(row.turnoverRate)
+                              : "--",
+              StockScreenLayout::OVERVIEW_TURNOVER_X, y + 5, 1, UiTheme::MUTED);
+
+    display_->drawFastHLine(0, y + StockScreenLayout::OVERVIEW_ROW_HEIGHT - 1,
+                            StockScreenLayout::SCREEN_WIDTH, UiTheme::GRID);
+  }
+
+  display_->fillRect(0, StockScreenLayout::FOOTER_Y0, StockScreenLayout::SCREEN_WIDTH,
+                     StockScreenLayout::FOOTER_Y1 - StockScreenLayout::FOOTER_Y0 + 1,
+                     UiTheme::BACKGROUND);
+  unicodeFont_->setForegroundColor(UiTheme::MUTED);
+  const std::string count = std::to_string(rows) + "只";
+  unicodeFont_->drawUTF8(4, 168, count.c_str());
+  drawAscii(*display_, model.wifiOnline ? "WiFi" : "OFF", 48, 156, 1,
+            model.wifiOnline ? UiTheme::MUTED : UiTheme::WARNING);
+  unicodeFont_->drawUTF8(92, 168, marketText(model.marketStatus));
+
+  rendered_ = true;
 }
 
 bool StockScreen::sameQuote(const RenderSignature& a, const RenderSignature& b) {
