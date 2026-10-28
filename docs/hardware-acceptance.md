@@ -21,14 +21,14 @@ Expected forward order, with absent configured slots skipped automatically:
 
 ```text
 Weather
--> Stock1 -> Stock2 -> Stock3 -> Stock4
+-> StockOverview -> Stock1 -> Stock2 -> Stock3 -> Stock4 -> Stock5
 -> Bambu1 -> Bambu2
 -> Home Assistant
 -> Device Info
 -> Weather
 ```
 
-Reverse navigation must traverse the same existing pages in reverse. Direct navigation exposes no more than the first 4 configured stocks and first 2 configured Bambu printers. Example: with only 3 configured stocks and one printer, Stock4 and Bambu2 must not appear.
+Reverse navigation must traverse the same existing pages in reverse. Direct navigation exposes StockOverview plus every configured stock (up to 5) and the first 2 configured Bambu printers. Example: with only 3 configured stocks and one printer, Stock4/Stock5 and Bambu2 must not appear.
 
 Configuration remains Web-based: stock/weather on the normal settings portal and HA/Bambu on trusted-LAN port 8081.
 
@@ -36,7 +36,7 @@ Configuration remains Web-based: stock/weather on the normal settings portal and
 
 Weather/Bad Apple: current + 今/明, 168×126 x=152,y=27, ~10 FPS, no divider regression/watchdog/leak.
 
-Stock: every exposed Stock page must match the configured order and symbol/name. Moving Stock1->Stock2 etc. must select the requested stock directly without intermediate app exit/re-entry.
+Stock: StockOverview must show all configured stocks in one-line rows (name / daily change % / last / turnover when available). Every Stock detail page must match configured order and symbol/name. Moving Stock1->Stock2 etc. must select the requested stock directly without intermediate app exit/re-entry.
 
 HA: read-only, trusted-LAN HTTP or configured-CA HTTPS, no insecure fallback or secret echo.
 
