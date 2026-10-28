@@ -23,6 +23,7 @@ constexpr size_t PERCENT = 32;
 constexpr size_t HIGH = 33;
 constexpr size_t LOW = 34;
 constexpr size_t AMOUNT_WAN = 37;
+constexpr size_t TURNOVER_RATE = 38;
 constexpr size_t REQUIRED_COUNT = AMOUNT_WAN + 1;
 }  // namespace Field
 
@@ -169,6 +170,13 @@ ProviderError parseQuote(std::string_view body, const StockSymbol& symbol, Quote
     return ProviderError::PARSE;
   }
   parsed.amount = amountWan * 10000.0;
+  if (fields.size() > Field::TURNOVER_RATE && !fields[Field::TURNOVER_RATE].empty()) {
+    double turnoverRate = 0;
+    if (parseDouble(fields[Field::TURNOVER_RATE], turnoverRate) && turnoverRate >= 0) {
+      parsed.turnoverRate = turnoverRate;
+      parsed.hasTurnoverRate = true;
+    }
+  }
 
   out = std::move(parsed);
   return ProviderError::NONE;
