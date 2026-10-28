@@ -38,7 +38,7 @@ The flattened page order is:
 
 ```text
 Weather
--> Stock1 -> Stock2 -> Stock3 -> Stock4
+-> StockOverview -> Stock1 -> Stock2 -> Stock3 -> Stock4 -> Stock5
 -> Bambu1 -> Bambu2
 -> Home Assistant
 -> Device Info
@@ -114,7 +114,7 @@ Never log Token, Cloud User ID, Cookie/Authorization or auth payloads.
 
 1. Flash exact-head application at `0x10000`, preserve NVS.
 2. Verify startup lands directly on Weather and no menu appears.
-3. Walk forward and backward through the exact configured page chain. If only 3 stocks exist, Stock4 must be absent; if only 1 Bambu printer exists, Bambu2 must be absent.
+3. Walk forward and backward through the exact configured page chain. StockOverview remains first whenever at least one stock is configured; if only 3 stocks exist, Stock4/Stock5 must be absent; if only 1 Bambu printer exists, Bambu2 must be absent.
 4. Verify both long presses are no-op.
 5. While Bambu Cloud is unreachable or failing, verify GPIO navigation remains responsive and `http://<device-ip>:8081/api/bambu/status` still answers during the connection attempt.
 6. On a forced/observed connect failure, verify `mqtt_connect_fail elapsed_ms <= 20000` and the next `mqtt_connect` starts only after the logged 30/60/120 s retry interval, not immediately.
@@ -125,6 +125,6 @@ Never log Token, Cloud User ID, Cookie/Authorization or auth payloads.
 11. If one slot naturally drops, confirm only that slot reconnects while the sibling remains alive.
 12. Test Stock/Weather/HA coexistence because persistent TLS/MQTT slots increase resource pressure.
 
-Bambu configuration can still contain up to 4 printers, but direct navigation intentionally exposes only the first 2. Stock configuration may contain the existing supported count, but direct navigation intentionally exposes only the first 4.
+Bambu configuration can still contain up to 4 printers, but direct navigation intentionally exposes only the first 2. Stock configuration supports up to 5 entries and direct navigation exposes StockOverview plus every configured stock page (up to Stock5).
 
 See `docs/hardware-acceptance.md` for the full checklist.
