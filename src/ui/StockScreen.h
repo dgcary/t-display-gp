@@ -31,6 +31,15 @@ constexpr int CHART_Y1 = 150;
 constexpr int FOOTER_Y0 = 153;
 constexpr int FOOTER_Y1 = 169;
 
+constexpr size_t OVERVIEW_MAX_ROWS = 5U;
+constexpr int OVERVIEW_HEADER_Y1 = 28;
+constexpr int OVERVIEW_ROW_Y0 = 31;
+constexpr int OVERVIEW_ROW_HEIGHT = 23;
+constexpr int OVERVIEW_NAME_X = 4;
+constexpr int OVERVIEW_CHANGE_X = 108;
+constexpr int OVERVIEW_LAST_X = 176;
+constexpr int OVERVIEW_TURNOVER_X = 250;
+
 constexpr uint8_t PRICE_FONT = 2;
 constexpr uint8_t CHANGE_PERCENT_FONT = 4;
 constexpr uint8_t CHANGE_AMOUNT_FONT = 1;
@@ -71,6 +80,7 @@ inline std::string providerSummary(ProviderId quoteProvider, ProviderId intraday
 class StockScreen {
  public:
   void begin(TFT_eSPI& display, U8g2_for_TFT_eSPI& unicodeFont);
+  void renderOverview(const StockOverviewViewModel& model, bool fullRedraw);
   void render(const StockViewModel& model, bool fullRedraw);
 
  private:

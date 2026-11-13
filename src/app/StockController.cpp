@@ -39,6 +39,7 @@ void StockController::begin(const AppConfig& config) {
   activeDateKey_ = 0;
   confirmedNonTradingDateKey_ = 0;
   dirty_ = true;
+  overviewDirty_ = true;
   fullRedraw_ = true;
   publishView();
 }
@@ -47,6 +48,7 @@ void StockController::setWifiOnline(bool online) {
   if (wifiOnline_ == online) return;
   wifiOnline_ = online;
   dirty_ = true;
+  overviewDirty_ = true;
   publishView();
 }
 
@@ -92,6 +94,7 @@ void StockController::tick(uint32_t nowMs, const LocalDateTime& local) {
   if (nextStatus != marketStatus_) {
     marketStatus_ = nextStatus;
     dirty_ = true;
+    overviewDirty_ = true;
   }
 
   if (!wifiOnline_) {
@@ -236,6 +239,7 @@ void StockController::consumeMarketResults() {
 
     if (result.error == ProviderError::CANCELLED || result.error == ProviderError::EXPIRED) {
       if (index == currentIndex_) dirty_ = true;
+      if (context.type == MarketRequestType::QUOTE) overviewDirty_ = true;
       continue;
     }
 
@@ -251,6 +255,7 @@ void StockController::consumeMarketResults() {
         failover_.recordFailure(context.provider, lastNowMs_);
       }
       if (index == currentIndex_) dirty_ = true;
+      if (context.type == MarketRequestType::QUOTE) overviewDirty_ = true;
       continue;
     }
 
@@ -286,8 +291,46 @@ void StockController::consumeMarketResults() {
       cache.quoteHealth.consecutiveFailures = 0;
     }
     if (index == currentIndex_) dirty_ = true;
+    if (context.type == MarketRequestType::QUOTE) overviewDirty_ = true;
   }
   publishView();
+}
+
+StockOverviewViewModel StockController::overviewViewModel() const {
+  StockOverviewViewModel overview;
+  overview.wifiOnline = wifiOnline_;
+  overview.marketStatus = marketStatus_;
+  overview.rows.reserve(config_.stocks.size());
+  for (size_t i = 0; i < config_.stocks.size(); ++i) {
+    StockOverviewRow row;
+    row.symbol = config_.stocks[i].symbol;
+    const auto& cache = caches_[i];
+    row.displayName = !config_.stocks[i].displayName.empty()
+                          ? config_.stocks[i].displayName
+                          : cache.hasQuote && !cache.quote.name.empty()
+                                ? cache.quote.name
+                                : row.symbol.canonical();
+    row.hasQuote = cache.hasQuote;
+    if (cache.hasQuote) {
+      row.last = cache.quote.last;
+      row.changePercent = cache.quote.changePercent;
+      row.turnoverRate = cache.quote.turnoverRate;
+      row.hasTurnoverRate = cache.quote.hasTurnoverRate;
+    }
+    overview.rows.push_back(std::move(row));
+  }
+  return overview;
+}
+
+void StockController::requestOverviewRefresh(uint32_t nowMs) {
+  if (!wifiOnline_ || config_.stocks.empty()) return;
+  const uint32_t quoteInterval = config_.quoteRefreshSec * 1000U;
+  for (size_t i = 0; i < config_.stocks.size(); ++i) {
+    const auto& cache = caches_[i];
+    const bool stale = !cache.hasQuote || cache.quoteUpdatedMs == 0U ||
+                       elapsed(nowMs, cache.quoteUpdatedMs) >= quoteInterval;
+    if (stale) enqueueRequest(i, MarketRequestType::QUOTE, failover_.activeProvider(nowMs), nowMs);
+  }
 }
 
 void StockController::maybeProbePrimary(uint32_t nowMs) {
@@ -355,6 +398,12 @@ void StockController::publishView() {
 bool StockController::takeDirtyFlag() {
   const bool value = dirty_;
   dirty_ = false;
+  return value;
+}
+
+bool StockController::takeOverviewDirtyFlag() {
+  const bool value = overviewDirty_;
+  overviewDirty_ = false;
   return value;
 }
 

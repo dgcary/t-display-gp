@@ -34,7 +34,8 @@ const MarketRequest* lastRequest(const FakeQueue& q, const char* code, MarketReq
 
 void pushQuoteSuccess(FakeQueue& q, const MarketRequest& req, double last=1410.25) {
   MarketResult r; r.requestId=req.requestId; r.type=req.type; r.provider=req.provider; r.error=ProviderError::NONE;
-  r.quote.symbol=req.symbol; r.quote.name="贵州茅台"; r.quote.last=last; r.quote.prevClose=1400; r.quote.open=1401; r.quote.provider=req.provider;
+  r.quote.symbol=req.symbol; r.quote.name="贵州茅台"; r.quote.last=last; r.quote.prevClose=1400; r.quote.open=1401;
+  r.quote.changePercent=0.73; r.quote.turnoverRate=1.23; r.quote.hasTurnoverRate=true; r.quote.provider=req.provider;
   q.results.push_back(std::move(r));
 }
 
@@ -215,6 +216,23 @@ void test_two_failed_intraday_cycles_trigger_delay_before_age_threshold() {
   TEST_ASSERT_EQUAL_STRING("分时延迟",c.viewModel().errorBadge.c_str());
 }
 
+
+void test_overview_view_exposes_all_configured_rows_and_turnover() {
+  FakeQueue q; StockController c(q); c.begin(config3()); c.setWifiOnline(true); c.tick(1000,trading());
+  const MarketRequest* quotePtr=lastRequest(q,"600519",MarketRequestType::QUOTE);
+  TEST_ASSERT_NOT_NULL(quotePtr);
+  pushQuoteSuccess(q,*quotePtr); c.consumeMarketResults();
+
+  const StockOverviewViewModel overview=c.overviewViewModel();
+  TEST_ASSERT_EQUAL_UINT32(3, overview.rows.size());
+  TEST_ASSERT_EQUAL_STRING("茅台", overview.rows[0].displayName.c_str());
+  TEST_ASSERT_TRUE(overview.rows[0].hasQuote);
+  TEST_ASSERT_DOUBLE_WITHIN(0.001,0.73,overview.rows[0].changePercent);
+  TEST_ASSERT_TRUE(overview.rows[0].hasTurnoverRate);
+  TEST_ASSERT_DOUBLE_WITHIN(0.001,1.23,overview.rows[0].turnoverRate);
+  TEST_ASSERT_FALSE(overview.rows[1].hasQuote);
+}
+
 void test_idle_tick_does_not_mark_view_dirty() {
   FakeQueue q; StockController c(q); c.begin(config3()); c.setWifiOnline(false);
   LocalDateTime t{2026,8,11,10,0,0,2};
@@ -236,6 +254,7 @@ int main(){
   RUN_TEST(test_channel_ages_drive_independent_delay_flags);
   RUN_TEST(test_two_failed_quote_cycles_trigger_delay_before_age_threshold);
   RUN_TEST(test_two_failed_intraday_cycles_trigger_delay_before_age_threshold);
+  RUN_TEST(test_overview_view_exposes_all_configured_rows_and_turnover);
   RUN_TEST(test_idle_tick_does_not_mark_view_dirty);
   return UNITY_END();
 }

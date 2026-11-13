@@ -27,6 +27,18 @@ void test_quote_panel_prioritizes_daily_change_percent() {
   TEST_ASSERT_TRUE(StockScreenLayout::METRIC_COL2_X - StockScreenLayout::METRIC_COL1_X >= 56);
 }
 
+
+void test_overview_layout_fits_five_single_line_rows() {
+  TEST_ASSERT_EQUAL_UINT32(5, StockScreenLayout::OVERVIEW_MAX_ROWS);
+  TEST_ASSERT_TRUE(StockScreenLayout::OVERVIEW_HEADER_Y1 < StockScreenLayout::OVERVIEW_ROW_Y0);
+  TEST_ASSERT_TRUE(StockScreenLayout::OVERVIEW_ROW_Y0 +
+                   (StockScreenLayout::OVERVIEW_MAX_ROWS - 1) * StockScreenLayout::OVERVIEW_ROW_HEIGHT <
+                   StockScreenLayout::FOOTER_Y0);
+  TEST_ASSERT_TRUE(StockScreenLayout::OVERVIEW_CHANGE_X > StockScreenLayout::OVERVIEW_NAME_X);
+  TEST_ASSERT_TRUE(StockScreenLayout::OVERVIEW_LAST_X > StockScreenLayout::OVERVIEW_CHANGE_X);
+  TEST_ASSERT_TRUE(StockScreenLayout::OVERVIEW_TURNOVER_X > StockScreenLayout::OVERVIEW_LAST_X);
+}
+
 void test_chart_range_includes_prev_close_open_and_forces_minimum_span() {
   IntradaySeries flat = {{570, 100.0f, 100.0f, 0}, {571, 100.05f, 100.0f, 0}};
   const ChartRange padded = StockScreenMath::chartRange(flat, 100.0, 0.0);
@@ -79,6 +91,7 @@ int main() {
   UNITY_BEGIN();
   RUN_TEST(test_layout_fits_320x170_landscape);
   RUN_TEST(test_quote_panel_prioritizes_daily_change_percent);
+  RUN_TEST(test_overview_layout_fits_five_single_line_rows);
   RUN_TEST(test_chart_range_includes_prev_close_open_and_forces_minimum_span);
   RUN_TEST(test_chart_x_preserves_small_lunch_gap_in_right_panel);
   RUN_TEST(test_chart_y_maps_max_to_top_and_min_to_bottom);

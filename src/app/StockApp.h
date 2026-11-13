@@ -8,7 +8,7 @@
 
 class StockApp final : public IApp {
  public:
-  static constexpr size_t MAX_NAVIGATION_PAGES = 4U;
+  static constexpr size_t OVERVIEW_PAGE_INDEX = 0U;
 
   explicit StockApp(DeviceLayer& device) : device_(device), controller_(worker_) {}
 
@@ -25,10 +25,10 @@ class StockApp final : public IApp {
   void render(bool fullRedraw) override;
   size_t pageCount() const override {
     const size_t count = controller_.viewModel().count;
-    return count < MAX_NAVIGATION_PAGES ? count : MAX_NAVIGATION_PAGES;
+    return count == 0U ? 0U : count + 1U;
   }
   bool selectPage(size_t pageIndex) override;
-  size_t selectedPage() const override { return controller_.viewModel().index; }
+  size_t selectedPage() const override { return selectedPage_; }
 
  private:
   DeviceLayer& device_;
@@ -37,6 +37,8 @@ class StockApp final : public IApp {
   StockScreen screen_;
   bool initialized_ = false;
   bool active_ = false;
+  size_t selectedPage_ = OVERVIEW_PAGE_INDEX;
+  bool overviewRefreshPending_ = true;
   bool forceDirty_ = false;
   bool forceFullRedraw_ = false;
 };

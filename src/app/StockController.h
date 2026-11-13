@@ -31,6 +31,22 @@ struct StockCacheEntry {
   DataChannelHealth intradayHealth;
 };
 
+struct StockOverviewRow {
+  StockSymbol symbol;
+  std::string displayName;
+  bool hasQuote = false;
+  double last = 0;
+  double changePercent = 0;
+  double turnoverRate = 0;
+  bool hasTurnoverRate = false;
+};
+
+struct StockOverviewViewModel {
+  std::vector<StockOverviewRow> rows;
+  bool wifiOnline = false;
+  MarketStatus marketStatus = MarketStatus::UNKNOWN;
+};
+
 struct StockViewModel {
   size_t index = 0;
   size_t count = 0;
@@ -75,7 +91,10 @@ class StockController {
   }
 
   const StockViewModel& viewModel() const { return view_; }
+  StockOverviewViewModel overviewViewModel() const;
+  void requestOverviewRefresh(uint32_t nowMs);
   bool takeDirtyFlag();
+  bool takeOverviewDirtyFlag();
   bool takeFullRedrawFlag();
 
  private:
@@ -116,5 +135,6 @@ class StockController {
   int confirmedNonTradingDateKey_ = 0;
   bool wifiOnline_ = false;
   bool dirty_ = true;
+  bool overviewDirty_ = true;
   bool fullRedraw_ = true;
 };

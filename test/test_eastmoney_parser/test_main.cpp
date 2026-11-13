@@ -9,7 +9,7 @@ void test_parse_scaled_quote() {
   const char* body = R"json({
     "data":{"f57":"600519","f58":"贵州茅台","f43":141025,
     "f44":142100,"f45":139800,"f46":140000,"f47":123456,
-    "f48":1743210000.0,"f60":140000,"f169":1025,"f170":73,"f86":1786420800}
+    "f48":1743210000.0,"f60":140000,"f168":123,"f169":1025,"f170":73,"f86":1786420800}
   })json";
   QuoteSnapshot q;
   auto err = EastMoneyParser::parseQuote(body, StockSymbol::parse("600519"), q);
@@ -23,6 +23,8 @@ void test_parse_scaled_quote() {
   TEST_ASSERT_DOUBLE_WITHIN(0.001, 0.73, q.changePercent);
   TEST_ASSERT_EQUAL_UINT64(123456, q.volume);
   TEST_ASSERT_DOUBLE_WITHIN(0.1, 1743210000.0, q.amount);
+  TEST_ASSERT_TRUE(q.hasTurnoverRate);
+  TEST_ASSERT_DOUBLE_WITHIN(0.001, 1.23, q.turnoverRate);
   TEST_ASSERT_EQUAL_UINT64(1786420800, q.epochSeconds);
   TEST_ASSERT_EQUAL(ProviderId::EAST_MONEY, q.provider);
   TEST_ASSERT_EQUAL_STRING("贵州茅台", q.name.c_str());

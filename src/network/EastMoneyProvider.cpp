@@ -36,7 +36,7 @@ ProviderError EastMoneyProvider::fetchQuote(const StockSymbol& symbol, QuoteSnap
   if (!symbol.valid()) return ProviderError::UNSUPPORTED;
   const std::string url =
       "https://push2.eastmoney.com/api/qt/stock/get?secid=" + symbol.eastMoneySecId() +
-      "&fields=f57,f58,f43,f44,f45,f46,f47,f48,f60,f86,f169,f170";
+      "&fields=f57,f58,f43,f44,f45,f46,f47,f48,f60,f86,f168,f169,f170";
   const HttpResponse response = transport_.get(url, kEastMoneyHeaders);
   copyDiagnostics(response, diagnostics);
   const ProviderError transportError = mapTransport(response);

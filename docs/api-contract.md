@@ -28,7 +28,7 @@ Forward order:
 
 ```text
 Weather
--> Stock1 -> Stock2 -> Stock3 -> Stock4
+-> StockOverview -> Stock1 -> Stock2 -> Stock3 -> Stock4 -> Stock5
 -> Bambu1 -> Bambu2
 -> Home Assistant
 -> Device Info
@@ -131,7 +131,7 @@ Secret-safe logs use `slot=<n>` and may include rc/elapsed/RSSI/heap/backoff; ne
 BambuScreen uses partial redraw; full display clear only explicit full redraw. Active-slot change can full redraw presentation but must not imply MQTT teardown.
 
 ```text
-Direct page navigator -> Weather / Stock[0..3] / Bambu[0..1] / HA / DeviceInfo
+Direct page navigator -> Weather / StockOverview / Stock[0..4] / Bambu[0..1] / HA / DeviceInfo
 Stock -> dedicated MarketDataWorker
 Weather + HA -> shared AppDataWorker
 Bambu -> one background worker with persistent per-printer MQTT slots
