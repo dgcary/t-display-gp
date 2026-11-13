@@ -15,7 +15,7 @@ required_files = {
 }
 checks = {
     "src/app/AppShell.h": ["HOME_ASSISTANT"],
-    "src/main.cpp": ["HomeAssistantApp", "AppId::HOME_ASSISTANT", "AppDataWorker appDataWorker", "IntegrationConfigPortal"],
+    "src/main.cpp": ["AppId::HOME_ASSISTANT", "AppDataWorker appDataWorker", "IntegrationConfigPortal"],
     "src/network/AppDataTypes.h": ["HOME_ASSISTANT", "tryReceive(AppDataRequestType type"],
     "src/network/AppDataWorker.cpp": ["HomeAssistantProvider", "AppDataRequestType::HOME_ASSISTANT", "OpenMeteoProvider"],
     "src/network/HomeAssistantConfig.cpp": ["http://", "https://", "isHttpsUrl", "CA_CERT"],
@@ -48,6 +48,8 @@ if portal.exists():
 main_cpp = Path("src/main.cpp")
 if main_cpp.exists() and main_cpp.read_text(encoding="utf-8").count("AppDataWorker appDataWorker") != 1:
     security_violations.append("exactly one shared AppDataWorker is required")
+if main_cpp.exists() and "HomeAssistantApp" in main_cpp.read_text(encoding="utf-8"):
+    security_violations.append("HomeAssistantApp page is retired and must not be instantiated by main.cpp")
 worker = Path("src/network/AppDataWorker.cpp")
 if worker.exists() and "Crypto" in worker.read_text(encoding="utf-8"):
     security_violations.append("shared AppDataWorker must no longer contain Crypto paths")

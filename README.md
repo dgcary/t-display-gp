@@ -10,12 +10,11 @@ LILYGO T-Display-S3 320×170 多应用桌面终端。
 天气
 → 股票总览 → 股票1 → 股票2 → 股票3 → 股票4 → 股票5
 → 拓竹打印机1 → 拓竹打印机2
-→ 智能家居
 → 设备信息
 → 天气
 ```
 
-股票页只展开已配置股票中的前 4 只；拓竹页只展开已配置打印机中的前 2 台。没有配置的槽位自动跳过。股票、天气、拓竹和 HA 的具体配置仍通过设备 Web 后台修改，不通过按键编辑。
+股票页先显示全部已配置股票的总览（名称 | 涨跌% | 最新价 | 成交额，最多 5 行），再展开前 5 只详情页；拓竹页只展开已配置打印机中的前 2 台。没有配置的槽位自动跳过。股票、天气、拓竹和 HA 的具体配置仍通过设备 Web 后台修改，不通过按键编辑。
 
 ## Bambu Lab Cloud
 
@@ -93,6 +92,8 @@ Bambu 是设备级后台服务，离开 Bambu 页面不断开。Stock/Weather/HA
 
 ## Home Assistant
 
+智能家居页面已从设备导航移除（2026-11-13）。源码保留以维持编译兼容，Portal 的 HA 状态/配置入口仍在。
+
 只读 REST client；1–4 entities，refresh 30–300 s。HTTP 仅可信 LAN；HTTPS 必须配置 CA，无 insecure fallback。
 
 ## Weather / Bad Apple
@@ -108,9 +109,9 @@ DeviceInfo：IP、SSID/RSSI/MAC、uptime/time、heap/min heap、PSRAM、Web 地�
 ## Architecture
 
 ```text
-Direct page navigator -> Weather / StockOverview / Stock[0..4] / Bambu[0..1] / HA / DeviceInfo
+Direct page navigator -> Weather / StockOverview / Stock[0..4] / Bambu[0..1] / DeviceInfo
 Stock -> dedicated MarketDataWorker
-Weather + HomeAssistant -> one shared AppDataWorker
+Weather -> one shared AppDataWorker (HomeAssistant source retained, page retired)
 Bambu -> one background worker + persistent per-printer Cloud MQTT slots + local config
 DeviceInfo -> local-only
 Bad Apple -> local flash playback

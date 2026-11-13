@@ -47,7 +47,7 @@ for needle in [
         missing.append(f"src/app/BambuApp.h: {needle}")
 
 for needle in [
-    "AppManager appManager({&weatherApp, &stockApp, &bambuApp, &homeAssistantApp, &deviceInfoApp});",
+    "AppManager appManager({&weatherApp, &stockApp, &bambuApp, &deviceInfoApp});",
     "appManager.begin()",
 ]:
     if needle not in main:
@@ -59,6 +59,7 @@ for needle in [
     "MenuScreen menuScreen",
     '#include "MenuScreen.h"',
     "appManager.begin(AppId::STOCK)",
+    "&homeAssistantApp",
 ]:
     if needle in main:
         forbidden.append(f"src/main.cpp: {needle}")
@@ -77,4 +78,4 @@ if missing or forbidden:
             print(f"  {item}")
     sys.exit(1)
 
-print("Direct weather -> stock overview -> stock[1..5] -> Bambu[1..2] -> HA -> device navigation contract: OK")
+print("Direct weather -> stock overview -> stock[1..5] -> Bambu[1..2] -> device navigation contract: OK")

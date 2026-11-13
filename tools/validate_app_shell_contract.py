@@ -23,7 +23,7 @@ for needle in [
     "AppId::HOME_ASSISTANT",
     "AppId::DEVICE_INFO",
     '#include "BambuApp.h"',
-    "AppManager appManager({&weatherApp, &stockApp, &bambuApp, &homeAssistantApp, &deviceInfoApp});",
+    "AppManager appManager({&weatherApp, &stockApp, &bambuApp, &deviceInfoApp});",
     "appManager.begin()",
     'case AppId::BAMBU: return "BAMBU";',
 ]:

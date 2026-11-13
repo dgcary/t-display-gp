@@ -43,9 +43,8 @@ Flattened order, wrapping at both ends:
 
 ```text
 WEATHER
--> STOCK page 1..min(configured stocks, 4)
+-> STOCK page 0 (all-stock overview) + 1..min(configured stocks, 5)
 -> BAMBU page 1..min(configured printers, 2)
--> HOME_ASSISTANT
 -> DEVICE_INFO
 -> WEATHER
 ```
@@ -54,13 +53,15 @@ Apps whose `pageCount()==0` are skipped automatically. Startup is WEATHER. Same-
 
 Legacy `MenuApp/MenuScreen` source may remain for compile/history compatibility but must not be instantiated by `main.cpp` or reachable in the runtime navigation path.
 
+The `HOME_ASSISTANT` page is retired from runtime navigation (2026-11-13): `HomeAssistantApp` source and HA portal sections remain for compile/config compatibility, but `main.cpp` must not instantiate the app and it must not appear in the navigation path.
+
 ## Other apps
 
-Stock: Tencent primary / EastMoney fallback, dedicated `MarketDataWorker`, cache-preserving. Direct navigation exposes at most the first 4 configured stocks. `StockController::selectIndex()` performs exact selection rather than walking through intermediate stocks.
+Stock: Tencent primary / EastMoney fallback, dedicated `MarketDataWorker`, cache-preserving. Direct navigation exposes a stock overview page plus the first 5 configured stock detail pages. `StockController::selectIndex()` performs exact selection rather than walking through intermediate stocks.
 
 Weather: Open-Meteo current + Today/Tomorrow. Bad Apple x=152,y=27 168×126, 2190 frames, 10 FPS, local flash, silent loop.
 
-HA: read-only REST, 1–4 entities, refresh 30–300 s; HTTP trusted LAN only, HTTPS requires configured CA; no credentialed `setInsecure()`.
+HA (page retired from device navigation; source and portal config sections retained): read-only REST, 1–4 entities, refresh 30–300 s; HTTP trusted LAN only, HTTPS requires configured CA; no credentialed `setInsecure()`.
 
 ## Bambu Lab Cloud
 
@@ -116,6 +117,6 @@ Secret-safe serial markers include `slot=<n>` with mqtt_connect/ok/fail/subscrib
 
 ## Diagnostics / acceptance
 
-Physical acceptance must include: exact firmware/NVS preservation; startup on Weather; verify the full direct page order in both directions; verify absent stock/printer pages are skipped; both long presses remain no-op; with two saved real printers both reach their own `mqtt_connect_ok slot=0/1` and `mqtt_pushall_initial`; moving between Bambu page 1/2 must create no new mqtt_connect solely because of navigation; per-slot live data/caches must not cross-contaminate; no periodic whole-screen flash; >=10 min no watchdog/panic/automatic reboot; one slot reconnect must not drop the other; check Stock/Weather/HA coexistence and heap under two persistent MQTT/TLS slots.
+Physical acceptance must include: exact firmware/NVS preservation; startup on Weather; verify the full direct page order in both directions; verify absent stock/printer pages are skipped; both long presses remain no-op; with two saved real printers both reach their own `mqtt_connect_ok slot=0/1` and `mqtt_pushall_initial`; moving between Bambu page 1/2 must create no new mqtt_connect solely because of navigation; per-slot live data/caches must not cross-contaminate; no periodic whole-screen flash; >=10 min no watchdog/panic/automatic reboot; one slot reconnect must not drop the other; check Stock/Weather coexistence and heap under two persistent MQTT/TLS slots.
 
 Mandatory failure-path acceptance: if Bambu Cloud cannot connect, GPIO navigation and local `:8081/api/bambu/status` must remain responsive during the attempt; `mqtt_connect_fail elapsed_ms` must stay far below the former ~120 s failure and target <=20 s; after failure, the next `mqtt_connect` must not occur before the logged 30/60/120 s retry interval has elapsed.

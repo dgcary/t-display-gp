@@ -15,7 +15,6 @@
 #include "ConfigStore.h"
 #include "DeviceInfoApp.h"
 #include "DeviceLayer.h"
-#include "HomeAssistantApp.h"
 #include "HomeAssistantConfig.h"
 #include "HomeAssistantConfigStore.h"
 #include "IntegrationConfigPortal.h"
@@ -40,9 +39,8 @@ AppDataWorker appDataWorker;
 StockApp stockApp(device);
 WeatherApp weatherApp(device, appDataWorker);
 BambuApp bambuApp(device, bambuMqttService);
-HomeAssistantApp homeAssistantApp(device, appDataWorker);
 DeviceInfoApp deviceInfoApp(device);
-AppManager appManager({&weatherApp, &stockApp, &bambuApp, &homeAssistantApp, &deviceInfoApp});
+AppManager appManager({&weatherApp, &stockApp, &bambuApp, &deviceInfoApp});
 bool appReady = false;
 uint32_t nextResourceLogMs = 0;
 
@@ -118,7 +116,6 @@ void setup() {
   if (!stockApp.begin(appConfig)) { Serial.println("Stock app failed to start"); return; }
   if (!weatherApp.begin(appConfig)) { Serial.println("Weather app failed to start"); return; }
   if (!bambuApp.begin()) { Serial.println("Bambu app failed to start"); return; }
-  if (!homeAssistantApp.begin(homeAssistantConfig)) { Serial.println("Home Assistant app failed to start"); return; }
   if (!deviceInfoApp.begin()) { Serial.println("Device info app failed to start"); return; }
   if (!appManager.begin()) { Serial.println("App manager failed to start"); return; }
   appReady = true;
