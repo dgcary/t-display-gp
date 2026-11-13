@@ -10,6 +10,7 @@
 
 #include "HomeAssistantProvider.h"
 #include "HttpTransport.h"
+#include "MetNoProvider.h"
 #include "WeatherProvider.h"
 
 namespace {
@@ -47,6 +48,7 @@ const char* homeAssistantErrorName(HomeAssistantError error) {
 struct AppDataWorker::Impl {
   HttpTransport transport;
   OpenMeteoProvider weather{transport};
+  MetNoProvider metnoWeather{transport};
   SecureHomeAssistantTransport homeAssistantTransport;
   HomeAssistantProvider homeAssistant{homeAssistantTransport};
   QueueHandle_t requestQueue = nullptr;
@@ -104,6 +106,11 @@ struct AppDataWorker::Impl {
 
     if (request->type == AppDataRequestType::WEATHER) {
       result->error = weather.fetch(request->location, result->weather, &result->diagnostics);
+      if (result->error == WeatherError::NETWORK || result->error == WeatherError::HTTP_STATUS ||
+          result->error == WeatherError::BODY_TOO_LARGE) {
+        // Transport-level failure on the primary endpoint: fail over to met.no.
+        result->error = metnoWeather.fetch(request->location, result->weather, &result->diagnostics);
+      }
       Serial.printf("[appdata] type=WEATHER id=%lu error=%s http=%d native=%d tls=%d elapsed=%lums\n",
                     static_cast<unsigned long>(request->requestId), weatherErrorName(result->error),
                     result->diagnostics.httpStatus, result->diagnostics.nativeError,

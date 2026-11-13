@@ -134,11 +134,98 @@ void test_transport_errors_map_to_weather_errors_and_diagnostics() {
   TEST_ASSERT_EQUAL(WeatherError::NETWORK, provider.fetch(kunshan(), out, &diagnostics));
 }
 
+const char* validMetNoJson() {
+  return R"json({
+    "properties": {
+      "timeseries": [
+        {"time": "2026-11-13T05:00:00Z", "data": {"instant": {"details": {"air_temperature": 19.5, "relative_humidity": 85.6, "wind_speed": 2.1}}, "next_1_hours": {"summary": {"symbol_code": "lightrain"}, "details": {"precipitation_amount": 0.1}}}},
+        {"time": "2026-11-13T10:00:00Z", "data": {"instant": {"details": {"air_temperature": 21.0, "relative_humidity": 70.0, "wind_speed": 3.0}}, "next_1_hours": {"summary": {"symbol_code": "partlycloudy_day"}, "details": {"precipitation_amount": 0.0}}}},
+        {"time": "2026-11-13T15:00:00Z", "data": {"instant": {"details": {"air_temperature": 16.2, "relative_humidity": 90.0, "wind_speed": 4.5}}, "next_1_hours": {"summary": {"symbol_code": "rain"}, "details": {"precipitation_amount": 0.4}}}},
+        {"time": "2026-11-14T04:00:00Z", "data": {"instant": {"details": {"air_temperature": 14.0, "relative_humidity": 95.0, "wind_speed": 2.0}}, "next_1_hours": {"summary": {"symbol_code": "cloudy"}, "details": {"precipitation_amount": 0.0}}}},
+        {"time": "2026-11-14T07:00:00Z", "data": {"instant": {"details": {"air_temperature": 18.8, "relative_humidity": 80.0, "wind_speed": 3.4}}, "next_1_hours": {"summary": {"symbol_code": "clearsky_day"}, "details": {"precipitation_amount": 0.0}}}},
+        {"time": "2026-11-15T06:00:00Z", "data": {"instant": {"details": {"air_temperature": 12.5, "relative_humidity": 88.0, "wind_speed": 5.0}}, "next_6_hours": {"summary": {"symbol_code": "snow"}, "details": {"precipitation_amount": 1.0}}}}
+      ]
+    }
+  })json";
+}
+
+void test_builds_metno_url_useragent_and_parses_snapshot() {
+  FakeTransport transport;
+  transport.response.error = HttpTransportError::NONE;
+  transport.response.statusCode = 200;
+  transport.response.body = validMetNoJson();
+  transport.response.elapsedMs = 512;
+  transport.response.receivedBytes = transport.response.body.size();
+  MetNoProvider provider(transport);
+
+  WeatherSnapshot out;
+  WeatherDiagnostics diagnostics;
+  TEST_ASSERT_EQUAL(WeatherError::NONE, provider.fetch(kunshan(), out, &diagnostics));
+  TEST_ASSERT_TRUE(transport.requestedUrl.find("https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=31.385000&lon=120.980000") != std::string::npos);
+  TEST_ASSERT_TRUE(!transport.requestedHeaders.empty());
+  bool userAgentFound = false;
+  for (const auto& header : transport.requestedHeaders) {
+    if (header.name == "User-Agent" &&
+        header.value.find("TDisplayGP/1.0 github.com/dgcary/t-display-gp") != std::string::npos) {
+      userAgentFound = true;
+    }
+  }
+  TEST_ASSERT_TRUE(userAgentFound);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 19.5f, out.currentTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 19.5f, out.apparentTemp);
+  TEST_ASSERT_EQUAL_INT(85, out.humidityPercent);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 2.1f, out.windSpeed);
+  TEST_ASSERT_EQUAL_INT(0, out.precipitationProbabilityPercent);
+  TEST_ASSERT_EQUAL_INT(51, out.weatherCode);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 21.0f, out.today.highTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 16.2f, out.today.lowTemp);
+  TEST_ASSERT_EQUAL_INT(51, out.today.weatherCode);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 18.8f, out.tomorrow.highTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 14.0f, out.tomorrow.lowTemp);
+  TEST_ASSERT_EQUAL_INT(3, out.tomorrow.weatherCode);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 12.5f, out.dayAfter.highTemp);
+  TEST_ASSERT_EQUAL_INT(73, out.dayAfter.weatherCode);
+  TEST_ASSERT_EQUAL_UINT64(1794546000ULL, out.updatedEpochSeconds);
+  TEST_ASSERT_EQUAL_UINT32(512, diagnostics.elapsedMs);
+}
+
+void test_metno_errors_fail_closed() {
+  FakeTransport transport;
+  MetNoProvider provider(transport);
+  WeatherSnapshot out;
+  WeatherDiagnostics diagnostics;
+
+  transport.response.error = HttpTransportError::NETWORK;
+  transport.response.nativeError = -5;
+  TEST_ASSERT_EQUAL(WeatherError::NETWORK, provider.fetch(kunshan(), out, &diagnostics));
+  TEST_ASSERT_EQUAL_INT(-5, diagnostics.nativeError);
+
+  transport.response = {};
+  transport.response.error = HttpTransportError::HTTP_STATUS;
+  transport.response.statusCode = 429;
+  TEST_ASSERT_EQUAL(WeatherError::HTTP_STATUS, provider.fetch(kunshan(), out, &diagnostics));
+
+  transport.response = {};
+  transport.response.error = HttpTransportError::BODY_TOO_LARGE;
+  TEST_ASSERT_EQUAL(WeatherError::BODY_TOO_LARGE, provider.fetch(kunshan(), out, &diagnostics));
+
+  transport.response = {};
+  transport.response.error = HttpTransportError::NONE;
+  transport.response.statusCode = 200;
+  transport.response.body = "{broken";
+  TEST_ASSERT_EQUAL(WeatherError::PARSE, provider.fetch(kunshan(), out, &diagnostics));
+
+  transport.response.body = R"json({"properties":{"timeseries":[]}})json";
+  TEST_ASSERT_EQUAL(WeatherError::MISSING_FIELD, provider.fetch(kunshan(), out, &diagnostics));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_builds_open_meteo_url_and_parses_snapshot);
   RUN_TEST(test_missing_or_malformed_payload_fails_closed);
   RUN_TEST(test_short_daily_arrays_fail_closed);
   RUN_TEST(test_transport_errors_map_to_weather_errors_and_diagnostics);
+  RUN_TEST(test_builds_metno_url_useragent_and_parses_snapshot);
+  RUN_TEST(test_metno_errors_fail_closed);
   return UNITY_END();
 }

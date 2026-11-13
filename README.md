@@ -98,7 +98,7 @@ Bambu 是设备级后台服务，离开 Bambu 页面不断开。Stock/Weather/HA
 
 ## Weather / Bad Apple
 
-Open-Meteo；UI 显示 current + 今/明。Bad Apple：168×126 at x=152,y=27，2190 frames @ 10 FPS，silent loop，本地 flash。
+Open-Meteo primary；transport 级失败自动 failover 到 met.no locationforecast（免 key，User-Agent 标识，按设备时区聚合小时步长得今/明/后天高低温；met.no compact 不提供降水概率，备用源显示 0）。UI 显示 current + 今/明。Bad Apple：168×126 at x=152,y=27，2190 frames @ 10 FPS，silent loop，本地 flash。
 
 ## Stock / DeviceInfo
 

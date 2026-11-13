@@ -59,7 +59,7 @@ The `HOME_ASSISTANT` page is retired from runtime navigation (2026-11-13): `Home
 
 Stock: Tencent primary / EastMoney fallback, dedicated `MarketDataWorker`, cache-preserving. Direct navigation exposes a stock overview page plus the first 5 configured stock detail pages. `StockController::selectIndex()` performs exact selection rather than walking through intermediate stocks.
 
-Weather: Open-Meteo current + Today/Tomorrow. Bad Apple x=152,y=27 168×126, 2190 frames, 10 FPS, local flash, silent loop.
+Weather: Open-Meteo primary; on transport-level failure (NETWORK/HTTP status/BODY_TOO_LARGE) the shared AppDataWorker fails over to the met.no locationforecast fallback (User-Agent identified per met.no terms, compact hourly steps aggregated into device-timezone daily high/low; compact does not provide precipitation probability so the fallback marks it 0). Bad Apple x=152,y=27 168×126, 2190 frames, 10 FPS, local flash, silent loop.
 
 HA (page retired from device navigation; source and portal config sections retained): read-only REST, 1–4 entities, refresh 30–300 s; HTTP trusted LAN only, HTTPS requires configured CA; no credentialed `setInsecure()`.
 
