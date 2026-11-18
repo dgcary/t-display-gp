@@ -225,7 +225,7 @@ int main() {
   UNITY_BEGIN();
   RUN_TEST(test_first_active_online_tick_enqueues_weather_request);
   RUN_TEST(test_success_updates_cache_and_waits_for_refresh_interval);
-  RUN_TEST(test_failed_refresh_preserves_last_valid_cache_and_does_not_retry_immediately);
+  RUN_TEST(test_failed_refresh_preserves_last_valid_cache_and_retries_after_two_minutes);
   RUN_TEST(test_offline_or_inactive_does_not_schedule);
   RUN_TEST(test_disabled_weather_reports_not_configured_and_does_not_schedule);
   RUN_TEST(test_stale_flag_uses_last_success_and_wrap_safe_elapsed);
