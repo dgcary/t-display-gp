@@ -77,6 +77,27 @@ float parseLeadingNumber(const char* text) {
   return std::strtof(p, nullptr);
 }
 
+// Parse "YYYY-MM-DD HH:MM[:SS]" (device-local CST) into UTC epoch seconds.
+bool parseCstEpoch(const char* time, uint64_t& out) {
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+  if (std::sscanf(time, "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &minute, &second) < 5) {
+    return false;
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
+  long long y = year;
+  y -= month <= 2;
+  const long long era = (y >= 0 ? y : y - 399) / 400;
+  const long long yoe = y - era * 400;
+  const long long doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+  const long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const long long days = era * 146097 + doe - 719468;
+  const long long utc = days * 86400LL + hour * 3600LL + minute * 60LL + second - 8LL * 3600LL;
+  out = static_cast<uint64_t>(utc);
+  return true;
+}
+
 // The forecast reports wind level strings ("2级"); approximate a wind speed.
 float windSpeedFromLevel(const char* level) {
   const float value = parseLeadingNumber(level);
@@ -146,6 +167,12 @@ WeatherError WeatherCnProvider::fetch(const LocationConfig& location, WeatherSna
     parsed.dayAfter = parseForecastDay(forecast[2].as<JsonObjectConst>());
   } else {
     parsed.dayAfter = parsed.tomorrow;
+  }
+
+  const char* reportTime = document["time"].as<const char*>();
+  uint64_t updatedEpoch = 0;
+  if (reportTime && parseCstEpoch(reportTime, updatedEpoch)) {
+    parsed.updatedEpochSeconds = updatedEpoch;
   }
 
   out = parsed;

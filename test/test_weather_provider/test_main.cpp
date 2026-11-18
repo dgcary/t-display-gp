@@ -298,6 +298,7 @@ void test_builds_amap_urls_and_parses_snapshot() {
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 4.5f, out.windSpeed);
   TEST_ASSERT_EQUAL_INT(0, out.precipitationProbabilityPercent);
   TEST_ASSERT_EQUAL_INT(2, out.weatherCode);
+  TEST_ASSERT_EQUAL_UINT64(1794967200ULL, out.updatedEpochSeconds);
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 21.0f, out.today.highTemp);
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 14.0f, out.today.lowTemp);
   TEST_ASSERT_EQUAL_INT(2, out.today.weatherCode);
@@ -376,6 +377,7 @@ void test_builds_wxcn_url_and_parses_snapshot() {
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 2.5f, out.windSpeed);
   TEST_ASSERT_EQUAL_INT(0, out.precipitationProbabilityPercent);
   TEST_ASSERT_EQUAL_INT(2, out.weatherCode);
+  TEST_ASSERT_EQUAL_UINT64(1794967200ULL, out.updatedEpochSeconds);
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 15.0f, out.today.highTemp);
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 7.0f, out.today.lowTemp);
   TEST_ASSERT_EQUAL_INT(2, out.today.weatherCode);
