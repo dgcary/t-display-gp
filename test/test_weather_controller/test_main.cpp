@@ -97,7 +97,7 @@ void test_success_updates_cache_and_waits_for_refresh_interval() {
   TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
 }
 
-void test_failed_refresh_preserves_last_valid_cache_and_does_not_retry_immediately() {
+void test_failed_refresh_preserves_last_valid_cache_and_retries_after_two_minutes() {
   FakeAppDataQueue queue;
   WeatherController controller(queue);
   controller.begin(weatherConfig());
@@ -128,7 +128,8 @@ void test_failed_refresh_preserves_last_valid_cache_and_does_not_retry_immediate
   TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
   controller.tick(refreshAt + 1000);
   TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
-  controller.tick(refreshAt + 15u * 60u * 1000u);
+  // A failed attempt retries after the 2-minute failure interval.
+  controller.tick(refreshAt + 1u + 2u * 60u * 1000u);
   TEST_ASSERT_EQUAL_UINT32(3, queue.requests.size());
 }
 

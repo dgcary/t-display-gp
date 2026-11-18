@@ -14,6 +14,7 @@ constexpr uint32_t INTRADAY_REFRESH_MS = 60000;
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
 constexpr uint32_t BUTTON_LONG_PRESS_MS = 700;
 constexpr uint32_t WEATHER_DEFAULT_REFRESH_MIN = 15;
+constexpr uint32_t WEATHER_FAILURE_RETRY_MS = 120000;
 constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 1500;
 constexpr uint32_t HTTP_READ_TIMEOUT_MS = 2500;
 constexpr uint32_t HTTP_TLS_HANDSHAKE_TIMEOUT_SEC = 5;

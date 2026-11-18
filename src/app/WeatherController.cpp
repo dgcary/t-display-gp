@@ -1,5 +1,7 @@
 #include "WeatherController.h"
 
+#include "build_config.h"
+
 void WeatherController::begin(const AppConfig& config) {
   location_ = config.location;
   config_ = config.weather;
@@ -44,8 +46,12 @@ bool WeatherController::configured() const {
 
 bool WeatherController::refreshDue(uint32_t nowMs) const {
   if (!attempted_) return true;
-  const uint32_t refreshMs = config_.refreshMinutes * 60U * 1000U;
-  return elapsed(nowMs, lastAttemptMs_) >= refreshMs;
+  // After a failed attempt retry quickly (2 min) instead of waiting the full
+  // refresh interval, so intermittent failures recover without user action.
+  const uint32_t interval = lastError_ == WeatherError::NONE
+                                ? config_.refreshMinutes * 60U * 1000U
+                                : BuildConfig::WEATHER_FAILURE_RETRY_MS;
+  return elapsed(nowMs, lastAttemptMs_) >= interval;
 }
 
 void WeatherController::consumeResults(uint32_t nowMs) {

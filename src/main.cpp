@@ -112,7 +112,8 @@ void setup() {
     Serial.println("Bambu MQTT service failed to start");
     return;
   }
-  integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService);
+  integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService, appConfig,
+                                configStore);
   if (!stockApp.begin(appConfig)) { Serial.println("Stock app failed to start"); return; }
   if (!weatherApp.begin(appConfig)) { Serial.println("Weather app failed to start"); return; }
   if (!bambuApp.begin()) { Serial.println("Bambu app failed to start"); return; }

@@ -109,7 +109,7 @@ if text("screen_cpp").count("display_->fillScreen(UiTheme::BACKGROUND);") != 1:
     errors.append("Bambu screen must clear the whole display only in the single full-redraw path")
 forbid("screen_cpp", ["void BambuScreen::render(const BambuViewModel& model, bool) {"])
 
-require("main", ["bambuMqttService.begin(bambuConfig, bambuConfigStore)", "integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService)", "WiFi.gatewayIP()", "WiFi.subnetMask()", "WiFi.dnsIP(0)", "[netcfg]"])
+require("main", ["bambuMqttService.begin(bambuConfig, bambuConfigStore)", "integrationConfigPortal.begin(homeAssistantConfig, bambuCloudClient, bambuMqttService, appConfig,", "configStore)", "WiFi.gatewayIP()", "WiFi.subnetMask()", "WiFi.dnsIP(0)", "[netcfg]"])
 forbid("main", ["bambuMqttService.process(nowMs);"])
 require("build", ['BAMBU_CONFIG_NAMESPACE[] = "bambucloud"', "BAMBU_MQTT_BUFFER_BYTES = 40960", "BAMBU_MQTT_CONNECT_TIMEOUT_SEC = 5U"])
 require("pio", ["platform = espressif32@6.12.0", "knolleary/PubSubClient", "+<network/BambuPortalModel.cpp>"])

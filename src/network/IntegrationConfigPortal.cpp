@@ -10,12 +10,14 @@
 #include <string>
 #include <utility>
 
+#include "AppConfig.h"
 #include "BambuCloudProtocol.h"
 #include "BambuPortalModel.h"
+#include "ConfigStore.h"
 #include "HomeAssistantConfigStore.h"
 
 namespace {
-const char INTEGRATIONS_HTML[] PROGMEM = R"html(<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>T-Display Integrations</title><style>body{font-family:system-ui;background:#111;color:#eee;margin:0;padding:18px}main{max-width:760px;margin:auto}.card{background:#1d1d1d;border-radius:14px;padding:16px;margin-bottom:14px}h1{font-size:21px;margin:0 0 10px}h2{font-size:18px;margin:0 0 8px}h3{font-size:15px;margin:16px 0 4px}p{line-height:1.5;color:#bbb}label{display:block;color:#aaa;font-size:13px;margin-top:10px}input,textarea,select,button{box-sizing:border-box;width:100%;padding:10px;font-size:15px;border:1px solid #444;border-radius:8px;background:#151515;color:#fff}.row{display:grid;grid-template-columns:1fr 1.4fr;gap:8px}.check{display:flex;gap:8px;align-items:center;color:#eee}.check input{width:auto}textarea{min-height:140px;font-family:monospace}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}button{background:#eee;color:#111;font-weight:700}button.secondary{background:#333;color:#eee}button.danger{background:#6b2525;color:#fff;margin-top:8px}.status{font-family:monospace;font-size:13px;white-space:pre-wrap;margin-top:10px}.hint{font-size:13px;color:#b9a775}.printer{border-top:1px solid #333;margin-top:12px;padding-top:8px}@media(max-width:520px){.row,.actions{grid-template-columns:1fr}}</style></head><body><main><div class="card"><h1>Integrations</h1><p>配置页运行在设备局域网 HTTP 8081 端口，只应在可信 LAN 使用。Bambu Access Token 属于登录凭据，粘贴时会以明文经过当前局域网；设备到 Bambu Cloud 的 HTTPS/MQTT 始终使用 CA 校验 TLS。</p></div><form id="ha"><div class="card"><h2>Home Assistant</h2><label class="check"><input type="checkbox" name="enabled" value="1">启用 Home Assistant</label><label>Base URL</label><input name="base_url" placeholder="http://homeassistant.local:8123"><label>刷新秒数（30-300）</label><input name="refresh_sec" type="number" min="30" max="300" value="30"><h3>实体（1-4）</h3><div id="haRows"></div><label>Long-Lived Access Token（留空=保留当前值）</label><input name="token" type="password" autocomplete="new-password"><label>CA PEM（仅 HTTPS 必需；留空=保留当前值）</label><textarea name="ca_cert" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea><label class="check"><input type="checkbox" name="clear_secrets" value="1">清空已保存 Token/CA</label><button type="submit">保存 HA 并重启</button><div id="haMsg"></div></div></form><form id="bambu"><div class="card"><h2>Bambu Lab Cloud</h2><label class="check"><input type="checkbox" name="enabled" value="1">启用 Bambu Lab</label><label>区域</label><select name="region"><option value="us_eu">US / EU / Global</option><option value="china">China</option></select><label>Access Token（留空=保留已保存 Token；不会从设备回显）</label><input name="access_token" type="password" autocomplete="new-password" spellcheck="false"><p class="hint">先在浏览器登录对应区域的 Bambu 网站，从开发者工具 Cookies 中复制 token。Token 不会显示在状态接口或串口。</p><div id="printerRows"></div><label>当前打印机</label><select name="active_printer_serial" id="activePrinter"><option value="">请选择打印机</option></select><div class="actions"><button type="button" class="secondary" id="bDiscover">用 Token 获取我的打印机</button><button type="submit">保存并切换</button></div><button type="button" class="danger" id="bLogout">清除 Bambu 凭据</button><div id="bStatus" class="status"></div><div id="bMsg"></div></div></form></main><script>const haRows=document.getElementById('haRows');for(let i=1;i<=4;i++)haRows.insertAdjacentHTML('beforeend',`<label>实体 ${i}</label><div class="row"><input name="entity${i}" placeholder="sensor.temperature"><input name="label${i}" placeholder="显示名称（可选）"></div>`);const printerRows=document.getElementById('printerRows');for(let i=1;i<=4;i++)printerRows.insertAdjacentHTML('beforeend',`<div class="printer"><h3>打印机 ${i}</h3><div class="row"><div><label>名称</label><input name="printer${i}_name" placeholder="例如 P1S"></div><div><label>Serial</label><input name="printer${i}_serial" autocomplete="off" spellcheck="false"></div></div></div>`);async function loadHa(){const s=await(await fetch('/api/ha/status')).json();ha.enabled.checked=!!s.enabled;ha.base_url.value=s.base_url||'';ha.refresh_sec.value=String(s.refresh_sec||30);(s.entities||[]).forEach((x,i)=>{if(i<4){ha[`entity${i+1}`].value=x.entity_id;ha[`label${i+1}`].value=x.label||''}});haMsg.textContent=`Token ${s.ha_token_set?'已设置':'未设置'} / CA ${s.ha_ca_set?'已设置':'未设置'}`};ha.onsubmit=async e=>{e.preventDefault();haMsg.textContent='保存中...';const r=await fetch('/api/ha/config',{method:'POST',body:new URLSearchParams(new FormData(ha))});const j=await r.json();haMsg.textContent=j.message||'完成'};function printerRowsFromForm(){const rows=[];for(let i=1;i<=4;i++){const serial=bambu[`printer${i}_serial`].value.trim();const name=bambu[`printer${i}_name`].value.trim();if(serial)rows.push({serial,name})}return rows}function syncActiveChoices(selected=''){const sel=document.getElementById('activePrinter');const old=selected||sel.value;sel.innerHTML='<option value="">请选择打印机</option>';for(const p of printerRowsFromForm()){const o=document.createElement('option');o.value=p.serial;o.textContent=p.name?`${p.name} (${p.serial})`:p.serial;if(p.serial===old)o.selected=true;sel.appendChild(o)}if(!sel.value&&sel.options.length>1)sel.selectedIndex=1}for(let i=1;i<=4;i++){bambu[`printer${i}_serial`].addEventListener('input',()=>syncActiveChoices());bambu[`printer${i}_name`].addEventListener('input',()=>syncActiveChoices())}function renderBambuStatus(s){bStatus.textContent=`状态: ${s.session}\nMQTT: ${s.mqtt_connected?'online':'offline'}\nToken: ${s.token_set?'已保存':'未保存'}\n本地打印机: ${s.printer_count||0}\n当前: ${s.active_printer_name||s.active_printer_serial||'--'}${s.last_mqtt_rc!==undefined&&s.last_mqtt_rc!==-1?`\nMQTT rc: ${s.last_mqtt_rc}`:''}`};async function refreshBambuStatus(){try{const s=await(await fetch('/api/bambu/status')).json();renderBambuStatus(s)}catch(_){}}async function loadBambu(){const s=await(await fetch('/api/bambu/status')).json();bambu.enabled.checked=!!s.enabled;bambu.region.value=s.region||'us_eu';renderBambuStatus(s);const p=await(await fetch('/api/bambu/printers')).json();for(let i=1;i<=4;i++){bambu[`printer${i}_serial`].value='';bambu[`printer${i}_name`].value=''};(p.printers||[]).slice(0,4).forEach((x,i)=>{bambu[`printer${i+1}_serial`].value=x.serial||'';bambu[`printer${i+1}_name`].value=x.name||''});syncActiveChoices(s.active_printer_serial||'')};bDiscover.onclick=async()=>{bMsg.textContent='正在获取打印机...';const body=new URLSearchParams();body.set('region',bambu.region.value);body.set('access_token',bambu.access_token.value);const r=await fetch('/api/bambu/discover',{method:'POST',body});const j=await r.json();if(!r.ok){bMsg.textContent=j.message||'获取失败';return}for(let i=1;i<=4;i++){bambu[`printer${i}_serial`].value='';bambu[`printer${i}_name`].value=''};(j.printers||[]).slice(0,4).forEach((x,i)=>{bambu[`printer${i+1}_serial`].value=x.serial||'';bambu[`printer${i+1}_name`].value=x.name||''});syncActiveChoices();bMsg.textContent=`获取到 ${j.printers?.length||0} 台打印机；请确认当前打印机后点击“保存并切换”`};bambu.onsubmit=async e=>{e.preventDefault();bMsg.textContent='保存中...';const r=await fetch('/api/bambu/config',{method:'POST',body:new URLSearchParams(new FormData(bambu))});const j=await r.json();bMsg.textContent=j.message||'完成';if(r.ok){bambu.access_token.value='';await loadBambu()}};bLogout.onclick=async()=>{if(!confirm('清除 Bambu Token、Cloud User ID 和本地打印机列表？'))return;const r=await fetch('/api/bambu/logout',{method:'POST'});const j=await r.json();bMsg.textContent=j.message||'完成';if(r.ok){bambu.access_token.value='';await loadBambu()}};loadHa();loadBambu();setInterval(refreshBambuStatus,2000);</script></body></html>)html";
+const char INTEGRATIONS_HTML[] PROGMEM = R"html(<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>T-Display Integrations</title><style>body{font-family:system-ui;background:#111;color:#eee;margin:0;padding:18px}main{max-width:760px;margin:auto}.card{background:#1d1d1d;border-radius:14px;padding:16px;margin-bottom:14px}h1{font-size:21px;margin:0 0 10px}h2{font-size:18px;margin:0 0 8px}h3{font-size:15px;margin:16px 0 4px}p{line-height:1.5;color:#bbb}label{display:block;color:#aaa;font-size:13px;margin-top:10px}input,textarea,select,button{box-sizing:border-box;width:100%;padding:10px;font-size:15px;border:1px solid #444;border-radius:8px;background:#151515;color:#fff}.row{display:grid;grid-template-columns:1fr 1.4fr;gap:8px}.check{display:flex;gap:8px;align-items:center;color:#eee}.check input{width:auto}textarea{min-height:140px;font-family:monospace}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}button{background:#eee;color:#111;font-weight:700}button.secondary{background:#333;color:#eee}button.danger{background:#6b2525;color:#fff;margin-top:8px}.status{font-family:monospace;font-size:13px;white-space:pre-wrap;margin-top:10px}.hint{font-size:13px;color:#b9a775}.printer{border-top:1px solid #333;margin-top:12px;padding-top:8px}@media(max-width:520px){.row,.actions{grid-template-columns:1fr}}</style></head><body><main><div class="card"><h1>Integrations</h1><p>配置页运行在设备局域网 HTTP 8081 端口，只应在可信 LAN 使用。Bambu Access Token 属于登录凭据，粘贴时会以明文经过当前局域网；设备到 Bambu Cloud 的 HTTPS/MQTT 始终使用 CA 校验 TLS。</p></div><form id="ha"><div class="card"><h2>Home Assistant</h2><label class="check"><input type="checkbox" name="enabled" value="1">启用 Home Assistant</label><label>Base URL</label><input name="base_url" placeholder="http://homeassistant.local:8123"><label>刷新秒数（30-300）</label><input name="refresh_sec" type="number" min="30" max="300" value="30"><h3>实体（1-4）</h3><div id="haRows"></div><label>Long-Lived Access Token（留空=保留当前值）</label><input name="token" type="password" autocomplete="new-password"><label>CA PEM（仅 HTTPS 必需；留空=保留当前值）</label><textarea name="ca_cert" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea><label class="check"><input type="checkbox" name="clear_secrets" value="1">清空已保存 Token/CA</label><button type="submit">保存 HA 并重启</button><div id="haMsg"></div></div></form><form id="bambu"><div class="card"><h2>Bambu Lab Cloud</h2><label class="check"><input type="checkbox" name="enabled" value="1">启用 Bambu Lab</label><label>区域</label><select name="region"><option value="us_eu">US / EU / Global</option><option value="china">China</option></select><label>Access Token（留空=保留已保存 Token；不会从设备回显）</label><input name="access_token" type="password" autocomplete="new-password" spellcheck="false"><p class="hint">先在浏览器登录对应区域的 Bambu 网站，从开发者工具 Cookies 中复制 token。Token 不会显示在状态接口或串口。</p><div id="printerRows"></div><label>当前打印机</label><select name="active_printer_serial" id="activePrinter"><option value="">请选择打印机</option></select><div class="actions"><button type="button" class="secondary" id="bDiscover">用 Token 获取我的打印机</button><button type="submit">保存并切换</button></div><button type="button" class="danger" id="bLogout">清除 Bambu 凭据</button><div id="bStatus" class="status"></div><div id="bMsg"></div></div></form><form id="weather"><div class="card"><h2>天气</h2><p>填入中国天气网城市ID（免费免注册，纯 HTTP，如昆山的 101190408）后天气优先走它；也可选填高德 Web服务 Key。</p><label>中国天气网城市ID</label><input name="weather_city_id" placeholder="101190408"><label>高德天气 Key（可选）</label><input name="amap_key" type="password" placeholder="留空保留现有 Key"><div class="msg status" id="weatherMsg"></div><button type="submit">保存天气配置</button></div></form></main><script>const haRows=document.getElementById('haRows');for(let i=1;i<=4;i++)haRows.insertAdjacentHTML('beforeend',`<label>实体 ${i}</label><div class="row"><input name="entity${i}" placeholder="sensor.temperature"><input name="label${i}" placeholder="显示名称（可选）"></div>`);const printerRows=document.getElementById('printerRows');for(let i=1;i<=4;i++)printerRows.insertAdjacentHTML('beforeend',`<div class="printer"><h3>打印机 ${i}</h3><div class="row"><div><label>名称</label><input name="printer${i}_name" placeholder="例如 P1S"></div><div><label>Serial</label><input name="printer${i}_serial" autocomplete="off" spellcheck="false"></div></div></div>`);async function loadHa(){const s=await(await fetch('/api/ha/status')).json();ha.enabled.checked=!!s.enabled;ha.base_url.value=s.base_url||'';ha.refresh_sec.value=String(s.refresh_sec||30);(s.entities||[]).forEach((x,i)=>{if(i<4){ha[`entity${i+1}`].value=x.entity_id;ha[`label${i+1}`].value=x.label||''}});haMsg.textContent=`Token ${s.ha_token_set?'已设置':'未设置'} / CA ${s.ha_ca_set?'已设置':'未设置'}`};ha.onsubmit=async e=>{e.preventDefault();haMsg.textContent='保存中...';const r=await fetch('/api/ha/config',{method:'POST',body:new URLSearchParams(new FormData(ha))});const j=await r.json();haMsg.textContent=j.message||'完成'};function printerRowsFromForm(){const rows=[];for(let i=1;i<=4;i++){const serial=bambu[`printer${i}_serial`].value.trim();const name=bambu[`printer${i}_name`].value.trim();if(serial)rows.push({serial,name})}return rows}function syncActiveChoices(selected=''){const sel=document.getElementById('activePrinter');const old=selected||sel.value;sel.innerHTML='<option value="">请选择打印机</option>';for(const p of printerRowsFromForm()){const o=document.createElement('option');o.value=p.serial;o.textContent=p.name?`${p.name} (${p.serial})`:p.serial;if(p.serial===old)o.selected=true;sel.appendChild(o)}if(!sel.value&&sel.options.length>1)sel.selectedIndex=1}for(let i=1;i<=4;i++){bambu[`printer${i}_serial`].addEventListener('input',()=>syncActiveChoices());bambu[`printer${i}_name`].addEventListener('input',()=>syncActiveChoices())}function renderBambuStatus(s){bStatus.textContent=`状态: ${s.session}\nMQTT: ${s.mqtt_connected?'online':'offline'}\nToken: ${s.token_set?'已保存':'未保存'}\n本地打印机: ${s.printer_count||0}\n当前: ${s.active_printer_name||s.active_printer_serial||'--'}${s.last_mqtt_rc!==undefined&&s.last_mqtt_rc!==-1?`\nMQTT rc: ${s.last_mqtt_rc}`:''}`};async function refreshBambuStatus(){try{const s=await(await fetch('/api/bambu/status')).json();renderBambuStatus(s)}catch(_){}}async function loadBambu(){const s=await(await fetch('/api/bambu/status')).json();bambu.enabled.checked=!!s.enabled;bambu.region.value=s.region||'us_eu';renderBambuStatus(s);const p=await(await fetch('/api/bambu/printers')).json();for(let i=1;i<=4;i++){bambu[`printer${i}_serial`].value='';bambu[`printer${i}_name`].value=''};(p.printers||[]).slice(0,4).forEach((x,i)=>{bambu[`printer${i+1}_serial`].value=x.serial||'';bambu[`printer${i+1}_name`].value=x.name||''});syncActiveChoices(s.active_printer_serial||'')};bDiscover.onclick=async()=>{bMsg.textContent='正在获取打印机...';const body=new URLSearchParams();body.set('region',bambu.region.value);body.set('access_token',bambu.access_token.value);const r=await fetch('/api/bambu/discover',{method:'POST',body});const j=await r.json();if(!r.ok){bMsg.textContent=j.message||'获取失败';return}for(let i=1;i<=4;i++){bambu[`printer${i}_serial`].value='';bambu[`printer${i}_name`].value=''};(j.printers||[]).slice(0,4).forEach((x,i)=>{bambu[`printer${i+1}_serial`].value=x.serial||'';bambu[`printer${i+1}_name`].value=x.name||''});syncActiveChoices();bMsg.textContent=`获取到 ${j.printers?.length||0} 台打印机；请确认当前打印机后点击“保存并切换”`};bambu.onsubmit=async e=>{e.preventDefault();bMsg.textContent='保存中...';const r=await fetch('/api/bambu/config',{method:'POST',body:new URLSearchParams(new FormData(bambu))});const j=await r.json();bMsg.textContent=j.message||'完成';if(r.ok){bambu.access_token.value='';await loadBambu()}};bLogout.onclick=async()=>{if(!confirm('清除 Bambu Token、Cloud User ID 和本地打印机列表？'))return;const r=await fetch('/api/bambu/logout',{method:'POST'});const j=await r.json();bMsg.textContent=j.message||'完成';if(r.ok){bambu.access_token.value='';await loadBambu()}};async function loadWeather(){const s=await(await fetch('/api/weather/status')).json();weather.weather_city_id.value=s.weather_city_id||'';weatherMsg.textContent=`高德 Key ${s.amap_key_set?'已保存':'未保存'}`};weather.onsubmit=async e=>{e.preventDefault();weatherMsg.textContent='保存中...';const r=await fetch('/api/weather/config',{method:'POST',body:new URLSearchParams(new FormData(weather))});const j=await r.json();weatherMsg.textContent=j.message||'完成';if(r.ok)await loadWeather()};loadHa();loadBambu();loadWeather();setInterval(refreshBambuStatus,2000);</script></body></html>)html";
 
 std::string trimTrailingSlash(std::string value) {
   while (value.size() > 8 && value.back() == '/') value.pop_back();
@@ -113,6 +115,8 @@ struct IntegrationConfigPortal::Impl {
   HomeAssistantConfig* haConfig = nullptr;
   BambuCloudClient* bambuCloud = nullptr;
   BambuMqttService* bambuService = nullptr;
+  AppConfig* appConfig = nullptr;
+  ConfigStore* configStore = nullptr;
   bool started = false;
   bool restartScheduled = false;
   uint32_t restartAtMs = 0U;
@@ -189,6 +193,52 @@ struct IntegrationConfigPortal::Impl {
     }
     *haConfig = submitted;
     server.send(200, "application/json; charset=utf-8", "{\"message\":\"HA 已保存，设备将重启\"}");
+    scheduleRestart();
+  }
+
+  void sendWeatherStatus() {
+    DynamicJsonDocument doc(1024);
+    const AppConfig current = appConfig ? *appConfig : AppConfig{};
+    doc["weather_city_id"] = current.weather.cityId;
+    doc["amap_key_set"] = !current.weather.amapKey.empty();
+    doc["weather_enabled"] = current.weather.enabled;
+    String body;
+    serializeJson(doc, body);
+    server.send(200, "application/json; charset=utf-8", body);
+  }
+
+  void saveWeather() {
+    if (!appConfig || !configStore) {
+      server.send(503, "application/json", "{\"message\":\"天气配置服务未就绪\"}");
+      return;
+    }
+    AppConfig submitted = *appConfig;
+    const std::string cityId = trimmedArg(server, "weather_city_id");
+    if (cityId.size() > 15) {
+      server.send(400, "application/json", "{\"message\":\"城市ID过长\"}");
+      return;
+    }
+    submitted.weather.cityId = cityId;
+    const std::string amapKey = trimmedArg(server, "amap_key");
+    if (!amapKey.empty()) {
+      if (amapKey.size() > 40) {
+        server.send(400, "application/json", "{\"message\":\"高德Key过长\"}");
+        return;
+      }
+      submitted.weather.amapKey = amapKey;
+    }
+    const ConfigValidationResult validation = validate(submitted);
+    if (!validation.ok()) {
+      const String body = String("{\"message\":\"") + validation.message() + "\"}";
+      server.send(400, "application/json; charset=utf-8", body);
+      return;
+    }
+    if (!configStore->save(submitted)) {
+      server.send(500, "application/json", "{\"message\":\"天气配置保存失败\"}");
+      return;
+    }
+    *appConfig = submitted;
+    server.send(200, "application/json; charset=utf-8", "{\"message\":\"天气配置已保存，设备将重启\"}");
     scheduleRestart();
   }
 
@@ -359,10 +409,14 @@ IntegrationConfigPortal::~IntegrationConfigPortal() = default;
 
 void IntegrationConfigPortal::begin(HomeAssistantConfig& homeAssistantConfig,
                                     BambuCloudClient& bambuCloud,
-                                    BambuMqttService& bambuService) {
+                                    BambuMqttService& bambuService,
+                                    AppConfig& appConfig,
+                                    ConfigStore& configStore) {
   impl_->haConfig = &homeAssistantConfig;
   impl_->bambuCloud = &bambuCloud;
   impl_->bambuService = &bambuService;
+  impl_->appConfig = &appConfig;
+  impl_->configStore = &configStore;
   if (impl_->started) return;
 
   impl_->server.on("/", HTTP_GET, [this]() {
@@ -375,6 +429,8 @@ void IntegrationConfigPortal::begin(HomeAssistantConfig& homeAssistantConfig,
   impl_->server.on("/api/bambu/discover", HTTP_POST, [this]() { impl_->discoverBambuPrinters(); });
   impl_->server.on("/api/bambu/config", HTTP_POST, [this]() { impl_->saveBambu(); });
   impl_->server.on("/api/bambu/logout", HTTP_POST, [this]() { impl_->logoutBambu(); });
+  impl_->server.on("/api/weather/status", HTTP_GET, [this]() { impl_->sendWeatherStatus(); });
+  impl_->server.on("/api/weather/config", HTTP_POST, [this]() { impl_->saveWeather(); });
   impl_->server.onNotFound([this]() {
     impl_->server.send(404, "application/json", "{\"message\":\"not found\"}");
   });

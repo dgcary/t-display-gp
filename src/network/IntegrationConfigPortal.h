@@ -6,6 +6,9 @@
 #include "BambuMqttService.h"
 #include "HomeAssistantConfig.h"
 
+class AppConfig;
+class ConfigStore;
+
 class IntegrationConfigPortal {
  public:
   IntegrationConfigPortal();
@@ -15,7 +18,9 @@ class IntegrationConfigPortal {
 
   void begin(HomeAssistantConfig& homeAssistantConfig,
              BambuCloudClient& bambuCloud,
-             BambuMqttService& bambuService);
+             BambuMqttService& bambuService,
+             AppConfig& appConfig,
+             ConfigStore& configStore);
   void process();
 
  private:
