@@ -23,6 +23,7 @@ struct WeatherConfig {
   bool enabled = false;
   uint32_t refreshMinutes = 15;
   std::string amapKey;
+  std::string cityId;
 };
 
 struct AppConfig {

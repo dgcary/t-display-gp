@@ -322,6 +322,83 @@ void test_amap_requires_key_and_maps_api_errors() {
   TEST_ASSERT_EQUAL(WeatherError::PARSE, provider.fetch(kunshan(), out));
 }
 
+class WeatherCnFakeTransport final : public IHttpTransport {
+ public:
+  HttpResponse get(const std::string& url, const HttpHeaders& headers = {}) override {
+    requestedUrl = url;
+    HttpResponse response;
+    response.error = error;
+    response.statusCode = error == HttpTransportError::NONE ? 200 : 0;
+    response.elapsedMs = 277;
+    response.body = body;
+    return response;
+  }
+  HttpTransportError error = HttpTransportError::NONE;
+  std::string body;
+  std::string requestedUrl;
+};
+
+const char* validWeatherCnJson() {
+  return R"json({
+    "time":"2026-11-18 10:00",
+    "city":{"cityId":"101190408","city":"昆山"},
+    "data":{
+      "shidu":"71%",
+      "wendu":"11.2",
+      "quality":"良",
+      "forecast":[
+        {"date":"18","high":"高温 15℃","low":"低温 7℃","ymd":"2026-11-18","fx":"西北风","fl":"2级","type":"多云"},
+        {"date":"19","high":"高温 12℃","low":"低温 3℃","ymd":"2026-11-19","fx":"西北风","fl":"2级","type":"晴"},
+        {"date":"20","high":"高温 13℃","low":"低温 3℃","ymd":"2026-11-20","fx":"西风","fl":"2级","type":"晴"}
+      ]
+    }
+  })json";
+}
+
+void test_builds_wxcn_url_and_parses_snapshot() {
+  WeatherCnFakeTransport transport;
+  transport.body = validWeatherCnJson();
+  WeatherCnProvider provider(transport);
+  provider.setCityId("101190408");
+  TEST_ASSERT_TRUE(provider.hasCityId());
+
+  WeatherSnapshot out;
+  WeatherDiagnostics diagnostics;
+  TEST_ASSERT_EQUAL(WeatherError::NONE, provider.fetch(kunshan(), out, &diagnostics));
+  TEST_ASSERT_TRUE(transport.requestedUrl.find("http://t.weather.itboy.net/api/weather/city/101190408") != std::string::npos);
+
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 11.2f, out.currentTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 11.2f, out.apparentTemp);
+  TEST_ASSERT_EQUAL_INT(71, out.humidityPercent);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 2.5f, out.windSpeed);
+  TEST_ASSERT_EQUAL_INT(0, out.precipitationProbabilityPercent);
+  TEST_ASSERT_EQUAL_INT(2, out.weatherCode);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 15.0f, out.today.highTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 7.0f, out.today.lowTemp);
+  TEST_ASSERT_EQUAL_INT(2, out.today.weatherCode);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 12.0f, out.tomorrow.highTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 3.0f, out.tomorrow.lowTemp);
+  TEST_ASSERT_EQUAL_INT(0, out.tomorrow.weatherCode);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 13.0f, out.dayAfter.highTemp);
+  TEST_ASSERT_EQUAL_INT(0, out.dayAfter.weatherCode);
+  TEST_ASSERT_EQUAL_UINT32(277, diagnostics.elapsedMs);
+}
+
+void test_wxcn_requires_city_id_and_fails_closed() {
+  WeatherCnFakeTransport transport;
+  WeatherCnProvider provider(transport);
+  WeatherSnapshot out;
+  TEST_ASSERT_FALSE(provider.hasCityId());
+  TEST_ASSERT_EQUAL(WeatherError::MISSING_FIELD, provider.fetch(kunshan(), out));
+
+  provider.setCityId("101190408");
+  transport.body = "{broken";
+  TEST_ASSERT_EQUAL(WeatherError::PARSE, provider.fetch(kunshan(), out));
+
+  transport.body = R"json({"time":"x","city":{},"data":{"shidu":"71%","wendu":"11","forecast":[{"high":"高温 1℃","low":"低温 1℃","type":"晴"}]}})json";
+  TEST_ASSERT_EQUAL(WeatherError::MISSING_FIELD, provider.fetch(kunshan(), out));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_builds_open_meteo_url_and_parses_snapshot);
@@ -332,5 +409,7 @@ int main() {
   RUN_TEST(test_metno_errors_fail_closed);
   RUN_TEST(test_builds_amap_urls_and_parses_snapshot);
   RUN_TEST(test_amap_requires_key_and_maps_api_errors);
+  RUN_TEST(test_builds_wxcn_url_and_parses_snapshot);
+  RUN_TEST(test_wxcn_requires_city_id_and_fails_closed);
   return UNITY_END();
 }

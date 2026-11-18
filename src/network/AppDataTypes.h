@@ -17,6 +17,7 @@ struct AppDataRequest {
   AppDataRequestType type = AppDataRequestType::WEATHER;
   LocationConfig location;
   std::string amapKey;
+  std::string weatherCityId;
   const HomeAssistantConfig* homeAssistantConfig = nullptr;
   uint8_t entityIndex = 0;
   uint32_t createdMs = 0;

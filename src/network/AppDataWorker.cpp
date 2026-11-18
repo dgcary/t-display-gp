@@ -12,6 +12,7 @@
 #include "HomeAssistantProvider.h"
 #include "HttpTransport.h"
 #include "MetNoProvider.h"
+#include "WeatherCnProvider.h"
 #include "WeatherProvider.h"
 
 namespace {
@@ -51,6 +52,7 @@ struct AppDataWorker::Impl {
   OpenMeteoProvider weather{transport};
   MetNoProvider metnoWeather{transport};
   AmapProvider amapWeather{transport};
+  WeatherCnProvider cnWeather{transport};
   SecureHomeAssistantTransport homeAssistantTransport;
   HomeAssistantProvider homeAssistant{homeAssistantTransport};
   QueueHandle_t requestQueue = nullptr;
@@ -107,12 +109,16 @@ struct AppDataWorker::Impl {
     result->type = request->type;
 
     if (request->type == AppDataRequestType::WEATHER) {
-      amapWeather.setKey(request->amapKey);
-      if (amapWeather.hasKey()) {
-        // Domestic primary source when a key is configured.
-        result->error = amapWeather.fetch(request->location, result->weather, &result->diagnostics);
+      cnWeather.setCityId(request->weatherCityId);
+      if (cnWeather.hasCityId()) {
+        // Free domestic plain-HTTP source when a city ID is configured.
+        result->error = cnWeather.fetch(request->location, result->weather, &result->diagnostics);
       } else {
         result->error = WeatherError::NETWORK;
+      }
+      amapWeather.setKey(request->amapKey);
+      if (result->error != WeatherError::NONE && amapWeather.hasKey()) {
+        result->error = amapWeather.fetch(request->location, result->weather, &result->diagnostics);
       }
       if (result->error != WeatherError::NONE) {
         result->error = weather.fetch(request->location, result->weather, &result->diagnostics);

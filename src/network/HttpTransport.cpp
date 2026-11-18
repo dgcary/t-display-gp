@@ -124,11 +124,17 @@ HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& heade
     return response;
   }
 
+  // Plain-HTTP URLs (domestic free weather endpoints) skip TLS entirely; the
+  // SNI-based interference that resets foreign HTTPS handshakes does not apply.
+  const bool plainHttp = url.rfind("http://", 0) == 0;
   WiFiClientSecure client;
-  // Preserve the existing TLS identity behavior; this change only serializes
-  // external TLS use so market/weather handshakes cannot overlap in memory.
-  client.setInsecure();
-  client.setHandshakeTimeout(BuildConfig::HTTP_TLS_HANDSHAKE_TIMEOUT_SEC);
+  WiFiClient plainClient;
+  if (!plainHttp) {
+    // Preserve the existing TLS identity behavior; this change only serializes
+    // external TLS use so market/weather handshakes cannot overlap in memory.
+    client.setInsecure();
+    client.setHandshakeTimeout(BuildConfig::HTTP_TLS_HANDSHAKE_TIMEOUT_SEC);
+  }
 
   HTTPClient http;
   http.setConnectTimeout(BuildConfig::HTTP_CONNECT_TIMEOUT_MS);
@@ -136,7 +142,9 @@ HttpResponse HttpTransport::get(const std::string& url, const HttpHeaders& heade
   http.setUserAgent("TDisplayGP/1.0");
   http.setReuse(false);
 
-  if (!http.begin(client, url.c_str())) {
+  const bool began = plainHttp ? http.begin(plainClient, url.c_str())
+                               : http.begin(client, url.c_str());
+  if (!began) {
     return finishResponse(
         makeResponse(HttpTransportError::NETWORK, 0, {}, 0, lastTlsError(client), -1, 0, startedMs),
         url, arbiterWaitMs, ioStartedMs);

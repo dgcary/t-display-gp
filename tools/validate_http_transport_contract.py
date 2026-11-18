@@ -11,6 +11,8 @@ worker = Path("src/network/AppDataWorker.cpp").read_text(encoding="utf-8")
 metno = Path("src/network/MetNoProvider.cpp")
 amap = Path("src/network/AmapProvider.cpp")
 amap_header = Path("src/network/AmapProvider.h")
+wxcn = Path("src/network/WeatherCnProvider.cpp")
+wxcn_header = Path("src/network/WeatherCnProvider.h")
 
 required_config = {
     "constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 1500;",
@@ -44,6 +46,8 @@ required_weather_failover = {
     "AmapProvider amapWeather",
     "amapWeather.setKey(request->amapKey)",
     "amapWeather.fetch(",
+    "WeatherCnProvider cnWeather",
+    "cnWeather.fetch(",
 }
 required_amap = {
     "https://restapi.amap.com/v3/geocode/regeo?key=",
@@ -78,10 +82,21 @@ if amap.exists():
     missing_amap = sorted(item for item in required_amap if item not in amap_text)
 else:
     missing_amap = ["missing src/network/AmapProvider.cpp"]
+required_wxcn = {
+    "http://t.weather.itboy.net/api/weather/city/",
+    "hasCityId()",
+}
+if wxcn.exists():
+    wxcn_text = wxcn.read_text(encoding="utf-8")
+    if wxcn_header.exists():
+        wxcn_text += wxcn_header.read_text(encoding="utf-8")
+    missing_wxcn = sorted(item for item in required_wxcn if item not in wxcn_text)
+else:
+    missing_wxcn = ["missing src/network/WeatherCnProvider.cpp"]
 present_forbidden = sorted(item for item in forbidden_transport if item in transport)
 
 if (missing_config or missing_transport or missing_arbiter or missing_main or missing_failover or
-        missing_metno or missing_amap or present_forbidden):
+        missing_metno or missing_amap or missing_wxcn or present_forbidden):
     if missing_config:
         print("missing HTTP timeout config contract:")
         for item in missing_config:
@@ -110,6 +125,10 @@ if (missing_config or missing_transport or missing_arbiter or missing_main or mi
         print("missing AMap weather provider contract:")
         for item in missing_amap:
             print(f"  src/network/AmapProvider.cpp: {item}")
+    if missing_wxcn:
+        print("missing weather.com.cn city-ID provider contract:")
+        for item in missing_wxcn:
+            print(f"  src/network/WeatherCnProvider.cpp: {item}")
     if present_forbidden:
         print("forbidden HTTP transport calls:")
         for item in present_forbidden:

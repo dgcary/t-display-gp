@@ -98,7 +98,7 @@ Bambu 是设备级后台服务，离开 Bambu 页面不断开。Stock/Weather/HA
 
 ## Weather / Bad Apple
 
-在 `:8081` 门户天气卡片填入高德 Web服务 Key 后，天气走高德（国内托管、纯 JSON、adcode 按地点缓存）；无 Key 或失败时自动 failover：Open-Meteo → met.no locationforecast（免 key，User-Agent 标识，按设备时区聚合小时步长得今/明/后天高低温）。AMap 与 met.no 不提供降水概率，对应源显示 0。UI 显示 current + 今/明。Bad Apple：168×126 at x=152,y=27，2190 frames @ 10 FPS，silent loop，本地 flash。
+在 `:8081` 门户天气卡片填入**中国天气网城市ID**（免费、免注册、纯 HTTP，如昆山的 `101190408`）后天气优先走它；也可选填高德 Web服务 Key。失败时自动 failover：Open-Meteo → met.no locationforecast（免 key，User-Agent 标识）。无降水概率的源显示 0。UI 显示 current + 今/明。Bad Apple：168×126 at x=152,y=27，2190 frames @ 10 FPS，silent loop，本地 flash。
 
 ## Stock / DeviceInfo
 
