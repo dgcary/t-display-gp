@@ -89,6 +89,7 @@ bool ProvisioningForm::buildConfig(const ProvisioningFields& fields, AppConfig& 
     return false;
   }
   candidate.weather.refreshMinutes = static_cast<uint32_t>(weatherRefresh);
+  candidate.weather.amapKey = fields.amapKey;
 
   const bool anyLocationField = !isBlank(fields.locationName) || !isBlank(fields.latitude) ||
                                 !isBlank(fields.longitude);
@@ -170,5 +171,6 @@ ProvisioningFields ProvisioningForm::fromConfig(const AppConfig& config) {
   }
   fields.weatherEnabled = config.weather.enabled ? "1" : "0";
   fields.weatherRefresh = std::to_string(config.weather.refreshMinutes);
+  fields.amapKey = config.weather.amapKey;
   return fields;
 }

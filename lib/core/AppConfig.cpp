@@ -353,6 +353,8 @@ bool encode(const AppConfig& config, std::string& out) {
   encoded += ",\"longitude_e6\":" + std::to_string(config.location.longitudeE6);
   encoded += ",\"weather_enabled\":" + std::to_string(config.weather.enabled ? 1 : 0);
   encoded += ",\"weather_refresh_min\":" + std::to_string(config.weather.refreshMinutes);
+  encoded += ",\"amap_key\":";
+  appendJsonString(config.weather.amapKey, encoded);
   encoded += "}";
   out = std::move(encoded);
   return true;
@@ -393,6 +395,8 @@ bool decode(std::string_view json, AppConfig& out, uint32_t* sourceSchemaVersion
       parsed.weather.enabled = enabled == 1;
     } else if (key == "weather_refresh_min") {
       if (!reader.parseUnsigned(parsed.weather.refreshMinutes)) return false;
+    } else if (key == "amap_key") {
+      if (!reader.parseString(parsed.weather.amapKey)) return false;
     } else if (!reader.skipValue()) {
       return false;
     }

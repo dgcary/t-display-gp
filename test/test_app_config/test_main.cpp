@@ -109,12 +109,14 @@ void test_codec_round_trip_canonicalizes_symbols_and_weather() {
   auto config = validConfig();
   config.weather.enabled = true;
   config.weather.refreshMinutes = 20;
+  config.weather.amapKey = "6f8a1b2c3d4e5f60718293a4b5c6d7e8";
   config.location.displayName = "昆山";
   config.location.latitudeE6 = 31385000;
   config.location.longitudeE6 = 120980000;
 
   std::string encoded;
   TEST_ASSERT_TRUE(AppConfigCodec::encode(config, encoded));
+  TEST_ASSERT_TRUE(encoded.find("amap_key") != std::string::npos);
 
   AppConfig decoded;
   uint32_t sourceSchema = 0;
@@ -129,6 +131,7 @@ void test_codec_round_trip_canonicalizes_symbols_and_weather() {
   TEST_ASSERT_EQUAL_STRING("300750.SZ", decoded.stocks[1].symbol.canonical().c_str());
   TEST_ASSERT_TRUE(decoded.weather.enabled);
   TEST_ASSERT_EQUAL_UINT32(20, decoded.weather.refreshMinutes);
+  TEST_ASSERT_EQUAL_STRING("6f8a1b2c3d4e5f60718293a4b5c6d7e8", decoded.weather.amapKey.c_str());
   TEST_ASSERT_EQUAL_STRING("昆山", decoded.location.displayName.c_str());
   TEST_ASSERT_EQUAL_INT32(31385000, decoded.location.latitudeE6);
   TEST_ASSERT_EQUAL_INT32(120980000, decoded.location.longitudeE6);

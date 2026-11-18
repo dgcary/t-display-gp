@@ -14,6 +14,7 @@ struct ProvisioningFields {
   std::string longitude;
   std::string weatherEnabled = "0";
   std::string weatherRefresh = "15";
+  std::string amapKey;
 };
 
 namespace ProvisioningForm {

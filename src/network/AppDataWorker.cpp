@@ -8,6 +8,7 @@
 #include <new>
 #include <utility>
 
+#include "AmapProvider.h"
 #include "HomeAssistantProvider.h"
 #include "HttpTransport.h"
 #include "MetNoProvider.h"
@@ -49,6 +50,7 @@ struct AppDataWorker::Impl {
   HttpTransport transport;
   OpenMeteoProvider weather{transport};
   MetNoProvider metnoWeather{transport};
+  AmapProvider amapWeather{transport};
   SecureHomeAssistantTransport homeAssistantTransport;
   HomeAssistantProvider homeAssistant{homeAssistantTransport};
   QueueHandle_t requestQueue = nullptr;
@@ -105,7 +107,16 @@ struct AppDataWorker::Impl {
     result->type = request->type;
 
     if (request->type == AppDataRequestType::WEATHER) {
-      result->error = weather.fetch(request->location, result->weather, &result->diagnostics);
+      amapWeather.setKey(request->amapKey);
+      if (amapWeather.hasKey()) {
+        // Domestic primary source when a key is configured.
+        result->error = amapWeather.fetch(request->location, result->weather, &result->diagnostics);
+      } else {
+        result->error = WeatherError::NETWORK;
+      }
+      if (result->error != WeatherError::NONE) {
+        result->error = weather.fetch(request->location, result->weather, &result->diagnostics);
+      }
       if (result->error == WeatherError::NETWORK || result->error == WeatherError::HTTP_STATUS ||
           result->error == WeatherError::BODY_TOO_LARGE) {
         // Transport-level failure on the primary endpoint: fail over to met.no.

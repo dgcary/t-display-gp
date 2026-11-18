@@ -118,6 +118,7 @@ void test_from_config_round_trips_weather_fields() {
   config.quoteRefreshSec = 4;
   config.weather.enabled = true;
   config.weather.refreshMinutes = 20;
+  config.weather.amapKey = "6f8a1b2c3d4e5f60718293a4b5c6d7e8";
   config.location.displayName = "昆山";
   config.location.latitudeE6 = 31385000;
   config.location.longitudeE6 = 120980000;
@@ -129,10 +130,12 @@ void test_from_config_round_trips_weather_fields() {
   TEST_ASSERT_EQUAL_STRING("120.980000", fields.longitude.c_str());
   TEST_ASSERT_EQUAL_STRING("1", fields.weatherEnabled.c_str());
   TEST_ASSERT_EQUAL_STRING("20", fields.weatherRefresh.c_str());
+  TEST_ASSERT_EQUAL_STRING("6f8a1b2c3d4e5f60718293a4b5c6d7e8", fields.amapKey.c_str());
 
   AppConfig decoded;
   std::string error;
   TEST_ASSERT_TRUE(ProvisioningForm::buildConfig(fields, decoded, error));
+  TEST_ASSERT_EQUAL_STRING(config.weather.amapKey.c_str(), decoded.weather.amapKey.c_str());
   TEST_ASSERT_EQUAL_INT32(config.location.latitudeE6, decoded.location.latitudeE6);
   TEST_ASSERT_EQUAL_INT32(config.location.longitudeE6, decoded.location.longitudeE6);
 }

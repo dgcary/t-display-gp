@@ -9,6 +9,8 @@ arbiter = Path("src/network/NetworkArbiter.cpp").read_text(encoding="utf-8")
 main = Path("src/main.cpp").read_text(encoding="utf-8")
 worker = Path("src/network/AppDataWorker.cpp").read_text(encoding="utf-8")
 metno = Path("src/network/MetNoProvider.cpp")
+amap = Path("src/network/AmapProvider.cpp")
+amap_header = Path("src/network/AmapProvider.h")
 
 required_config = {
     "constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 1500;",
@@ -39,6 +41,15 @@ required_main = {
 required_weather_failover = {
     "MetNoProvider metno",
     "metnoWeather.fetch(",
+    "AmapProvider amapWeather",
+    "amapWeather.setKey(request->amapKey)",
+    "amapWeather.fetch(",
+}
+required_amap = {
+    "https://restapi.amap.com/v3/geocode/regeo?key=",
+    "https://restapi.amap.com/v3/weather/weatherInfo?key=",
+    "extensions=base",
+    "extensions=all",
 }
 required_metno = {
     "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=",
@@ -60,10 +71,17 @@ if metno.exists():
     missing_metno = sorted(item for item in required_metno if item not in metno_text)
 else:
     missing_metno = ["missing src/network/MetNoProvider.cpp"]
+if amap.exists():
+    amap_text = amap.read_text(encoding="utf-8")
+    if amap_header.exists():
+        amap_text += amap_header.read_text(encoding="utf-8")
+    missing_amap = sorted(item for item in required_amap if item not in amap_text)
+else:
+    missing_amap = ["missing src/network/AmapProvider.cpp"]
 present_forbidden = sorted(item for item in forbidden_transport if item in transport)
 
 if (missing_config or missing_transport or missing_arbiter or missing_main or missing_failover or
-        missing_metno or present_forbidden):
+        missing_metno or missing_amap or present_forbidden):
     if missing_config:
         print("missing HTTP timeout config contract:")
         for item in missing_config:
@@ -88,10 +106,14 @@ if (missing_config or missing_transport or missing_arbiter or missing_main or mi
         print("missing met.no fallback provider contract:")
         for item in missing_metno:
             print(f"  src/network/MetNoProvider.cpp: {item}")
+    if missing_amap:
+        print("missing AMap weather provider contract:")
+        for item in missing_amap:
+            print(f"  src/network/AmapProvider.cpp: {item}")
     if present_forbidden:
         print("forbidden HTTP transport calls:")
         for item in present_forbidden:
             print(f"  {item}")
     sys.exit(1)
 
-print("HTTP transport timeout + serialized TLS + weather met.no failover contract: OK")
+print("HTTP transport timeout + serialized TLS + weather AMap/met.no failover contract: OK")

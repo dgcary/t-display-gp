@@ -74,6 +74,7 @@ void WeatherController::tick(uint32_t nowMs) {
     request.requestId = nextRequestId_++;
     request.type = AppDataRequestType::WEATHER;
     request.location = location_;
+    request.amapKey = config_.amapKey;
     request.createdMs = nowMs;
     if (queue_.enqueue(request)) {
       outstandingRequestId_ = request.requestId;

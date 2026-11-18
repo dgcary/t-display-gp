@@ -219,6 +219,109 @@ void test_metno_errors_fail_closed() {
   TEST_ASSERT_EQUAL(WeatherError::MISSING_FIELD, provider.fetch(kunshan(), out, &diagnostics));
 }
 
+class AmapFakeTransport final : public IHttpTransport {
+ public:
+  HttpResponse get(const std::string& url, const HttpHeaders& headers = {}) override {
+    requestedUrls.push_back(url);
+    HttpResponse response;
+    response.error = error;
+    response.statusCode = error == HttpTransportError::NONE ? 200 : 0;
+    response.elapsedMs = 100;
+    if (url.find("geocode/regeo") != std::string::npos) {
+      response.body = regeoBody;
+    } else if (url.find("extensions=base") != std::string::npos) {
+      response.body = baseBody;
+    } else if (url.find("extensions=all") != std::string::npos) {
+      response.body = allBody;
+    }
+    return response;
+  }
+  HttpTransportError error = HttpTransportError::NONE;
+  std::string regeoBody;
+  std::string baseBody;
+  std::string allBody;
+  std::vector<std::string> requestedUrls;
+};
+
+const char* validAmapRegeoJson() {
+  return R"json({"status":"1","info":"OK","infocode":"10000","regeocode":{"addressComponent":{"adcode":"310000"}}})json";
+}
+
+const char* validAmapBaseJson() {
+  return R"json({"status":"1","count":"1","info":"OK","lives":[{"province":"上海","city":"昆山市","weather":"多云","temperature":"23","winddirection":"东南","windpower":"≤3","humidity":"55","reporttime":"2026-11-18 10:00:00"}]})json";
+}
+
+const char* validAmapAllJson() {
+  return R"json({"status":"1","count":"1","info":"OK","forecasts":[{"city":"昆山市","adcode":"310000","reporttime":"2026-11-18 10:00:00","casts":[
+    {"date":"2026-11-18","dayweather":"多云","nightweather":"阴","daytemp":"21","nighttemp":"14","daywind":"东","daypower":"≤3"},
+    {"date":"2026-11-19","dayweather":"小雨","nightweather":"小雨","daytemp":"19","nighttemp":"13","daywind":"东北","daypower":"3-4"},
+    {"date":"2026-11-20","dayweather":"晴","nightweather":"晴","daytemp":"18","nighttemp":"11","daywind":"北","daypower":"≤3"}]}]})json";
+}
+
+void test_builds_amap_urls_and_parses_snapshot() {
+  AmapFakeTransport transport;
+  transport.regeoBody = validAmapRegeoJson();
+  transport.baseBody = validAmapBaseJson();
+  transport.allBody = validAmapAllJson();
+  AmapProvider provider(transport);
+  provider.setKey("6f8a1b2c3d4e5f60718293a4b5c6d7e8");
+  TEST_ASSERT_TRUE(provider.hasKey());
+
+  WeatherSnapshot out;
+  WeatherDiagnostics diagnostics;
+  TEST_ASSERT_EQUAL(WeatherError::NONE, provider.fetch(kunshan(), out, &diagnostics));
+
+  bool regeoUrlFound = false;
+  bool baseUrlFound = false;
+  bool allUrlFound = false;
+  for (const auto& url : transport.requestedUrls) {
+    if (url.find("https://restapi.amap.com/v3/geocode/regeo?key=6f8a1b2c3d4e5f60718293a4b5c6d7e8&location=120.980000,31.385000") != std::string::npos) {
+      regeoUrlFound = true;
+    }
+    if (url.find("https://restapi.amap.com/v3/weather/weatherInfo?key=6f8a1b2c3d4e5f60718293a4b5c6d7e8&city=310000&extensions=base") != std::string::npos) {
+      baseUrlFound = true;
+    }
+    if (url.find("https://restapi.amap.com/v3/weather/weatherInfo?key=6f8a1b2c3d4e5f60718293a4b5c6d7e8&city=310000&extensions=all") != std::string::npos) {
+      allUrlFound = true;
+    }
+  }
+  TEST_ASSERT_TRUE(regeoUrlFound);
+  TEST_ASSERT_TRUE(baseUrlFound);
+  TEST_ASSERT_TRUE(allUrlFound);
+
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 23.0f, out.currentTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 23.0f, out.apparentTemp);
+  TEST_ASSERT_EQUAL_INT(55, out.humidityPercent);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 4.5f, out.windSpeed);
+  TEST_ASSERT_EQUAL_INT(0, out.precipitationProbabilityPercent);
+  TEST_ASSERT_EQUAL_INT(2, out.weatherCode);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 21.0f, out.today.highTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 14.0f, out.today.lowTemp);
+  TEST_ASSERT_EQUAL_INT(2, out.today.weatherCode);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 19.0f, out.tomorrow.highTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 13.0f, out.tomorrow.lowTemp);
+  TEST_ASSERT_EQUAL_INT(61, out.tomorrow.weatherCode);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 18.0f, out.dayAfter.highTemp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 11.0f, out.dayAfter.lowTemp);
+  TEST_ASSERT_EQUAL_INT(0, out.dayAfter.weatherCode);
+}
+
+void test_amap_requires_key_and_maps_api_errors() {
+  AmapFakeTransport transport;
+  AmapProvider provider(transport);
+  WeatherSnapshot out;
+  TEST_ASSERT_FALSE(provider.hasKey());
+  TEST_ASSERT_EQUAL(WeatherError::MISSING_FIELD, provider.fetch(kunshan(), out));
+
+  provider.setKey("6f8a1b2c3d4e5f60718293a4b5c6d7e8");
+  transport.regeoBody = R"json({"status":"0","info":"INVALID_USER_KEY","infocode":"10001"})json";
+  TEST_ASSERT_EQUAL(WeatherError::HTTP_STATUS, provider.fetch(kunshan(), out));
+
+  transport.regeoBody = R"json({"status":"1","regeocode":{"addressComponent":{"adcode":"310000"}}})json";
+  transport.baseBody = "{broken";
+  TEST_ASSERT_EQUAL(WeatherError::PARSE, provider.fetch(kunshan(), out));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_builds_open_meteo_url_and_parses_snapshot);
@@ -227,5 +330,7 @@ int main() {
   RUN_TEST(test_transport_errors_map_to_weather_errors_and_diagnostics);
   RUN_TEST(test_builds_metno_url_useragent_and_parses_snapshot);
   RUN_TEST(test_metno_errors_fail_closed);
+  RUN_TEST(test_builds_amap_urls_and_parses_snapshot);
+  RUN_TEST(test_amap_requires_key_and_maps_api_errors);
   return UNITY_END();
 }
