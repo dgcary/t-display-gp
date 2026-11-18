@@ -2,6 +2,9 @@
 
 #include <string>
 
+#include "AmapProvider.h"
+#include "MetNoProvider.h"
+#include "WeatherCnProvider.h"
 #include "WeatherProvider.h"
 
 void setUp() {}
