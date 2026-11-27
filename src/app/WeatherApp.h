@@ -20,6 +20,9 @@ class WeatherApp final : public IApp {
   void onExit() override;
   void onButton(InputEvent event) override;
   void tick(uint32_t nowMs) override;
+  // Runs the controller's network maintenance (result consumption, fetch and
+  // retry scheduling) from the main loop regardless of the active page.
+  void tickBackground(uint32_t nowMs);
   bool takeDirtyFlag() override;
   bool takeFullRedrawFlag() override;
   void render(bool fullRedraw) override;

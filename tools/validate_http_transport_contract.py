@@ -19,6 +19,8 @@ required_config = {
     "constexpr uint32_t HTTP_READ_TIMEOUT_MS = 2500;",
     "constexpr uint32_t HTTP_TLS_HANDSHAKE_TIMEOUT_SEC = 5;",
     "constexpr size_t HTTP_MAX_BODY_BYTES = 49152;",
+    "constexpr uint32_t WEATHER_INFLIGHT_TIMEOUT_MS = 90000;",
+    "constexpr uint32_t NETWORK_ARBITER_LOCK_TIMEOUT_MS = 15000;",
 }
 required_transport = {
     "NetworkRequestGuard requestGuard(sharedNetworkArbiter());",
@@ -34,7 +36,7 @@ required_transport = {
 }
 required_arbiter = {
     "xSemaphoreCreateMutex()",
-    "xSemaphoreTake(mutex_, portMAX_DELAY)",
+    "xSemaphoreTake(mutex_, pdMS_TO_TICKS(BuildConfig::NETWORK_ARBITER_LOCK_TIMEOUT_MS))",
     "xSemaphoreGive(mutex_)",
 }
 required_main = {

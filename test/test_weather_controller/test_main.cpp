@@ -133,18 +133,37 @@ void test_failed_refresh_preserves_last_valid_cache_and_retries_after_two_minute
   TEST_ASSERT_EQUAL_UINT32(3, queue.requests.size());
 }
 
-void test_offline_or_inactive_does_not_schedule() {
+void test_offline_does_not_schedule_and_background_tick_schedules() {
   FakeAppDataQueue queue;
   WeatherController controller(queue);
   controller.begin(weatherConfig());
-  controller.setActive(true);
+  controller.setActive(false);
   controller.setWifiOnline(false);
   controller.tick(100);
   TEST_ASSERT_TRUE(queue.requests.empty());
+  // Background fetch: an online controller schedules regardless of the active
+  // page, so leaving the weather page never silences its refresh cadence.
   controller.setWifiOnline(true);
-  controller.setActive(false);
   controller.tick(200);
-  TEST_ASSERT_TRUE(queue.requests.empty());
+  TEST_ASSERT_EQUAL_UINT32(1, queue.requests.size());
+}
+
+void test_inflight_request_retires_after_deadline() {
+  FakeAppDataQueue queue;
+  WeatherController controller(queue);
+  controller.begin(weatherConfig());
+  controller.setWifiOnline(true);
+  controller.tick(100);
+  TEST_ASSERT_EQUAL_UINT32(1, queue.requests.size());
+  TEST_ASSERT_TRUE(controller.viewModel().requestInFlight);
+  // A result that never arrives must not wedge the controller: the in-flight
+  // id retires after 90 s and the refresh cadence resumes on its own.
+  controller.tick(100 + 90u * 1000u - 1u);
+  TEST_ASSERT_EQUAL_UINT32(1, queue.requests.size());
+  controller.tick(100 + 90u * 1000u);
+  TEST_ASSERT_FALSE(controller.viewModel().requestInFlight);
+  controller.tick(100 + 15u * 60u * 1000u);
+  TEST_ASSERT_EQUAL_UINT32(2, queue.requests.size());
 }
 
 void test_disabled_weather_reports_not_configured_and_does_not_schedule() {
@@ -226,7 +245,8 @@ int main() {
   RUN_TEST(test_first_active_online_tick_enqueues_weather_request);
   RUN_TEST(test_success_updates_cache_and_waits_for_refresh_interval);
   RUN_TEST(test_failed_refresh_preserves_last_valid_cache_and_retries_after_two_minutes);
-  RUN_TEST(test_offline_or_inactive_does_not_schedule);
+  RUN_TEST(test_offline_does_not_schedule_and_background_tick_schedules);
+  RUN_TEST(test_inflight_request_retires_after_deadline);
   RUN_TEST(test_disabled_weather_reports_not_configured_and_does_not_schedule);
   RUN_TEST(test_stale_flag_uses_last_success_and_wrap_safe_elapsed);
   RUN_TEST(test_delayed_result_consumption_preserves_real_cache_age);

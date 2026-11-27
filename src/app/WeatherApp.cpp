@@ -36,10 +36,14 @@ void WeatherApp::onButton(InputEvent) {
   // remains owned by AppManager.
 }
 
-void WeatherApp::tick(uint32_t nowMs) {
-  if (!initialized_ || !active_) return;
+void WeatherApp::tickBackground(uint32_t nowMs) {
+  if (!initialized_) return;
   controller_.setWifiOnline(device_.wifiConnected());
   controller_.tick(nowMs);
+}
+
+void WeatherApp::tick(uint32_t nowMs) {
+  if (!initialized_ || !active_) return;
 
   if (!controller_.viewModel().hasData) {
     playbackClockValid_ = false;

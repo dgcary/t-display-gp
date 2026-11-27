@@ -75,7 +75,19 @@ void WeatherController::consumeResults(uint32_t nowMs) {
 void WeatherController::tick(uint32_t nowMs) {
   consumeResults(nowMs);
 
-  if (active_ && configured() && wifiOnline_ && outstandingRequestId_ == 0 && refreshDue(nowMs)) {
+  // Retire an in-flight request whose result never arrives (dropped by the
+  // worker or a wedged transport) so the normal refresh/retry cadence resumes
+  // instead of wedging weather forever.
+  if (outstandingRequestId_ != 0 &&
+      elapsed(nowMs, lastAttemptMs_) >= BuildConfig::WEATHER_INFLIGHT_TIMEOUT_MS) {
+    outstandingRequestId_ = 0;
+    dirty_ = true;
+  }
+
+  // Fetch and retry regardless of the active page: the controller is ticked
+  // from the main loop (WeatherApp::tickBackground), so weather keeps its
+  // 2-minute failure retry and refresh cadence while other pages are shown.
+  if (configured() && wifiOnline_ && outstandingRequestId_ == 0 && refreshDue(nowMs)) {
     AppDataRequest request;
     request.requestId = nextRequestId_++;
     request.type = AppDataRequestType::WEATHER;

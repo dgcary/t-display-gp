@@ -15,6 +15,12 @@ constexpr uint32_t BUTTON_DEBOUNCE_MS = 40;
 constexpr uint32_t BUTTON_LONG_PRESS_MS = 700;
 constexpr uint32_t WEATHER_DEFAULT_REFRESH_MIN = 15;
 constexpr uint32_t WEATHER_FAILURE_RETRY_MS = 120000;
+// An in-flight weather request with no result after this long is retired so a
+// dropped result or a wedged worker cannot silence weather refresh forever.
+constexpr uint32_t WEATHER_INFLIGHT_TIMEOUT_MS = 90000;
+// Bounded arbiter wait: a hung network holder must release (or fail) instead of
+// blocking the shared appdata worker indefinitely.
+constexpr uint32_t NETWORK_ARBITER_LOCK_TIMEOUT_MS = 15000;
 constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 1500;
 constexpr uint32_t HTTP_READ_TIMEOUT_MS = 2500;
 constexpr uint32_t HTTP_TLS_HANDSHAKE_TIMEOUT_SEC = 5;

@@ -129,6 +129,9 @@ void loop() {
   integrationConfigPortal.process();
   if (!appReady) { delay(1); return; }
   const uint32_t nowMs = millis();
+  // Weather fetch/retry runs in the background regardless of the active page,
+  // so leaving the weather page never silences its refresh cadence.
+  weatherApp.tickBackground(nowMs);
   appManager.onInput(device.pollButtons(nowMs));
   appManager.tick(nowMs);
   appManager.render();
